@@ -28,4 +28,6 @@ npm-debug.log*
 
 # Claude
 .claude/
-.feature_requests/
+
+# Feature requests
+feature_requests/
