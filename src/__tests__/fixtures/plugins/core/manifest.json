@@ -1,0 +1,21 @@
+{
+  "id": "core",
+  "name": "Core Module",
+  "version": "1.0.0",
+  "description": "Core functionality module",
+  "entry": "module.js",
+  "types": "index.d.ts",
+  "exports": {
+    "./main": {
+      "type": "service",
+      "description": "Core service"
+    }
+  },
+  "provides": [
+    {
+      "id": "core.service",
+      "description": "CoreService instance"
+    }
+  ],
+  "priority": 100
+}

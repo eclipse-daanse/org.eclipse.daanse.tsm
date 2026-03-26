@@ -1,0 +1,23 @@
+{
+  "name": "tsm-example-plugin",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite build --watch",
+    "build": "vite build"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.3",
+    "primevue": "^4.2.5",
+    "tsm": "file:../../..",
+    "typescript": "^5.8.0",
+    "vite": "^6.0.0",
+    "vue": "^3.4.21",
+    "vue-router": "^4.2.5"
+  },
+  "peerDependencies": {
+    "primevue": "^4.0.0",
+    "vue": "^3.4.0",
+    "vue-router": "^4.0.0"
+  }
+}

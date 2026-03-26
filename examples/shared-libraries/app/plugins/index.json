@@ -1,0 +1,9 @@
+{
+  "name": "Local Plugins",
+  "description": "Local plugin repository for development",
+  "version": "1",
+  "modules": [
+    "my-plugin"
+  ],
+  "updatedAt": "2025-01-31T12:00:00Z"
+}

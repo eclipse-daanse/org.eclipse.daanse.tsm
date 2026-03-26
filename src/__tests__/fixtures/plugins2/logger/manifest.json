@@ -1,0 +1,14 @@
+{
+  "id": "logger",
+  "name": "Logger",
+  "version": "1.0.0",
+  "description": "Logging service for all modules",
+  "entry": "module.js",
+  "exports": {
+    "./main": {
+      "type": "service",
+      "description": "Logger service"
+    }
+  },
+  "priority": 200
+}
