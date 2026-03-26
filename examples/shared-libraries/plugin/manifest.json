@@ -1,0 +1,31 @@
+{
+  "$schema": "https://tsm.dev/schema/manifest/v1.json",
+  "id": "my-plugin",
+  "name": "My Plugin",
+  "version": "1.0.0",
+  "description": "Example plugin that uses shared Vue & PrimeVue",
+  "entry": "dist/index.js",
+
+  "exports": {
+    "./panel": {
+      "type": "component",
+      "description": "Main plugin panel component"
+    }
+  },
+
+  "provides": [
+    {
+      "id": "my-plugin.api",
+      "description": "Plugin API service",
+      "scope": "singleton"
+    }
+  ],
+
+  "sharedDependencies": [
+    { "id": "vue", "versionRange": "^3.4.0" },
+    { "id": "vue-router", "versionRange": "^4.0.0" },
+    { "id": "primevue", "versionRange": "^4.0.0" }
+  ],
+
+  "priority": 10
+}

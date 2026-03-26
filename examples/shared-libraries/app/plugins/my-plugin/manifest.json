@@ -1,0 +1,25 @@
+{
+  "id": "my-plugin",
+  "name": "My Plugin",
+  "version": "1.0.0",
+  "description": "Example plugin using shared Vue & PrimeVue",
+  "entry": "index.js",
+  "exports": {
+    "./panel": {
+      "type": "component",
+      "description": "Main plugin panel"
+    }
+  },
+  "provides": [
+    {
+      "id": "my-plugin.api",
+      "description": "Plugin API",
+      "scope": "singleton"
+    }
+  ],
+  "sharedDependencies": [
+    { "id": "vue", "versionRange": "^3.4.0" },
+    { "id": "vue-router", "versionRange": "^4.0.0" },
+    { "id": "primevue", "versionRange": "^4.0.0" }
+  ]
+}

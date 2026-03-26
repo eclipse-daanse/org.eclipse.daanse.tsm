@@ -1,0 +1,18 @@
+{
+  "id": "storage-adapter",
+  "name": "Storage Adapter",
+  "version": "2.0.0",
+  "description": "Storage adapter that depends on core and logger",
+  "entry": "module.js",
+  "exports": {
+    "./adapter": {
+      "type": "adapter",
+      "description": "Storage adapter implementation"
+    }
+  },
+  "dependencies": [
+    { "id": "core", "versionRange": "^1.0.0" },
+    { "id": "logger", "versionRange": "^1.0.0" }
+  ],
+  "priority": 50
+}
