@@ -5,7 +5,7 @@
  * This prevents duplicate instances and enables singleton patterns.
  */
 
-import type { SharedModuleConfig, SharedModuleLoaderOptions, ModuleLogger } from './types'
+import type { SharedModuleConfig, SharedModuleLoaderOptions, ModuleLogger } from './types.js'
 
 // Global namespace for shared modules
 declare global {

@@ -13,10 +13,10 @@ import type {
   ModuleEventListener,
   ModuleLogger,
   ServiceRegistry
-} from './types'
-import { DependencyResolver } from './DependencyResolver'
-import { DefaultServiceRegistry } from './ServiceRegistry'
-import { isTsmRuntimeAvailable, tsmRuntime } from './TsmRuntime'
+} from './types.js'
+import { DependencyResolver } from './DependencyResolver.js'
+import { DefaultServiceRegistry } from './ServiceRegistry.js'
+import { isTsmRuntimeAvailable, tsmRuntime } from './TsmRuntime.js'
 
 // Type for Module Federation containers
 declare global {
