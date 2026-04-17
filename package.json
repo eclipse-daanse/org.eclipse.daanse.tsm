@@ -37,6 +37,10 @@
     "lifecycle",
     "hot-reload"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/eclipse-daanse/org.eclipse.daanse.tsm.git"
+  },
   "publishConfig": {
     "access": "public"
   },
