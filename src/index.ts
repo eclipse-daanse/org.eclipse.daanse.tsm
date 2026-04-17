@@ -4,13 +4,13 @@
  */
 
 // Core classes
-export { ModuleLoader } from './ModuleLoader'
-export { PluginRegistry } from './PluginRegistry'
-export { DependencyResolver } from './DependencyResolver'
-export { DefaultServiceRegistry } from './ServiceRegistry'
+export { ModuleLoader } from './ModuleLoader.js'
+export { PluginRegistry } from './PluginRegistry.js'
+export { DependencyResolver } from './DependencyResolver.js'
+export { DefaultServiceRegistry } from './ServiceRegistry.js'
 
 // Decorators
-export { injectable, inject, singleton, transient } from './decorators'
+export { injectable, inject, singleton, transient } from './decorators.js'
 
 // Runtime (for host applications)
 export {
@@ -20,7 +20,7 @@ export {
   type TsmRuntime,
   type SharedLibrary,
   type SharedValidationResult
-} from './TsmRuntime'
+} from './TsmRuntime.js'
 
 // Types
 export type {
@@ -64,4 +64,4 @@ export type {
 
   // Logger
   ModuleLogger
-} from './types'
+} from './types.js'

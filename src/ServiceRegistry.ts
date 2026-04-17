@@ -3,8 +3,8 @@
  * Service Registry - DI container for module services
  */
 
-import type { ServiceRegistry as IServiceRegistry, InjectableConstructor, BindClassOptions } from './types'
-import { getInjectMetadata, getPropertyInjectMetadata, isInjectable, getScopeMetadata, type PropertyInjectMetadata } from './decorators'
+import type { ServiceRegistry as IServiceRegistry, InjectableConstructor, BindClassOptions } from './types.js'
+import { getInjectMetadata, getPropertyInjectMetadata, isInjectable, getScopeMetadata, type PropertyInjectMetadata } from './decorators.js'
 
 /**
  * Dependency metadata for a bound class

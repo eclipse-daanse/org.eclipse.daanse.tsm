@@ -14,7 +14,7 @@ import type {
   ModuleUpdate,
   RegistryEvent,
   RegistryEventListener
-} from './types'
+} from './types.js'
 
 /**
  * Default options

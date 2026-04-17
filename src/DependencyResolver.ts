@@ -10,7 +10,7 @@ import type {
   Dependency,
   DependencySpec,
   VersionConflict
-} from './types'
+} from './types.js'
 
 /**
  * Normalize a dependency to DependencySpec format
