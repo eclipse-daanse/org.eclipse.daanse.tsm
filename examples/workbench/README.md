@@ -1,20 +1,52 @@
 # Workbench Example
 
-A shell with three regions, into which modules contribute views — and out of
-which the views disappear again while the shell keeps running.
+Seven bundles, each built on its own, discovered at runtime. Views come and go
+while the shell keeps running.
 
 ```bash
-npm run example:workbench      # http://localhost:5181
+npm run example:workbench:build   # build the bundles (once, or after a change)
+npm run example:workbench         # http://localhost:5181
 ```
 
-Watch the activity log while you press the buttons. *Start churn* loads and
-unloads the clock every 2.5 seconds, which is the whole point of the example:
-components arrive and leave, and nothing else restarts.
+Then open the console and type `tsm.lb()`.
+
+## Structure
+
+```
+bundles/
+├── contracts.ts            service ids and their types, shared as types
+├── clock/
+│   ├── manifest.json       id, version, entry — no provides, see below
+│   ├── vite.config.ts      builds this bundle alone
+│   └── src/index.ts        @component classes
+├── notes/  outline/  outline-pro/  search-box/  metrics/  shell/
+dist-bundles/               build output: index.js + generated manifest.json
+src/main.ts                 the host: discovers the repository, provides the regions
+```
+
+Each bundle is a deployment unit: its own manifest, its own build, loaded by URL.
+The host knows no module by name except the clock, which a button loads on demand
+— everything else it finds through `PluginRegistry` in `dist-bundles/index.json`.
+
+**`provides` is not written by hand.** The build runs
+`tsmPlugin({ components: 'derive' })`, which reads the `@component()`
+declarations out of the sources and emits a manifest containing them:
+
+```jsonc
+// dist-bundles/metrics/manifest.json — generated
+"provides": [
+  { "id": "workbench.metrics" },
+  { "id": "ui.component", "properties": { "region": "main", "order": 3 } }
+]
+```
+
+So the declaration exists once, on the class, and the manifest that the resolver
+and satisfaction need before importing anything is derived from it. This is what
+bnd does for OSGi.
 
 ## What it shows
 
-**A region collects, a slot competes.** Both are needed in a workbench, and they
-are different mechanisms:
+**A region collects, a slot competes.**
 
 | | Declaration | Behaviour |
 |---|---|---|
@@ -22,91 +54,60 @@ are different mechanisms:
 | Slot | `properties: { slot: 'outline' }` | several modules offer the same place; the highest `ranking` is shown |
 
 `outline` and `outline-pro` share the `outline` slot. *Disable Outline Pro*
-switches its module off, the plain outline appears in its place, and enabling it
-brings it back. Both registrations exist the whole time — the shell decides which
-one is visible, using `reference.ranking`.
+switches that bundle off and the plain outline takes over; enabling it brings it
+back. Both registrations exist the whole time.
 
-**Coming and going, with cleanup.** The clock holds an interval. Its `unmount()`
-clears it, which is the difference between a view that disappears and a view that
-leaks. `src/__tests__/example-workbench.test.ts` proves it: it keeps a reference
-to the detached counter element, advances the clock by five seconds, and asserts
-that nothing wrote into it any more.
+**Coming and going, with cleanup.** The clock holds an interval. `@deactivate`
+clears it, which is the difference between a view that disappears and one that
+leaks — `src/__tests__/example-workbench.test.ts` proves it by keeping the
+detached element and advancing timers by five seconds.
 
-**The shell survives all of it.** It declares
+**Components, not registration code.** A view declares what it offers and needs
+nothing else:
+
+```ts
+@component({ service: [UI_COMPONENT], properties: { region: 'main', order: 1 } })
+export class ClockView implements UiComponent {
+  constructor(@inject(METRICS_SERVICE, { optional: true }) private metrics?: Metrics) {}
+  @activate() start(): void { this.timer = setInterval(…) }
+  @deactivate() stop(): void { clearInterval(this.timer) }
+}
+```
+
+A component with `@activate` is created when its bundle activates (*immediate* in
+DS terms); without one, on first resolution (*delayed*). `metrics` holds two
+components — one service, one view — which is why registration and activation
+happen in separate phases: the view injects the service its neighbour offers.
+
+**The shell survives all of it.** It is the one bundle that is not a component
+but a module with exported hooks, because notifications about a *changing set*
+(`onServiceBound`/`onServiceUnbound`) are module-level today. It declares
 
 ```ts
 { id: 'ui.component', cardinality: '0..n', policy: 'dynamic' }
 ```
 
-so it is notified instead of being torn down. Its `sync()` diffs by registration
-key — the hook says *that* the set changed, not which entry, so the shell does
-the same bookkeeping a keyed list in any UI framework does.
-
-**Placement belongs to the manifest.** A module registers its component and says
-nothing about where it goes; region, order and slot are declared in
-`src/manifests.ts`. That is deployment information, and the same component can be
-placed differently without touching its code. Properties declared in a manifest
-and properties passed at registration are merged per key, so a module can add
-what only it knows.
-
-**Every view is a decorated class.** They are registered with `bindClass()`, so
-the registry constructs them and injects what they declare:
-
-```ts
-@injectable()
-class ClockView implements UiComponent {
-  // Optional: the clock reports to the metrics service when it exists and works
-  // without it when it does not. No requirement in the manifest — optionality is
-  // decided at the injection point.
-  constructor(@inject(METRICS_SERVICE, { optional: true }) private metrics?: Metrics) {}
-}
-```
-
-```ts
-// Registered under the interface directly: a view needs no id of its own
-context.services.bindClass(UI_COMPONENT, ClockView)
-```
-
-`modules/metrics.ts` is the one module that also offers a service of its own, so
-it is the one that needs `implements`:
-
-```ts
-context.services.bindClass(METRICS_SERVICE, WorkbenchMetrics)
-context.services.bindClass('workbench.metrics-view', MetricsView, {
-  implements: [UI_COMPONENT]
-})
-```
-
-Its manifest declares properties for *both* ids, because the interface is what
-the shell filters on, not the class.
-
-Three things worth knowing:
-
-- `@inject` names the service id explicitly, so no type reflection is involved.
-  `experimentalDecorators` suffices and esbuild's missing `emitDecoratorMetadata`
-  does not matter — decorators need no extra setup under Vite.
-- `bindClass` is lazy. Nothing is constructed until the shell resolves the
-  reference, which the test checks via `reference.instantiated`.
-- `@inject(id, { optional: true })` is not the same as an optional
-  `requiresService`: the manifest decides whether the *module* may activate, the
-  injection point decides whether that one dependency may be absent.
+and reconciles the DOM against the registrations, diffing by registration key.
 
 ## Try in the console
 
 ```js
+tsm.lb()                                            // every bundle with its state
 tsm.providers('ui.component')                       // every contribution, best first
 tsm.providers('ui.component', '(region=sidebar)')   // just the sidebar
 tsm.consumers('ui.component')                       // the shell, and how it asks
 tsm.disable('search-box')                           // watch the toolbar empty out
-tsm.lb()                                            // modules, including disabled ones
+tsm.unsatisfied()                                   // what is waiting, and for what
 ```
 
-## Files
+## Notes on the setup
 
-| Path | Role |
-|------|------|
-| `src/main.ts` | Host: the regions as a service, the buttons, the churn timer |
-| `src/manifests.ts` | Placement of each view: region, order, slot, ranking |
-| `src/contracts.ts` | `UiComponent` with `mount`/`unmount`, and the region contract |
-| `modules/shell.ts` | Mounts, orders and unmounts; the only module that consumes |
-| `modules/*.ts` | The views. None of them knows about another |
+The bundles are served by a small static middleware in `vite.config.ts` rather
+than from `public/`: Vite refuses dynamic imports from there, since a finished
+artefact must not go through its transform pipeline. In production a web server
+hands these files over.
+
+Each bundle currently carries its own copy of `reflect-metadata` (~39 kB), which
+is why the decorator metadata keys use `Symbol.for()` — otherwise a separately
+built copy would write under a key the host cannot read. A real deployment would
+provide it once as a shared library, as `examples/shared-libraries` shows.

@@ -1,0 +1,7 @@
+{
+  "id": "notes",
+  "name": "Notes view",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "exports": {}
+}

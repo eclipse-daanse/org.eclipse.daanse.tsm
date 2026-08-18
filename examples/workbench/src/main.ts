@@ -1,19 +1,27 @@
 /**
  * TSM Workbench example — host application.
  *
- * Provides the regions as a service and loads the modules. Which view sits where
- * is decided by the properties in the manifests, not here.
+ * Discovers separately built bundles from a repository, provides the regions as a
+ * service, and loads what it found. The host knows no module by name except the
+ * clock, which it loads on demand to show a view arriving late.
  */
 
 import { installDevtools } from '../../../src/devtools/index.js'
 import { ModuleLoader } from '../../../src/ModuleLoader.js'
+import { PluginRegistry } from '../../../src/PluginRegistry.js'
 import { initTsmRuntime } from '../../../src/TsmRuntime.js'
-import { WORKBENCH_ROOT, type RegionName, type WorkbenchRoot } from './contracts.js'
-import { clock, shell, startupViews } from './manifests.js'
+import { WORKBENCH_ROOT, type RegionName, type WorkbenchRoot } from '../bundles/contracts.js'
 
 initTsmRuntime()
 
-const loader = new ModuleLoader()
+const loader = new ModuleLoader({ hotReload: true })
+const registry = new PluginRegistry()
+
+registry.addRepository({
+  id: 'workbench',
+  name: 'Workbench bundles',
+  url: '/bundles'
+})
 
 function element<T extends HTMLElement>(id: string): T {
   const found = document.getElementById(id)
@@ -43,13 +51,19 @@ const clockButton = element<HTMLButtonElement>('btn-clock')
 const proButton = element<HTMLButtonElement>('btn-pro')
 const churnButton = element<HTMLButtonElement>('btn-churn')
 
+function manifestOf(moduleId: string) {
+  const manifest = registry.getManifests().find(entry => entry.id === moduleId)
+  if (!manifest) throw new Error(`Not discovered: ${moduleId}`)
+  return manifest
+}
+
 async function toggleClock(): Promise<void> {
   if (loader.getModule('clock')) {
     await loader.unloadModule('clock')
     clockButton.textContent = 'Load the clock'
   } else {
     // awaitCascade: the shell has mounted the view by the time this resolves
-    await loader.loadModule(clock, { awaitCascade: true })
+    await loader.loadModule(manifestOf('clock'), { awaitCascade: true })
     clockButton.textContent = 'Unload the clock'
   }
 }
@@ -83,10 +97,16 @@ churnButton.addEventListener('click', () => {
 
 // ---------------------------------------------------------------- start
 
-loader.register([shell, ...startupViews])
-installDevtools({ loader })
+installDevtools({ loader, registry })
 
+const discovered = await registry.discoverAll()
+root.log(`discovered ${discovered.length} bundle(s)`)
+
+// Everything except the clock, which the button loads
+loader.register(
+  registry.getManifests().filter(manifest => manifest.id !== 'clock')
+)
 await loader.loadAll()
 
 root.log('workbench ready')
-console.log('%cTry: tsm.providers("ui.component", "(region=main)")', 'color: gray')
+console.log('%cTry: tsm.lb() · tsm.providers("ui.component")', 'color: gray')

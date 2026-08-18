@@ -6,13 +6,21 @@
 import 'reflect-metadata'
 import type { ComponentOptions } from './types.js'
 
-const INJECTABLE_KEY = Symbol('tsm:injectable')
-const INJECT_KEY = Symbol('tsm:inject')
-const INJECT_PROPERTY_KEY = Symbol('tsm:inject:property')
-const SCOPE_KEY = Symbol('tsm:scope')
-const COMPONENT_KEY = Symbol('tsm:component')
-const ACTIVATE_KEY = Symbol('tsm:component:activate')
-const DEACTIVATE_KEY = Symbol('tsm:component:deactivate')
+/**
+ * Metadata keys, taken from the global symbol registry rather than created here.
+ *
+ * A separately built module may carry its own copy of this package. With
+ * `Symbol()` each copy would write under a key of its own, so a decorator
+ * applied in the module would be invisible to the loader in the host — silently.
+ * `Symbol.for()` makes the key the same wherever the code came from.
+ */
+const INJECTABLE_KEY = Symbol.for('tsm:injectable')
+const INJECT_KEY = Symbol.for('tsm:inject')
+const INJECT_PROPERTY_KEY = Symbol.for('tsm:inject:property')
+const SCOPE_KEY = Symbol.for('tsm:scope')
+const COMPONENT_KEY = Symbol.for('tsm:component')
+const ACTIVATE_KEY = Symbol.for('tsm:component:activate')
+const DEACTIVATE_KEY = Symbol.for('tsm:component:deactivate')
 
 /**
  * Metadata for a single constructor parameter injection

@@ -3,7 +3,8 @@ import tseslint from 'typescript-eslint'
 export default tseslint.config(
   {
     // Nested too: examples carry their own dist/ and node_modules/
-    ignores: ['**/dist/**', '**/node_modules/**']
+    // Build output too: the examples emit bundles next to their sources
+    ignores: ['**/dist/**', '**/dist-bundles/**', '**/node_modules/**']
   },
   ...tseslint.configs.recommended,
   {

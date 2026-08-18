@@ -1,9 +1,12 @@
-import { injectable, type ModuleContext } from '../../../src/index.js'
-import { UI_COMPONENT, type UiComponent } from '../src/contracts.js'
+import { component } from '@eclipse-daanse/tsm/decorators'
+import { UI_COMPONENT, type UiComponent } from '../../contracts.js'
 
 /** Sidebar view without a ranking — the plain variant of the outline slot */
-@injectable()
-class OutlineView implements UiComponent {
+@component({
+  service: [UI_COMPONENT],
+  properties: { region: 'sidebar', order: 1, slot: 'outline' }
+})
+export class OutlineView implements UiComponent {
   readonly title = 'Outline'
 
   mount(host: HTMLElement): void {
@@ -15,8 +18,4 @@ class OutlineView implements UiComponent {
     }))
     host.append(list)
   }
-}
-
-export function activate(context: ModuleContext): void {
-  context.services.bindClass(UI_COMPONENT, OutlineView)
 }

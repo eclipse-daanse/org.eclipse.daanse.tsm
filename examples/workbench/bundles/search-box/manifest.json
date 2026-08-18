@@ -1,0 +1,7 @@
+{
+  "id": "search-box",
+  "name": "Search box",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "exports": {}
+}

@@ -5,15 +5,34 @@ import {
   WORKBENCH_ROOT,
   type RegionName,
   type WorkbenchRoot
-} from '../../examples/workbench/src/contracts'
-import { clock, shell, startupViews } from '../../examples/workbench/src/manifests'
-import * as clockModule from '../../examples/workbench/modules/clock'
-import * as notes from '../../examples/workbench/modules/notes'
-import * as outline from '../../examples/workbench/modules/outline'
-import * as outlinePro from '../../examples/workbench/modules/outline-pro'
-import * as metrics from '../../examples/workbench/modules/metrics'
-import * as searchBox from '../../examples/workbench/modules/search-box'
-import * as shellModule from '../../examples/workbench/modules/shell'
+} from '../../examples/workbench/bundles/contracts'
+import type { ModuleManifest } from '../types'
+import clockManifest from '../../examples/workbench/bundles/clock/manifest.json'
+import metricsManifest from '../../examples/workbench/bundles/metrics/manifest.json'
+import notesManifest from '../../examples/workbench/bundles/notes/manifest.json'
+import outlineManifest from '../../examples/workbench/bundles/outline/manifest.json'
+import outlineProManifest from '../../examples/workbench/bundles/outline-pro/manifest.json'
+import searchBoxManifest from '../../examples/workbench/bundles/search-box/manifest.json'
+import shellManifest from '../../examples/workbench/bundles/shell/manifest.json'
+import * as clockModule from '../../examples/workbench/bundles/clock/src/index'
+import * as metrics from '../../examples/workbench/bundles/metrics/src/index'
+import * as notes from '../../examples/workbench/bundles/notes/src/index'
+import * as outline from '../../examples/workbench/bundles/outline/src/index'
+import * as outlinePro from '../../examples/workbench/bundles/outline-pro/src/index'
+import * as searchBox from '../../examples/workbench/bundles/search-box/src/index'
+import * as shellModule from '../../examples/workbench/bundles/shell/src/index'
+
+/**
+ * The bundles' own manifests, as the registry would fetch them. They declare no
+ * `provides` — the `@component()` declarations do, and the loader reads those.
+ */
+const shell = shellManifest as ModuleManifest
+const clock = clockManifest as ModuleManifest
+const startupViews = [
+  searchBoxManifest, outlineManifest, outlineProManifest, notesManifest, metricsManifest
+] as ModuleManifest[]
+const outlineManifestTyped = outlineManifest as ModuleManifest
+const metricsManifestTyped = metricsManifest as ModuleManifest
 
 /**
  * Runs the workbench example against a jsdom document, so mounting and — more
@@ -161,7 +180,7 @@ describe('examples/workbench', () => {
     expect(activity.some(entry => entry.startsWith('metrics:'))).toBe(true)
   })
 
-  it('should place a class registered through implements by its declared properties', async () => {
+  it('should place a component by the properties its declaration carries', async () => {
     const loader = setup()
 
     await loader.loadAll()
@@ -173,17 +192,32 @@ describe('examples/workbench', () => {
     expect(titles('main')).toEqual(['Notes', 'Metrics'])
   })
 
-  it('should not construct the injected service before it is needed', async () => {
+  it('should leave a component without an activate method unbuilt', async () => {
     const loader = setup()
-    loader.register([shell])
 
-    // Bound lazily: registering the class must not build it
-    await loader.loadModule(
-      loader.getManifests().find(manifest => manifest.id === 'metrics')!
-    )
+    // Only the outline, and no shell to resolve it
+    await loader.loadModule(outlineManifestTyped)
 
-    const [reference] = loader.getServiceRegistry().getServiceReferences('workbench.metrics')
+    const [reference] = loader.getServiceRegistry().getServiceReferences('ui.component')
+    expect(reference.providedBy).toBe('outline')
     expect(reference.instantiated).toBe(false)
+
+    // Built on first resolution — a delayed component
+    loader.getServiceRegistry().resolveReference(reference)
+    expect(loader.getServiceRegistry().getServiceReferences('ui.component')[0].instantiated)
+      .toBe(true)
+  })
+
+  it('should build a component with an activate method right away', async () => {
+    const loader = setup()
+
+    await loader.loadModule(metricsManifestTyped)
+
+    // MetricsView declares @activate, so it and what it injects exist already
+    const [view] = loader.getServiceRegistry().getServiceReferences('ui.component')
+    expect(view.instantiated).toBe(true)
+    expect(loader.getServiceRegistry().getServiceReferences('workbench.metrics')[0].instantiated)
+      .toBe(true)
   })
 
   it('should mount the clock without the optional metrics service', async () => {

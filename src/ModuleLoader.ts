@@ -1127,7 +1127,11 @@ export class ModuleLoader {
       method: string | symbol
     }> = []
 
-    for (const { ctor, options } of components) {
+    // Registration first, for every component, and only then activation: a
+    // component may inject a service another component of the same module
+    // offers, and constructing it earlier would find nothing. DS separates the
+    // two phases for the same reason.
+    const registered = components.map(({ ctor, options }) => {
       const [primary, ...aliases] = options.service ?? []
 
       const registration = primary === undefined
@@ -1140,6 +1144,10 @@ export class ModuleLoader {
             scope: options.scope
           })
 
+      return { ctor, options, registration }
+    })
+
+    for (const { ctor, options, registration } of registered) {
       const activateMethod = getActivateMethod(ctor)
       // A component with something to run is created now; one that only offers a
       // service waits until somebody resolves it
