@@ -1,4 +1,4 @@
-import type { ModuleContext } from '../../../src/index.js'
+import { injectable, type ModuleContext } from '../../../src/index.js'
 import { UI_COMPONENT, type UiComponent } from '../src/contracts.js'
 
 /**
@@ -6,9 +6,11 @@ import { UI_COMPONENT, type UiComponent } from '../src/contracts.js'
  * exist; the shell shows this one and falls back to the plain outline when this
  * module is disabled.
  */
-const outlinePro: UiComponent = {
-  title: 'Outline Pro',
-  mount(host) {
+@injectable()
+class OutlineProView implements UiComponent {
+  readonly title = 'Outline Pro'
+
+  mount(host: HTMLElement): void {
     const list = document.createElement('ol')
     list.append(...['Introduction', 'Method', 'Results', 'Discussion', 'Appendix'].map(entry => {
       const item = document.createElement('li')
@@ -20,6 +22,5 @@ const outlinePro: UiComponent = {
 }
 
 export function activate(context: ModuleContext): void {
-  // Where it goes is declared in the manifest, not here
-  context.services.register(UI_COMPONENT, outlinePro)
+  context.services.bindClass(UI_COMPONENT, OutlineProView)
 }

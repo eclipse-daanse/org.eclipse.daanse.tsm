@@ -9,11 +9,9 @@ import {
 } from '../src/contracts.js'
 
 /**
- * The one module here that uses decorators instead of a plain object.
- *
- * `@inject` names the service id explicitly, so no type reflection is involved —
- * `experimentalDecorators` is enough and esbuild's missing
- * `emitDecoratorMetadata` does not matter.
+ * The only module that registers a service of its own alongside its view, so it
+ * is the one that needs `implements`: the class answers to both ids, and the
+ * manifest describes each of them separately.
  */
 @injectable()
 @singleton()

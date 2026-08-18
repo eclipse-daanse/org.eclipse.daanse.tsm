@@ -1,35 +1,36 @@
-import type { ModuleContext } from '../../../src/index.js'
+import { injectable, type ModuleContext } from '../../../src/index.js'
 import { UI_COMPONENT, type UiComponent } from '../src/contracts.js'
 
 /** A view with a listener, which `unmount()` takes off again */
-function createNotes(): UiComponent {
-  let field: HTMLTextAreaElement | undefined
-  let onInput: (() => void) | undefined
+@injectable()
+class NotesView implements UiComponent {
+  readonly title = 'Notes'
 
-  return {
-    title: 'Notes',
+  private field: HTMLTextAreaElement | undefined
+  private onInput: (() => void) | undefined
 
-    mount(host) {
-      field = document.createElement('textarea')
-      field.rows = 3
-      field.placeholder = 'survives nothing — this view is a demo'
+  mount(host: HTMLElement): void {
+    const field = document.createElement('textarea')
+    field.rows = 3
+    field.placeholder = 'survives nothing — this view is a demo'
 
-      const count = document.createElement('small')
-      onInput = () => { count.textContent = ` ${field?.value.length ?? 0} characters` }
-      field.addEventListener('input', onInput)
+    const count = document.createElement('small')
+    this.onInput = () => { count.textContent = ` ${field.value.length} characters` }
+    field.addEventListener('input', this.onInput)
 
-      host.append(field, count)
-    },
+    host.append(field, count)
+    this.field = field
+  }
 
-    unmount() {
-      if (field && onInput) field.removeEventListener('input', onInput)
-      field = undefined
-      onInput = undefined
+  unmount(): void {
+    if (this.field && this.onInput) {
+      this.field.removeEventListener('input', this.onInput)
     }
+    this.field = undefined
+    this.onInput = undefined
   }
 }
 
 export function activate(context: ModuleContext): void {
-  // Where it goes is declared in the manifest, not here
-  context.services.register(UI_COMPONENT, createNotes())
+  context.services.bindClass(UI_COMPONENT, NotesView)
 }

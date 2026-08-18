@@ -49,23 +49,26 @@ placed differently without touching its code. Properties declared in a manifest
 and properties passed at registration are merged per key, so a module can add
 what only it knows.
 
-**Decorators, where they earn their keep.** Five of the six views are plain
-objects — for a `mount()` function, a class buys nothing. `modules/metrics.ts` is
-the exception: it registers *classes* through `bindClass()`, and the registry
-constructs them with what they declare.
+**Every view is a decorated class.** They are registered with `bindClass()`, so
+the registry constructs them and injects what they declare:
 
 ```ts
 @injectable()
-@singleton()
-class WorkbenchMetrics implements Metrics {
-  constructor(@inject(WORKBENCH_ROOT) private readonly root: WorkbenchRoot) {}
-}
-
-@injectable()
-class MetricsView implements UiComponent {
-  constructor(@inject(METRICS_SERVICE) private readonly metrics: Metrics) {}
+class ClockView implements UiComponent {
+  // Optional: the clock reports to the metrics service when it exists and works
+  // without it when it does not. No requirement in the manifest — optionality is
+  // decided at the injection point.
+  constructor(@inject(METRICS_SERVICE, { optional: true }) private metrics?: Metrics) {}
 }
 ```
+
+```ts
+// Registered under the interface directly: a view needs no id of its own
+context.services.bindClass(UI_COMPONENT, ClockView)
+```
+
+`modules/metrics.ts` is the one module that also offers a service of its own, so
+it is the one that needs `implements`:
 
 ```ts
 context.services.bindClass(METRICS_SERVICE, WorkbenchMetrics)
@@ -74,16 +77,19 @@ context.services.bindClass('workbench.metrics-view', MetricsView, {
 })
 ```
 
-Two things are worth noting. `@inject` names the service id explicitly, so no
-type reflection is involved — `experimentalDecorators` suffices and esbuild's
-missing `emitDecoratorMetadata` does not matter, which is why this works under
-Vite without extra setup. And `bindClass` is lazy: nothing is constructed until
-the shell resolves the reference, which the test checks via
-`reference.instantiated`.
+Its manifest declares properties for *both* ids, because the interface is what
+the shell filters on, not the class.
 
-The manifest declares properties for *both* ids — `workbench.metrics` and
-`ui.component` — because the interface is what the shell filters on, not the
-class.
+Three things worth knowing:
+
+- `@inject` names the service id explicitly, so no type reflection is involved.
+  `experimentalDecorators` suffices and esbuild's missing `emitDecoratorMetadata`
+  does not matter — decorators need no extra setup under Vite.
+- `bindClass` is lazy. Nothing is constructed until the shell resolves the
+  reference, which the test checks via `reference.instantiated`.
+- `@inject(id, { optional: true })` is not the same as an optional
+  `requiresService`: the manifest decides whether the *module* may activate, the
+  injection point decides whether that one dependency may be absent.
 
 ## Try in the console
 
