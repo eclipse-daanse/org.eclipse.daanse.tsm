@@ -54,6 +54,8 @@ export class DefaultServiceRegistry implements IServiceRegistry {
   private listeners = new Set<ServiceRegistryListener>()
   /** Reverse index: primary service ID -> alias IDs created for it */
   private aliasesOf = new Map<string, Set<string>>()
+  /** Reverse index: service ID -> binding IDs that inject it (from bindClass) */
+  private injectedInto = new Map<string, Set<string>>()
 
   /**
    * Register a service instance directly
@@ -61,6 +63,7 @@ export class DefaultServiceRegistry implements IServiceRegistry {
   register<T>(id: string, service: T, options: { providedBy?: string } = {}): void {
     const existed = this.services.has(id) || this.bindings.has(id)
     this.dropAliasesOf(id)
+    this.invalidateInjectors(id, new Set())
     this.services.set(id, service)
     // Also create a binding for consistency
     this.bindings.set(id, {
@@ -86,6 +89,7 @@ export class DefaultServiceRegistry implements IServiceRegistry {
   ): void {
     const existed = this.bindings.has(id)
     this.dropAliasesOf(id)
+    this.invalidateInjectors(id, new Set())
     this.bindings.set(id, {
       factory,
       scope: options.scope ?? 'singleton',
@@ -127,6 +131,17 @@ export class DefaultServiceRegistry implements IServiceRegistry {
 
     const existed = this.bindings.has(id)
     this.dropAliasesOf(id)
+    this.dropInjectionEdges(id)
+    for (const dependency of [...metadata, ...propertyMetadata]) {
+      let injectors = this.injectedInto.get(dependency.serviceId)
+      if (!injectors) {
+        injectors = new Set<string>()
+        this.injectedInto.set(dependency.serviceId, injectors)
+      }
+      injectors.add(id)
+    }
+
+    this.invalidateInjectors(id, new Set())
     this.bindings.set(id, {
       factory: (...resolvedDeps: unknown[]) => new ctor(...resolvedDeps),
       scope,
@@ -349,8 +364,53 @@ export class DefaultServiceRegistry implements IServiceRegistry {
     // Aliases pointing here would otherwise survive as dangling entries,
     // where has() reported the service while get() returned undefined
     this.dropAliasesOf(id)
+    this.dropInjectionEdges(id)
+
+    // Singletons that were built with this service still hold it
+    this.invalidateInjectors(id, new Set())
 
     return true
+  }
+
+  /**
+   * Forget which services a binding injects
+   */
+  private dropInjectionEdges(id: string): void {
+    for (const [serviceId, injectors] of this.injectedInto) {
+      if (!injectors.delete(id)) continue
+      if (injectors.size === 0) {
+        this.injectedInto.delete(serviceId)
+      }
+    }
+  }
+
+  /**
+   * Discard singleton instances built with a service that changed, transitively.
+   *
+   * A singleton receives its dependencies once, at construction, so after the
+   * service is gone it would keep serving the old one. The next `get()` builds
+   * the instance again with whatever is available then.
+   *
+   * Only reaches classes bound through `bindClass()`, whose dependencies the
+   * registry knows. What a hand-written `bind()` factory pulls from the registry
+   * is invisible here and cannot be invalidated — see the notes on dynamic
+   * requirements in the README.
+   */
+  private invalidateInjectors(serviceId: string, seen: Set<string>): void {
+    if (seen.has(serviceId)) return
+    seen.add(serviceId)
+
+    for (const injectorId of this.injectedInto.get(serviceId) ?? []) {
+      const binding = this.bindings.get(injectorId)
+      // Only a rebuildable instance may be discarded
+      if (!binding?.factory || binding.instance === undefined) continue
+
+      binding.instance = undefined
+      this.services.delete(injectorId)
+
+      // Whoever received that instance is stale as well
+      this.invalidateInjectors(injectorId, seen)
+    }
   }
 
   /**
@@ -397,10 +457,52 @@ export class DefaultServiceRegistry implements IServiceRegistry {
    * Clear all services
    */
   clear(): void {
+    this.injectedInto.clear()
     const ids = new Set([...this.services.keys(), ...this.bindings.keys()])
     for (const id of ids) {
       this.unregister(id)
     }
+  }
+
+  /**
+   * Resolve once a service is available.
+   *
+   * Resolves immediately when it is already there, otherwise on the
+   * registration that provides it. Replaces polling the registry in a loop.
+   *
+   * @param options.timeoutMs Reject after this long instead of waiting forever
+   */
+  whenAvailable<T>(id: string, options: { timeoutMs?: number } = {}): Promise<T> {
+    const existing = this.get<T>(id)
+    if (existing !== undefined) {
+      return Promise.resolve(existing)
+    }
+
+    return new Promise<T>((resolve, reject) => {
+      let timer: ReturnType<typeof setTimeout> | undefined
+
+      const listener: ServiceRegistryListener = {
+        onServiceEvent: event => {
+          if (event.serviceId !== id || event.type === 'unregistered') return
+
+          const service = this.get<T>(id)
+          if (service === undefined) return
+
+          if (timer !== undefined) clearTimeout(timer)
+          this.removeListener(listener)
+          resolve(service)
+        }
+      }
+
+      this.addListener(listener)
+
+      if (options.timeoutMs !== undefined) {
+        timer = setTimeout(() => {
+          this.removeListener(listener)
+          reject(new Error(`Service ${id} did not become available within ${options.timeoutMs}ms`))
+        }, options.timeoutMs)
+      }
+    })
   }
 
   /**

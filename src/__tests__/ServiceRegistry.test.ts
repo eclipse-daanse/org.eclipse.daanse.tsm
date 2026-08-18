@@ -1,7 +1,7 @@
 import 'reflect-metadata'
 import { describe, it, expect, vi } from 'vitest'
 import { DefaultServiceRegistry, type ServiceRegistryListener } from '../ServiceRegistry'
-import { injectable } from '../decorators'
+import { injectable, inject } from '../decorators'
 
 describe('DefaultServiceRegistry', () => {
   describe('register and get', () => {
@@ -371,6 +371,125 @@ describe('DefaultServiceRegistry - registration ownership and alias cleanup', ()
 
       expect(registry.has('geo.api')).toBe(true)
       expect(registry.get('geo.api')).toBeInstanceOf(GeoService)
+    })
+  })
+
+  describe('invalidating cached injections', () => {
+    @injectable()
+    class Backend {
+      constructor(public readonly tag: string = 'first') {}
+    }
+
+    @injectable()
+    class Middle {
+      constructor(@inject('backend') public readonly backend: Backend) {}
+    }
+
+    @injectable()
+    class Front {
+      constructor(@inject('middle') public readonly middle: Middle) {}
+    }
+
+    it('should rebuild a singleton after its dependency was replaced', () => {
+      const registry = new DefaultServiceRegistry()
+      registry.register('backend', new Backend('first'))
+      registry.bindClass('middle', Middle)
+
+      const before = registry.get<Middle>('middle')
+      expect(before?.backend.tag).toBe('first')
+
+      registry.register('backend', new Backend('second'))
+      const after = registry.get<Middle>('middle')
+
+      expect(after).not.toBe(before)
+      expect(after?.backend.tag).toBe('second')
+    })
+
+    it('should invalidate transitively', () => {
+      const registry = new DefaultServiceRegistry()
+      registry.register('backend', new Backend('first'))
+      registry.bindClass('middle', Middle)
+      registry.bindClass('front', Front)
+
+      const before = registry.get<Front>('front')
+      expect(before?.middle.backend.tag).toBe('first')
+
+      registry.register('backend', new Backend('second'))
+      const after = registry.get<Front>('front')
+
+      expect(after).not.toBe(before)
+      expect(after?.middle.backend.tag).toBe('second')
+    })
+
+    it('should leave the singleton unresolvable while the dependency is gone', () => {
+      const registry = new DefaultServiceRegistry()
+      registry.register('backend', new Backend('first'))
+      registry.bindClass('middle', Middle)
+      registry.get<Middle>('middle')
+
+      registry.unregister('backend')
+
+      expect(() => registry.get<Middle>('middle')).toThrow("Dependency 'backend' not found")
+    })
+
+    it('should not touch a hand-written factory, whose dependencies are opaque', () => {
+      const registry = new DefaultServiceRegistry()
+      registry.register('backend', new Backend('first'))
+      // The registry cannot see what this factory reads
+      registry.bind('manual', () => ({ tag: registry.get<Backend>('backend')?.tag }))
+
+      const before = registry.get('manual')
+      registry.register('backend', new Backend('second'))
+
+      // Documented limitation: same instance, still carrying the old value
+      expect(registry.get('manual')).toBe(before)
+    })
+  })
+
+  describe('whenAvailable', () => {
+    it('should resolve immediately for a service that is already there', async () => {
+      const registry = new DefaultServiceRegistry()
+      registry.register('geo.service', { locate: () => 'here' })
+
+      await expect(registry.whenAvailable('geo.service')).resolves.toEqual({
+        locate: expect.any(Function)
+      })
+    })
+
+    it('should resolve when the service arrives', async () => {
+      const registry = new DefaultServiceRegistry()
+
+      const waiting = registry.whenAvailable<{ id: string }>('geo.service')
+      registry.register('geo.service', { id: 'late' })
+
+      await expect(waiting).resolves.toEqual({ id: 'late' })
+    })
+
+    it('should resolve for a lazily bound service', async () => {
+      const registry = new DefaultServiceRegistry()
+
+      const waiting = registry.whenAvailable<{ id: string }>('geo.service')
+      registry.bind('geo.service', () => ({ id: 'lazy' }))
+
+      await expect(waiting).resolves.toEqual({ id: 'lazy' })
+    })
+
+    it('should reject after the timeout', async () => {
+      const registry = new DefaultServiceRegistry()
+
+      await expect(registry.whenAvailable('geo.service', { timeoutMs: 20 })).rejects.toThrow(
+        'did not become available within 20ms'
+      )
+    })
+
+    it('should not keep listening after resolving', async () => {
+      const registry = new DefaultServiceRegistry()
+      const waiting = registry.whenAvailable('geo.service')
+      registry.register('geo.service', {})
+      await waiting
+
+      // A later event must not reach the settled promise; no unhandled rejection
+      expect(() => registry.unregister('geo.service')).not.toThrow()
     })
   })
 

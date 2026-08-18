@@ -329,6 +329,12 @@ export interface ServiceRegistryListener {
 export interface ObservableServiceRegistry extends ServiceRegistry {
   addListener(listener: ServiceRegistryListener): void
   removeListener(listener: ServiceRegistryListener): void
+
+  /**
+   * Resolve once a service is available — immediately if it already is.
+   * The alternative to polling `has()`/`get()` in a loop.
+   */
+  whenAvailable<T>(id: string, options?: { timeoutMs?: number }): Promise<T>
 }
 
 /**

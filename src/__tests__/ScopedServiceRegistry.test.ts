@@ -130,6 +130,17 @@ describe('ScopedServiceRegistry', () => {
     })
   })
 
+  describe('whenAvailable', () => {
+    it('should delegate waiting to the shared registry', async () => {
+      const { shared, scope } = setup()
+
+      const waiting = scope.whenAvailable<{ id: string }>('late.service')
+      shared.register('late.service', { id: 'late' })
+
+      await expect(waiting).resolves.toEqual({ id: 'late' })
+    })
+  })
+
   describe('releaseAll', () => {
     it('should withdraw everything the module registered', () => {
       const { shared, scope } = setup()
