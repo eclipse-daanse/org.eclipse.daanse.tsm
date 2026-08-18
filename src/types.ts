@@ -304,6 +304,24 @@ export interface ComponentOptions {
 }
 
 /**
+ * What a loaded `@component()` class declared, for listing purposes.
+ *
+ * Not the instance: a delayed component may not exist yet, and its declaration
+ * is what a listing wants to show.
+ */
+export interface ComponentInfo {
+  moduleId: string
+  /** Name of the class, as far as the bundler preserved it */
+  className: string
+  /** Service IDs it is registered under; empty for a lifecycle-only component */
+  services: string[]
+  /** Whether it was created with its module rather than on first resolution */
+  immediate: boolean
+  hasActivate: boolean
+  hasDeactivate: boolean
+}
+
+/**
  * Options for bindClass()
  */
 export interface BindClassOptions {

@@ -46,6 +46,7 @@ export type {
   // Service/DI types
   ServiceDeclaration,
   ServiceRequirement,
+  ComponentInfo,
   ComponentOptions,
   ServiceCardinality,
   ServiceQuery,

@@ -4,6 +4,7 @@
  */
 
 import type {
+  ComponentInfo,
   ComponentOptions,
   InjectableConstructor,
   ModuleManifest,
@@ -161,6 +162,14 @@ export class ModuleLoader {
     instance: Record<string | symbol, unknown>
     method: string | symbol
   }>>()
+  /**
+   * Per module: what its `@component()` classes declared.
+   *
+   * `providedBy` on a service reference names the module, not the class inside
+   * it, so without this the components of a bundle are invisible from outside —
+   * which is what a listing like DS' `scr:list` shows.
+   */
+  private componentDeclarations = new Map<string, ComponentInfo[]>()
   /** Module-scoped registry facades, so a teardown can withdraw what a module registered */
   private scopes = new Map<string, ScopedServiceRegistry>()
   /** Serializes reactions to registry events; they are async, the events are not */
@@ -707,6 +716,22 @@ export class ModuleLoader {
   }
 
   /**
+   * The `@component()` classes of the loaded modules, with what each declared.
+   *
+   * A service reference names the module that provided it, never the class, so
+   * this is the only way to see the components of a bundle from outside — the
+   * view DS offers as `scr:list`.
+   *
+   * @param moduleId Restrict to one module
+   */
+  getComponents(moduleId?: string): ComponentInfo[] {
+    if (moduleId !== undefined) {
+      return [...(this.componentDeclarations.get(moduleId) ?? [])]
+    }
+    return [...this.componentDeclarations.values()].flat()
+  }
+
+  /**
    * Services declared in a manifest's `provides` that the module did not
    * register on activation.
    *
@@ -1131,6 +1156,7 @@ export class ModuleLoader {
     // component may inject a service another component of the same module
     // offers, and constructing it earlier would find nothing. DS separates the
     // two phases for the same reason.
+    const declarations: ComponentInfo[] = []
     const registered = components.map(({ ctor, options }) => {
       const [primary, ...aliases] = options.service ?? []
 
@@ -1144,8 +1170,20 @@ export class ModuleLoader {
             scope: options.scope
           })
 
+      const activateMethod = getActivateMethod(ctor)
+      declarations.push({
+        moduleId: loadedModule.manifest.id,
+        className: ctor.name,
+        services: options.service ?? [],
+        immediate: options.immediate ?? activateMethod !== undefined,
+        hasActivate: activateMethod !== undefined,
+        hasDeactivate: getDeactivateMethod(ctor) !== undefined
+      })
+
       return { ctor, options, registration }
     })
+
+    this.componentDeclarations.set(loadedModule.manifest.id, declarations)
 
     for (const { ctor, options, registration } of registered) {
       const activateMethod = getActivateMethod(ctor)
@@ -1208,6 +1246,8 @@ export class ModuleLoader {
 
   /** Run the `@deactivate` methods of a module's components, newest first */
   private async stopComponents(moduleId: string): Promise<void> {
+    this.componentDeclarations.delete(moduleId)
+
     const started = this.componentInstances.get(moduleId)
     if (!started) return
     this.componentInstances.delete(moduleId)

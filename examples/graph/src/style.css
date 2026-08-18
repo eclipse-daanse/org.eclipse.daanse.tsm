@@ -1,0 +1,85 @@
+:root {
+  color-scheme: light dark;
+
+  /* Plain custom properties, not light-dark(): that function is too new to rely
+     on here, and when it is unsupported every colour falls back to the initial
+     value — which for an SVG fill is black and for a stroke is none. */
+  --ink: #1a1d21;
+  --muted: #6b7280;
+  --line: #d7dbe0;
+  --panel: #f6f7f9;
+  --bundle: #e8f0fe;
+  --bundle-edge: #4285f4;
+  --component: #e6f4ea;
+  --component-edge: #34a853;
+  --service: #fef7e0;
+  --service-edge: #f9ab00;
+  --bad: #c5221f;
+  --warn: #e37400;
+
+  font-family: system-ui, sans-serif;
+  line-height: 1.5;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #e8eaed;
+    --muted: #9aa3af;
+    --line: #3a3f46;
+    --panel: #1b1e22;
+    --bundle: #1e2b3d;
+    --bundle-edge: #6ba0ff;
+    --component: #1c3024;
+    --component-edge: #5cc271;
+    --service: #33291a;
+    --service-edge: #f2b73d;
+    --bad: #ff6b6b;
+    --warn: #ffa94d;
+  }
+}
+
+body { color: var(--ink); margin: 0 auto; max-width: 66rem; padding: 2rem 1.5rem 4rem; }
+h1 { margin-bottom: 0.25rem; }
+header p { color: var(--muted); max-width: 46rem; }
+
+.controls { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 1.25rem 0 0; }
+button { background: transparent; border: 1px solid var(--line); border-radius: 6px;
+  color: inherit; cursor: pointer; font: inherit; padding: 0.45rem 0.9rem; }
+button:hover { background: color-mix(in srgb, currentColor 8%, transparent); }
+button[aria-pressed='true'] { border-color: var(--bundle-edge); }
+
+.legend { align-items: center; color: var(--muted); display: flex; flex-wrap: wrap;
+  font-size: 0.85rem; gap: 0.25rem 1.25rem; margin: 1.5rem 0 0.5rem; }
+.legend span { align-items: center; display: inline-flex; gap: 0.4rem; }
+.swatch { border-radius: 3px; display: inline-block; height: 0.8rem; width: 0.8rem; }
+.swatch.bundle { background: var(--bundle); border: 1px solid var(--bundle-edge); }
+.swatch.component { background: var(--component); border: 1px solid var(--component-edge); }
+.swatch.service { background: var(--service); border: 1px solid var(--service-edge); }
+.swatch.shadowed { background: transparent; border: 1px dashed var(--muted); }
+.line { display: inline-block; height: 0; width: 1.4rem; }
+.line.provides { border-top: 2px solid var(--component-edge); }
+.line.requires { border-top: 2px dashed var(--bundle-edge); }
+
+#graph { overflow-x: auto; }
+#graph svg { display: block; height: auto; max-width: 100%; }
+
+svg text { fill: var(--ink); font-family: system-ui, sans-serif; }
+svg .label { fill: var(--muted); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; }
+svg .box-title { font-size: 13px; font-weight: 600; }
+svg .box-note { fill: var(--muted); font-size: 11px; }
+svg .bundle-box { fill: var(--bundle); stroke: var(--bundle-edge); }
+svg .bundle-box.parked { stroke: var(--warn); stroke-dasharray: 5 3; }
+svg .bundle-box.off { opacity: 0.45; stroke-dasharray: 2 3; }
+svg .component-box { fill: var(--component); stroke: var(--component-edge); }
+svg .component-box.delayed { stroke-dasharray: 4 3; }
+svg .service-box { fill: var(--service); stroke: var(--service-edge); }
+svg .service-box.missing { fill: transparent; stroke: var(--bad); stroke-dasharray: 4 3; }
+svg .edge-provides { stroke: var(--component-edge); stroke-width: 1.5; fill: none; }
+svg .edge-provides.shadowed { stroke: var(--muted); stroke-dasharray: 3 3; }
+svg .edge-requires { stroke: var(--bundle-edge); stroke-dasharray: 5 3; stroke-width: 1.5; fill: none; }
+svg .edge-requires.optional { opacity: 0.5; }
+
+.detail { border-top: 1px solid var(--line); margin-top: 2rem; padding-top: 1rem; }
+.detail h2 { font-size: 1rem; }
+pre { background: var(--panel); border-radius: 8px;
+  font-size: 0.8rem; margin: 0; overflow-x: auto; padding: 0.9rem 1rem; }
