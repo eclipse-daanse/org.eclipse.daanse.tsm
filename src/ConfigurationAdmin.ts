@@ -14,6 +14,7 @@
 
 import type { ConfigurationProperties } from './types.js'
 import { createServiceFilter } from './serviceFilter.js'
+import type { MetatypeRegistry } from './Metatype.js'
 
 // Re-exported for convenience; the definition lives with the other property
 // types, next to the ServiceProperties it is an alias of
@@ -265,9 +266,36 @@ export class ConfigurationAdmin {
   private loaded: Promise<void>
   private generated = 0
 
-  constructor(options: { store?: ConfigurationStore } = {}) {
+  /**
+   * The schemas values are checked against, when the host supplied a registry.
+   *
+   * A deliberate departure: in OSGi, Config Admin does not validate and Metatype
+   * only describes, leaving the checking to whichever user interface writes the
+   * values. Here a wrong value can be refused at the source instead, which is
+   * worth more than the symmetry — and without a registry nothing changes.
+   */
+  readonly metatype?: MetatypeRegistry
+
+  constructor(options: { store?: ConfigurationStore; metatype?: MetatypeRegistry } = {}) {
     this.store = options.store ?? new MemoryConfigurationStore()
+    this.metatype = options.metatype
     this.loaded = this.load()
+  }
+
+  /**
+   * Refuse values a schema says are wrong.
+   *
+   * A PID without a schema passes: a configuration nobody described is not
+   * thereby invalid.
+   */
+  private assertValidAgainstSchema(pid: string, properties: ConfigurationProperties): void {
+    const errors = this.metatype?.validate(pid, properties) ?? []
+    if (errors.length === 0) return
+
+    const detail = errors
+      .map(error => `${error.attribute} ${error.message}`)
+      .join('; ')
+    throw new Error(`Configuration '${pid}' does not match its schema: ${detail}`)
   }
 
   private async load(): Promise<void> {
@@ -436,6 +464,7 @@ export class ConfigurationAdmin {
         assertAlive()
         if (properties !== undefined) {
           assertValidProperties(entry.pid, properties)
+          this.assertValidAgainstSchema(entry.pid, properties)
           entry.properties = { ...properties }
         } else if (entry.properties === undefined) {
           // OSGi's argument-less update() re-delivers existing values; with none

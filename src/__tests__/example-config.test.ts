@@ -2,6 +2,7 @@ import 'reflect-metadata'
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { ModuleLoader } from '../ModuleLoader'
 import { ConfigurationAdmin } from '../ConfigurationAdmin'
+import { MetatypeRegistry } from '../Metatype'
 import { bundles } from '../../examples/config/src/manifests'
 import {
   CLOCK_PID,
@@ -32,16 +33,23 @@ describe('examples/config', () => {
   let admin: ConfigurationAdmin
   let services: DefaultServiceRegistry
   let loader: ModuleLoader
+  let reported: string[]
 
   beforeEach(() => {
     savedWindow = globalRef.window
     globalRef.window = { tiles, clock, sources, map }
 
-    admin = new ConfigurationAdmin()
+    const metatype = new MetatypeRegistry()
+    admin = new ConfigurationAdmin({ metatype })
     services = new DefaultServiceRegistry()
-    loader = new ModuleLoader({ serviceRegistry: services, configurationAdmin: admin })
+    loader = new ModuleLoader({
+      serviceRegistry: services,
+      configurationAdmin: admin,
+      metatype
+    })
 
-    const log: Log = { write: () => {} }
+    reported = []
+    const log: Log = { write: (source, message) => reported.push(`${source}: ${message}`) }
     services.register(LOG_SERVICE, log, { providedBy: 'host' })
     loader.register(bundles)
   })
@@ -102,6 +110,34 @@ describe('examples/config', () => {
       kind: 'raster',
       url: 'https://tiles/{z}',
       retina: true
+    })
+  })
+
+  describe('declared defaults', () => {
+    it('should reach a component that has no configuration at all', async () => {
+      await loader.loadAll()
+
+      // The clock schema declares 1000ms, so the components read a value without
+      // a `?? something` anywhere in their code
+      expect(reported).toContain('SteadyClock: started at 1000ms')
+      expect(reported).toContain('RestartingClock: started at 1000ms')
+    })
+
+    it('should let the tiles component read its declared maximum zoom', async () => {
+      await loader.loadAll()
+
+      await admin.getConfiguration(TILES_PID).update({ url: 'https://tiles/{z}' })
+      await loader.settle()
+
+      expect(reported).toContain('RasterTiles: started with https://tiles/{z} up to zoom 19')
+    })
+
+    it('should refuse a value the schema rejects', async () => {
+      await loader.loadAll()
+
+      await expect(
+        admin.getConfiguration(TILES_PID).update({ url: 'short', zoom: 99 })
+      ).rejects.toThrow(/url must be at least 8 character\(s\); zoom must be at most 22/)
     })
   })
 
