@@ -653,6 +653,12 @@ export class ModuleLoader {
     this.logger.info(`Loading ${resolution.loadOrder.length} module(s)...`)
 
     for (const manifest of resolution.loadOrder) {
+      // A disabled module is skipped rather than reported as a failure
+      if (this.disabled.has(manifest.id)) {
+        this.logger.debug(`Skipping disabled module: ${manifest.id}`)
+        continue
+      }
+
       try {
         await this.loadModule(manifest)
       } catch (error) {
@@ -747,10 +753,16 @@ export class ModuleLoader {
       this.register([manifest])
     }
 
+    // Disabled means it must not run. Returning the existing entry is enough when
+    // there is one; without it there is nothing to hand back, and quietly loading
+    // anyway would defeat the flag.
     if (this.disabled.has(manifest.id)) {
-      this.logger.warn(`Module ${manifest.id} is disabled — enableModule() first`)
       const existing = this.modules.get(manifest.id)
-      if (existing) return existing
+      if (existing) {
+        this.logger.warn(`Module ${manifest.id} is disabled — enableModule() first`)
+        return existing
+      }
+      throw new Error(`Module ${manifest.id} is disabled — enableModule() first`)
     }
 
     // Already loaded, waiting, or being processed right now. The last case is
@@ -1324,6 +1336,15 @@ export class ModuleLoader {
    */
   async enableModule(moduleId: string): Promise<boolean> {
     if (!this.disabled.delete(moduleId)) return false
+
+    // Never loaded, because it was disabled before anyone tried: load it now,
+    // otherwise enabling would leave a module that exists only as a manifest
+    const manifest = this.manifests.get(moduleId)
+    if (manifest && !this.modules.has(moduleId)) {
+      await this.loadModule(manifest, { awaitCascade: true })
+      this.logger.info(`Module ${moduleId} enabled`)
+      return true
+    }
 
     const loadedModule = this.modules.get(moduleId)
     if (loadedModule && loadedModule.state === 'stopped') {

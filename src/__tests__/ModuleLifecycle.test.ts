@@ -1366,6 +1366,41 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
       expect(loader.getModule('consumer')?.state).toBe('active')
     })
 
+    it('should skip a disabled module in loadAll instead of failing', async () => {
+      const loader = new ModuleLoader()
+      const onActivate = vi.fn()
+      stub(loader, 'alpha', { onActivate })
+      stub(loader, 'beta', {})
+      await loader.disableModule('alpha')
+
+      await loader.loadAll()
+
+      expect(onActivate).not.toHaveBeenCalled()
+      expect(loader.getModule('alpha')).toBeUndefined()
+      expect(loader.getModule('beta')?.state).toBe('active')
+    })
+
+    it('should reject loading a module that was disabled before it ever ran', async () => {
+      const loader = new ModuleLoader()
+      const manifest = stub(loader, 'alpha', {})
+      await loader.disableModule('alpha')
+
+      await expect(loader.loadModule(manifest)).rejects.toThrow('is disabled')
+    })
+
+    it('should load a module that is enabled before it ever ran', async () => {
+      const loader = new ModuleLoader()
+      const onActivate = vi.fn()
+      stub(loader, 'alpha', { onActivate })
+      await loader.disableModule('alpha')
+      await loader.loadAll()
+
+      await loader.enableModule('alpha')
+
+      expect(loader.getModule('alpha')?.state).toBe('active')
+      expect(onActivate).toHaveBeenCalledTimes(1)
+    })
+
     it('should refuse to load a disabled module', async () => {
       const loader = new ModuleLoader()
       const manifest = stub(loader, 'alpha', {})

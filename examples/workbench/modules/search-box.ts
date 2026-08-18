@@ -1,10 +1,12 @@
-import type { ModuleContext } from '../../../src/index.js'
+import { injectable, type ModuleContext } from '../../../src/index.js'
 import { UI_COMPONENT, type UiComponent } from '../src/contracts.js'
 
 /** Toolbar view, to show that regions are selected by a target filter */
-const searchBox: UiComponent = {
-  title: 'Search',
-  mount(host) {
+@injectable()
+class SearchBoxView implements UiComponent {
+  readonly title = 'Search'
+
+  mount(host: HTMLElement): void {
     const input = document.createElement('input')
     input.type = 'search'
     input.placeholder = 'search…'
@@ -13,6 +15,5 @@ const searchBox: UiComponent = {
 }
 
 export function activate(context: ModuleContext): void {
-  // Where it goes is declared in the manifest, not here
-  context.services.register(UI_COMPONENT, searchBox)
+  context.services.bindClass(UI_COMPONENT, SearchBoxView)
 }

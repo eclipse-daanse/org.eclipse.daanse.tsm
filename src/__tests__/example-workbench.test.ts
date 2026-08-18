@@ -186,6 +186,19 @@ describe('examples/workbench', () => {
     expect(reference.instantiated).toBe(false)
   })
 
+  it('should mount the clock without the optional metrics service', async () => {
+    const loader = setup()
+    // Everything but metrics, so the optional injection finds nothing
+    loader.register([shell, ...startupViews.filter(manifest => manifest.id !== 'metrics')])
+    await loader.disableModule('metrics')
+    await loader.loadAll()
+
+    await loader.loadModule(clock, { awaitCascade: true })
+
+    expect(titles('main')).toContain('Clock')
+    expect(activity.some(entry => entry.startsWith('metrics:'))).toBe(false)
+  })
+
   it('should keep the shell running while views come and go', async () => {
     const loader = setup()
     await loader.loadAll()

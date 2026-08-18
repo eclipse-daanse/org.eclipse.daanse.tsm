@@ -20,6 +20,11 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
   declared — and `getManifests()` denied the running module existed. The manifest is registered now if it is
   new. Found by loading a view on demand in the workbench example: it activated, registered its component, and
   was never mounted because the declared `region` had gone missing.
+- **A module disabled before it ever ran started anyway.** The guard in `loadModule()` only returned an
+  existing entry, so a module that had never been loaded fell through and activated — the flag was ignored
+  exactly where it mattered most. `loadAll()` now skips disabled modules, `loadModule()` rejects one with a
+  clear message, and `enableModule()` loads a module that was disabled before its first start instead of
+  leaving it as a manifest without code.
 - **A class offered through `implements` could not be described by the manifest.** The module scope applied
   declared properties only to the ID a registration was made under, so the alias registrations from
   `bindClass(id, ctor, { implements: [...] })` got none — and the interface is exactly what consumers filter
@@ -305,7 +310,9 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
   place and shows the highest ranked. `unmount()` releases what `mount()` acquired, and the test proves it by
   keeping a reference to the detached element and advancing the clock: a leaked interval would keep writing
   into it. A churn button loads and unloads a view every 2.5 seconds. One module registers decorated classes
-  through `bindClass()` rather than plain objects, which also settles a question the examples left open:
+  through `bindClass()` — every view is a decorated class, including one with `@inject(id, { optional: true })`
+  to show that optional injection is decided at the injection point while `requiresService` decides whether the
+  module may activate at all. This also settles a question the examples left open:
   `@inject` names the service ID explicitly, so no type reflection is involved and `experimentalDecorators`
   suffices — esbuild's missing `emitDecoratorMetadata` does not matter, and decorators need no extra setup
   under Vite.

@@ -1,10 +1,12 @@
-import type { ModuleContext } from '../../../src/index.js'
+import { injectable, type ModuleContext } from '../../../src/index.js'
 import { UI_COMPONENT, type UiComponent } from '../src/contracts.js'
 
-/** Sidebar view, provided without a ranking — the plain variant */
-const outline: UiComponent = {
-  title: 'Outline',
-  mount(host) {
+/** Sidebar view without a ranking — the plain variant of the outline slot */
+@injectable()
+class OutlineView implements UiComponent {
+  readonly title = 'Outline'
+
+  mount(host: HTMLElement): void {
     const list = document.createElement('ul')
     list.append(...['Introduction', 'Method', 'Results'].map(entry => {
       const item = document.createElement('li')
@@ -16,6 +18,5 @@ const outline: UiComponent = {
 }
 
 export function activate(context: ModuleContext): void {
-  // Where it goes is declared in the manifest, not here
-  context.services.register(UI_COMPONENT, outline)
+  context.services.bindClass(UI_COMPONENT, OutlineView)
 }
