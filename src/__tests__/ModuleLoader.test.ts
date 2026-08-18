@@ -217,6 +217,68 @@ describe('ModuleLoader', () => {
   })
 })
 
+describe('ModuleLoader - global name collisions', () => {
+  interface GlobalWithWindow { window?: Record<string, unknown> }
+  const globalRef = globalThis as GlobalWithWindow
+  let savedWindow: Record<string, unknown> | undefined
+
+  beforeEach(() => {
+    savedWindow = globalRef.window
+    globalRef.window = {}
+  })
+
+  afterEach(() => {
+    globalRef.window = savedWindow
+  })
+
+  it('should not mistake a DOM element for a module container', async () => {
+    const loader = new ModuleLoader()
+    const manifest = createManifest('palette')
+
+    // What a browser does for <ul id="palette">: the element becomes a global.
+    // It even carries properties, so a shape check alone would accept it.
+    globalRef.window!.palette = { nodeType: 1, id: 'palette', activate: undefined }
+
+    // No container to fall back on, so the import fails — the point is that it
+    // was attempted instead of activating an element
+    await expect(loader.loadModule(manifest)).rejects.toThrow('Failed to load module entry')
+  })
+
+  it('should accept a Module Federation remote', async () => {
+    const loader = new ModuleLoader()
+    const manifest = createManifest('remote-module')
+    globalRef.window!['remote-module'] = {
+      get: async () => () => ({}),
+      init: async () => {}
+    }
+
+    const loaded = await loader.loadModule(manifest)
+
+    expect(loaded.state).toBe('active')
+  })
+
+  it('should accept a module namespace with lifecycle hooks', async () => {
+    const loader = new ModuleLoader()
+    const manifest = createManifest('plain-module')
+    globalRef.window!['plain-module'] = { activate: vi.fn() }
+
+    const loaded = await loader.loadModule(manifest)
+
+    expect(loaded.state).toBe('active')
+    expect(globalRef.window!['plain-module']).toBeDefined()
+  })
+
+  it('should not overwrite a taken global name', async () => {
+    const loader = new ModuleLoader()
+    const element = { nodeType: 1, id: 'taken' }
+    globalRef.window!.taken = element
+
+    await expect(loader.loadModule(createManifest('taken'))).rejects.toThrow()
+
+    expect(globalRef.window!.taken).toBe(element)
+  })
+})
+
 describe('ModuleLoader integration', () => {
   // These tests would require more complex mocking of dynamic imports
   // and Module Federation containers

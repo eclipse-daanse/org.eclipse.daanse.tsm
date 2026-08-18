@@ -26,10 +26,12 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "demo": "vite",
+    "example:whiteboard": "vite examples/whiteboard",
     "demo:build": "vite build",
     "test": "vitest",
     "test:run": "vitest run",
-    "lint": "eslint src",
+    "lint": "eslint src examples/whiteboard",
+    "typecheck:examples": "tsc --noEmit -p tsconfig.examples.json",
     "prepare": "husky"
   },
   "keywords": [

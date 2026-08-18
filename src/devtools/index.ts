@@ -59,6 +59,8 @@ export interface DevtoolsOptions {
 export interface TsmDevtools {
   /** Every known module with its state */
   modules(): void
+  /** Alias for `modules()`, named after Gogo's `lb` */
+  lb(): void
   /** The manifest of a module */
   manifest(moduleId: string): ModuleManifest | undefined
   /** Load state, exports and error of a module */
@@ -80,6 +82,8 @@ export interface TsmDevtools {
 
   /** Every service ID with its provider */
   services(): void
+  /** Alias for `services()`, named after Gogo's `ls` */
+  ls(): void
   /** Resolve one service */
   service<T = unknown>(serviceId: string): T | undefined
   /** Every registration for a service ID, best first */
@@ -590,6 +594,7 @@ export function installDevtools(options: DevtoolsOptions): TsmDevtools {
           'clearQueue()         drop the selection'
         ]],
         ['Other', [
+          'lb / ls              aliases for modules() / services()',
           'raw                  loader, registry, resolver, services',
           'uninstall()          remove these commands'
         ]]
@@ -610,6 +615,10 @@ export function installDevtools(options: DevtoolsOptions): TsmDevtools {
       }
       out.log('%cDevTools removed', css('muted'))
     },
+
+    // Aliases for the OSGi shell names, so a Gogo habit works here too
+    lb() { tools.modules() },
+    ls() { tools.services() },
 
     raw: { loader, registry, resolver, services }
   }

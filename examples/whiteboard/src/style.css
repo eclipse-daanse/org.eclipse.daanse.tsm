@@ -1,0 +1,35 @@
+:root {
+  color-scheme: light dark;
+  --line: color-mix(in srgb, currentColor 15%, transparent);
+  font-family: system-ui, sans-serif;
+  line-height: 1.5;
+}
+
+body { margin: 0 auto; max-width: 52rem; padding: 2rem 1.5rem 4rem; }
+header p { max-width: 40rem; }
+h1 { margin-bottom: 0.25rem; }
+h2 { font-size: 1rem; margin-bottom: 0.25rem; }
+section { border-top: 1px solid var(--line); margin-top: 2rem; padding-top: 1rem; }
+.hint { color: color-mix(in srgb, currentColor 60%, transparent); margin: 0 0 0.75rem; }
+code { font-family: ui-monospace, monospace; font-size: 0.9em; }
+
+ul { list-style: none; margin: 0; padding: 0; }
+li { border: 1px solid var(--line); border-radius: 6px; margin-bottom: 0.4rem; padding: 0.5rem 0.75rem; }
+li .kind { color: color-mix(in srgb, currentColor 55%, transparent); font-size: 0.85em; margin-left: 0.5rem; }
+li.empty { border-style: dashed; color: color-mix(in srgb, currentColor 45%, transparent); }
+
+output { display: block; font-size: 1.1rem; padding: 0.5rem 0; }
+
+.controls { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+button { border: 1px solid var(--line); border-radius: 6px; background: transparent;
+  color: inherit; cursor: pointer; font: inherit; padding: 0.45rem 0.9rem; }
+button:hover { background: color-mix(in srgb, currentColor 8%, transparent); }
+
+table { border-collapse: collapse; width: 100%; }
+td { border-bottom: 1px solid var(--line); padding: 0.35rem 0.5rem 0.35rem 0; }
+td:first-child { font-family: ui-monospace, monospace; }
+td.state { text-align: right; white-space: nowrap; }
+.active { color: #2e7d32; }
+.unsatisfied { color: #ef6c00; }
+.stopped, .not-loaded { color: color-mix(in srgb, currentColor 45%, transparent); }
+.error { color: #c62828; }

@@ -14,6 +14,14 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
 
 ### Fixed
 
+- **A module was silently not loaded when its ID collided with a global name.** `loadEntry()` returned
+  `window[moduleId]` whenever it was truthy, and a browser exposes every element `id` as a global — so an
+  `<ul id="palette">` next to a module called `palette` made the loader treat the DOM element as the module
+  container. No hook ran, and the module still reported `active`. The same applied to built-in properties like
+  `name` or `status`. The value is now checked for being a plausible container (Module Federation `get`/`init`,
+  or a namespace with lifecycle hooks or exports, and never a DOM node); otherwise the module is imported
+  normally, the global is left alone, and the collision is logged. Found by running the new example in a
+  browser.
 - **`reloadModule()` only reached the first level of dependents, and skipped parked ones.** Dependents were
   taken from `getDependents()`, which stops at direct dependents, and filtered by `isLoaded()`, which is true
   only for `'active'`. In a chain A ← B ← C, reloading A left C running against replaced code, and a parked
@@ -273,6 +281,17 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
   `getServiceReferences(id, target?)` and select on properties instead of naming conventions.
 
 ### Documentation
+
+- **New example `examples/whiteboard`** (`npm run example:whiteboard`): six modules that find each other
+  through services, no framework and no separate install, running against the package sources. It shows load
+  order following from the manifests rather than from the registration order, a `0..n` collection with
+  `properties` instead of a hand-written registry, a set growing at runtime through `policy: 'dynamic'`,
+  default and override by `ranking` with `disableModule()`, and the devtools in the console. A parked module is
+  included on purpose, so `unsatisfied()` has something to report.
+  `src/__tests__/example-whiteboard.test.ts` runs the example without a browser and asserts each of those.
+- DevTools gained `lb()` and `ls()` as aliases for `modules()` and `services()`, named after the Gogo shell.
+- `npm run typecheck:examples` type-checks the examples, and `npm run lint` covers them too — example code was
+  outside both before.
 
 - `SPEC.md` gained **§11.3 Modul-Konfiguration**: how to cover Configuration Admin's lifecycle semantics with
   what TSM already has — configuration registered as a service per PID, with a mapping table from DS
