@@ -5,6 +5,7 @@
 
 import type {
   ModuleManifest,
+  ModuleState,
   ModuleLoaderOptions,
   LoadedModule,
   ModuleContext,
@@ -38,6 +39,15 @@ interface ModuleFederationContainer {
  */
 /** How often a module may activate and park within one cascade before giving up */
 const MAX_ACTIVATIONS_PER_CASCADE = 10
+
+/** States in which loadModule() returns the existing entry instead of loading again */
+const IN_FLIGHT_STATES = new Set<ModuleState>([
+  'resolving',
+  'loading',
+  'activating',
+  'active',
+  'unsatisfied'
+])
 
 const DEFAULT_OPTIONS: Required<ModuleLoaderOptions> = {
   loadTimeout: 10000,
@@ -172,10 +182,10 @@ export class ModuleLoader {
       const depSpec = typeof dep === 'string' ? { id: dep } : dep
       if (depSpec.optional) continue
 
-      const depModule = this.modules.get(depSpec.id)
-      // Only a module that is known but not running counts as a reason to wait;
-      // a dependency that was never registered is handled by ensureDependencies
-      if (depModule && depModule.state !== 'active') {
+      // Anything that is not active is a reason to wait: parked, still loading,
+      // failed, or unloaded again. A dependency that was never registered at all
+      // is rejected earlier, by ensureDependencies().
+      if (!this.isLoaded(depSpec.id)) {
         modules.push(depSpec.id)
       }
     }
@@ -456,9 +466,12 @@ export class ModuleLoader {
    * Load a single module
    */
   async loadModule(manifest: ModuleManifest): Promise<LoadedModule> {
-    // Check if already loaded, or already waiting
+    // Already loaded, waiting, or being processed right now. The last case is
+    // what stops ensureDependencies() from recursing forever on a cycle: the
+    // modules involved end up parked on each other instead of overflowing the
+    // stack.
     const existing = this.modules.get(manifest.id)
-    if (existing && (existing.state === 'active' || existing.state === 'unsatisfied')) {
+    if (existing && IN_FLIGHT_STATES.has(existing.state)) {
       return existing
     }
 
@@ -840,6 +853,11 @@ export class ModuleLoader {
       timestamp: new Date()
     })
 
+    // Dependents of the unloaded module have to be re-evaluated, and the
+    // withdrawal of its services has to run to completion
+    this.enqueue(() => this.reconcile())
+    await this.settle()
+
     this.logger.info(`Module ${moduleId} unloaded`)
     return true
   }
@@ -888,6 +906,8 @@ export class ModuleLoader {
         await this.loadModule(depManifest)
       }
     }
+
+    await this.settle()
 
     this.logger.info(`Module ${moduleId} reloaded`)
   }
