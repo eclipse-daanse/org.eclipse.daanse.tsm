@@ -22,6 +22,7 @@ import type {
 import { DependencyResolver } from './DependencyResolver.js'
 import { DefaultServiceRegistry } from './ServiceRegistry.js'
 import { ScopedServiceRegistry } from './ScopedServiceRegistry.js'
+import { collectsMany } from './cardinality.js'
 import { isTsmRuntimeAvailable, tsmRuntime } from './TsmRuntime.js'
 
 // Type for Module Federation containers
@@ -405,8 +406,10 @@ export class ModuleLoader {
     const counts = new Map<string, number>()
     for (const requirement of requirements) {
       const providers = this.countProviders(requirement.id, requirement.target)
-      const collects = requirement.cardinality?.endsWith('..n') === true
-      counts.set(requirement.id, collects ? providers : Math.min(providers, 1))
+      counts.set(
+        requirement.id,
+        collectsMany(requirement) ? providers : Math.min(providers, 1)
+      )
     }
     return counts
   }

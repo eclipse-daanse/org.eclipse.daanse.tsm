@@ -4,6 +4,7 @@
  */
 
 import * as semver from 'semver'
+import { collectsMany, requiresAtLeastOne } from './cardinality.js'
 import type {
   ModuleManifest,
   DependencyResolution,
@@ -218,10 +219,10 @@ export class DependencyResolver {
     }
 
     for (const requirement of mod.requiresService ?? []) {
-      if (requirement.optional) continue
-      // A collection is assembled at runtime, so it implies no single predecessor
-      if (requirement.cardinality?.endsWith('..n')) continue
-      if (requirement.cardinality === '0..1') continue
+      // An optional requirement forces no order, and a collection is assembled
+      // at runtime, so it implies no single predecessor either
+      if (!requiresAtLeastOne(requirement)) continue
+      if (collectsMany(requirement)) continue
 
       const providerId = providers.get(requirement.id)
       // A module providing what it requires needs no edge to itself

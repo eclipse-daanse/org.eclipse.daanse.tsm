@@ -7,7 +7,7 @@ import type {
   ServiceRegistry as IServiceRegistry,
   InjectableConstructor,
   BindClassOptions,
-  ServiceCardinality,
+  ServiceQuery,
   ServiceProperties,
   ServiceReference,
   ServiceRegistration,
@@ -19,6 +19,7 @@ import type {
 export type { ServiceRegistryEvent, ServiceRegistryListener }
 import { getInjectMetadata, getPropertyInjectMetadata, isInjectable, getScopeMetadata, type PropertyInjectMetadata } from './decorators.js'
 import { createServiceFilter, type ServiceFilter } from './serviceFilter.js'
+import { requiresAtLeastOne } from './cardinality.js'
 
 /**
  * Dependency metadata for a bound class
@@ -52,23 +53,6 @@ interface ServiceBinding {
   propertyDeps?: PropertyInjectMetadata[]
   /** Alias target — if set, this binding delegates to another ID */
   aliasOf?: string
-}
-
-/**
- * Whether a requirement needs at least one provider to be satisfied.
- *
- * `optional` is the older spelling of cardinality '0..1'; either form makes the
- * requirement non-blocking. The n-variants need one provider like 1..1 does —
- * cardinality says how many are consumed, not how many are required.
- */
-function requiresAtLeastOne(requirement: {
-  optional?: boolean
-  cardinality?: ServiceCardinality
-}): boolean {
-  if (requirement.cardinality) {
-    return requirement.cardinality.startsWith('1..')
-  }
-  return requirement.optional !== true
 }
 
 /**
@@ -503,14 +487,7 @@ export class DefaultServiceRegistry implements IServiceRegistry {
   /**
    * Check if all required services are available
    */
-  checkRequirements(
-    requirements: Array<{
-      id: string
-      optional?: boolean
-      cardinality?: ServiceCardinality
-      target?: string
-    }>
-  ): {
+  checkRequirements(requirements: ServiceQuery[]): {
     satisfied: boolean
     missing: string[]
   } {
