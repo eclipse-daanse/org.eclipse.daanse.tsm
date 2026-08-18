@@ -1151,6 +1151,88 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
   })
 
+  describe('awaitCascade', () => {
+    /**
+     * A consumer whose activation takes a tick, so the cascade cannot have
+     * finished by accident when loadModule() returns.
+     */
+    function slowChain(loader: ModuleLoader) {
+      const provider: ModuleManifest = {
+        id: 'provider',
+        name: 'provider',
+        version: '1.0.0',
+        entry: 'http://localhost/provider/remoteEntry.js',
+        exports: {},
+        provides: [{ id: 'geo.service' }]
+      }
+      const consumer: ModuleManifest = {
+        id: 'consumer',
+        name: 'consumer',
+        version: '1.0.0',
+        entry: 'http://localhost/consumer/remoteEntry.js',
+        exports: {},
+        requiresService: [{ id: 'geo.service' }]
+      }
+
+      globalRef.window!['provider'] = {
+        activate: (context: ModuleContext) => { context.services.register('geo.service', {}) }
+      }
+      globalRef.window!['consumer'] = {
+        activate: async () => { await new Promise(resolve => setTimeout(resolve, 20)) }
+      }
+      loader.register([provider, consumer])
+
+      return { provider, consumer }
+    }
+
+    it('should leave the cascade running by default', async () => {
+      const loader = new ModuleLoader()
+      const { provider, consumer } = slowChain(loader)
+      await loader.loadModule(consumer)
+
+      await loader.loadModule(provider)
+
+      // The consumer's activation is still in flight, so the picture is partial
+      expect(loader.getModule('consumer')?.state).not.toBe('active')
+
+      await loader.settle()
+      expect(loader.getModule('consumer')?.state).toBe('active')
+    })
+
+    it('should wait for the cascade when asked to', async () => {
+      const loader = new ModuleLoader()
+      const { provider, consumer } = slowChain(loader)
+      await loader.loadModule(consumer)
+
+      await loader.loadModule(provider, { awaitCascade: true })
+
+      // No settle() here: the option covered it
+      expect(loader.getModule('consumer')?.state).toBe('active')
+      expect(loader.getUnsatisfiedModules()).toEqual([])
+    })
+
+    it('should be harmless when nothing is waiting', async () => {
+      const loader = new ModuleLoader()
+      const manifest = stub(loader, 'solo', {})
+
+      const loaded = await loader.loadModule(manifest, { awaitCascade: true })
+
+      expect(loaded.state).toBe('active')
+    })
+
+    it('should also wait when the module itself is parked', async () => {
+      const loader = new ModuleLoader()
+      const manifest = stub(loader, 'waiting', { requires: [{ id: 'absent.service' }] })
+
+      const loaded = await loader.loadModule(manifest, { awaitCascade: true })
+
+      expect(loaded.state).toBe('unsatisfied')
+      expect(loader.getUnsatisfiedModules()).toEqual([
+        { moduleId: 'waiting', waitingFor: ['absent.service'] }
+      ])
+    })
+  })
+
   describe('hot reload', () => {
     /**
      * unloadModule() removes the container from window, and loadEntry() would
