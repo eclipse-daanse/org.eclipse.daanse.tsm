@@ -263,6 +263,7 @@ describe('ModuleLoader - service withdrawal observation', () => {
     globalRef.window![manifest.id] = { activate: vi.fn(), deactivate: vi.fn() }
     loader.register([manifest])
     const loaded = await loader.loadModule(manifest)
+    await loader.settle()
     expect(loaded.state).toBe('active')
   }
 
@@ -277,6 +278,7 @@ describe('ModuleLoader - service withdrawal observation', () => {
     loader.addEventListener(listener)
 
     registry.unregister('geo.service')
+    await loader.settle()
 
     expect(listener.onModuleEvent).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -299,6 +301,7 @@ describe('ModuleLoader - service withdrawal observation', () => {
     loader.addEventListener(listener)
 
     registry.unregister('unrelated.service')
+    await loader.settle()
 
     expect(listener.onModuleEvent).not.toHaveBeenCalled()
   })
@@ -316,6 +319,7 @@ describe('ModuleLoader - service withdrawal observation', () => {
     loader.addEventListener(listener)
 
     registry.unregister('geo.service')
+    await loader.settle()
 
     expect(listener.onModuleEvent).not.toHaveBeenCalled()
   })
@@ -332,6 +336,7 @@ describe('ModuleLoader - service withdrawal observation', () => {
     loader.dispose()
 
     registry.unregister('geo.service')
+    await loader.settle()
 
     expect(listener.onModuleEvent).not.toHaveBeenCalled()
   })

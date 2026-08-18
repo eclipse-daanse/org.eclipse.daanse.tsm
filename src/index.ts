@@ -8,6 +8,7 @@ export { ModuleLoader } from './ModuleLoader.js'
 export { PluginRegistry } from './PluginRegistry.js'
 export { DependencyResolver } from './DependencyResolver.js'
 export { DefaultServiceRegistry } from './ServiceRegistry.js'
+export { ScopedServiceRegistry } from './ScopedServiceRegistry.js'
 
 // Decorators
 export { injectable, inject, singleton, transient } from './decorators.js'

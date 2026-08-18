@@ -7,9 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Groundwork for [#18](https://github.com/eclipse-daanse/org.eclipse.daanse.tms/issues/18): services now
-have an owner and withdrawals are observable. Reacting to a withdrawal — the `unsatisfied` state and the
-`static`/`dynamic` policies — is deliberately not part of this change.
+Implements [#18](https://github.com/eclipse-daanse/org.eclipse.daanse.tms/issues/18) for the `static` case:
+a module with an unmet `requiresService` waits instead of failing, and is torn down and rebuilt when a service
+it requires disappears and returns. Load order follows from the manifests, so a hand-ordered startup list is
+no longer needed. `policy: 'dynamic'` (staying active and being notified) is not implemented.
 
 ### Fixed
 
@@ -26,6 +27,38 @@ have an owner and withdrawals are observable. Reacting to a withdrawal — the `
 
 ### Added
 
+#### Satisfaction lifecycle
+
+- **`unsatisfied` module state.** A module whose non-optional `requiresService` entries are unavailable is
+  parked instead of failing, and activated as soon as they appear. `error` keeps its old meaning: activation
+  was attempted and failed. A parked module is not re-imported when it activates later — only its `activate`
+  hook runs.
+- **Withdrawal tears the consumer down** (`static` policy). When a required service is unregistered, the
+  consuming module is deactivated and parked, so it comes back when the service does. Withdrawing its own
+  services in the process is what carries the cascade to indirect consumers.
+- **Module-scoped registry.** `context.services` is now a `ScopedServiceRegistry` bound to the module: every
+  registration is attributed to it and withdrawn again on deactivation, in reverse registration order. Reads
+  pass through unchanged, so a module still sees every service. This is the role `BundleContext` plays in
+  OSGi. A module that unregisters in its own `deactivate` hook is unaffected.
+- **Service requirements become load-order edges.** `DependencyResolver` now treats a non-optional
+  `requiresService` entry as an edge to the module whose `provides` declares that service, in both the
+  topological sort and the cycle detection. Optional requirements, services nobody provides, and a module
+  requiring what it provides itself create no edge.
+- **Dependencies count towards satisfaction.** A module whose declared `dependencies` are loaded but not
+  active waits as well, instead of activating against code that is not running.
+- `requiresService[].policy` (`'static' | 'dynamic'`, default `'static'`). `'dynamic'` is accepted and
+  behaves as `'static'` for now.
+- `ModuleLoaderOptions.strictRequirements` restores the previous fail-fast behaviour for missing services.
+- `ModuleLoader.settle()` resolves once every queued reaction has run, including those a reaction caused.
+  Registry events are synchronous while activation is not, so reactions are queued and serialized; `settle()`
+  is what makes startup and tests deterministic. `loadAll()` awaits it before returning.
+- `ModuleLoader.getUnsatisfiedModules()` lists every waiting module with what it waits for — the answer to
+  "why is this module not running?". `loadAll()` logs the same summary when anything is still waiting.
+- A module that activates and parks more than ten times within one cascade is set to `error` instead of
+  looping forever.
+
+#### Ownership and observation
+
 - `register(id, service, { providedBy })` records the owning module, as `bind()` and `bindClass()` already
   did. Without an owner on every registration, a teardown cannot tell which entries belonged to a module.
   The parameter is optional, so existing calls are unaffected.
@@ -40,6 +73,16 @@ have an owner and withdrawals are observable. Reacting to a withdrawal — the `
   runtime. `ServiceRegistryEvent` and `ServiceRegistryListener` moved to `types.ts` (re-exported from
   `ServiceRegistry.ts`) and are exported from the package root.
 
+### Changed — BREAKING
+
+- **An unmet service requirement no longer throws.** The module is parked in `unsatisfied` and activated when
+  the service appears. Code that relied on the rejection needs `strictRequirements: true`.
+- **`context.services` is a module-scoped facade, not the shared registry.** It implements `ServiceRegistry`,
+  so module code compiles unchanged, but registrations made through it are withdrawn when the module is
+  deactivated. A module that deliberately outlived its own services no longer can.
+- `ModuleState` and `ModuleEvent.type` each gained values (`'unsatisfied'`, plus `'service-withdrawn'`), which
+  affects consumers handling those unions exhaustively in a `switch`.
+
 ### Changed
 
 - Rebinding a primary ID via `register()`, `bind()` or `bindClass()` now discards the alias bindings of the
@@ -47,3 +90,12 @@ have an owner and withdrawals are observable. Reacting to a withdrawal — the `
   interfaces the new provider never declared.
 - `ModuleEvent.type` has an additional value (`'service-withdrawn'`), which affects consumers that handle the
   union exhaustively in a `switch`.
+
+### Known limitations
+
+- `policy: 'dynamic'` is accepted but behaves as `'static'`. Notifying a module while it keeps running
+  requires invalidating cached injections, which is not possible for `bind()` factories whose internals are
+  opaque to the registry.
+- The registry still holds at most one service per ID, and `getAll(pattern)` sees only instantiated services,
+  so cardinality `0..n` — the whiteboard pattern — is not expressible. Satisfaction rules are defined against
+  a single provider per ID and will be revisited when that changes.
