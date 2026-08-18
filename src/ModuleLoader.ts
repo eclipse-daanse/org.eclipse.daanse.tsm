@@ -110,6 +110,14 @@ export class ModuleLoader {
   private boundRegistrations = new Map<string, Map<string, string>>()
   /** Per module: services it declared in `provides` but never registered */
   private declarationMismatches = new Map<string, string[]>()
+  /**
+   * Modules that must not run until enabled again.
+   *
+   * A separate dimension from the state, as in DS: a disabled module is not
+   * broken and not waiting, it is switched off. Without this a manual stop is
+   * pointless — the next reconcile would activate it right back.
+   */
+  private disabled = new Set<string>()
   /** Module-scoped registry facades, so a teardown can withdraw what a module registered */
   private scopes = new Map<string, ScopedServiceRegistry>()
   /** Serializes reactions to registry events; they are async, the events are not */
@@ -487,6 +495,7 @@ export class ModuleLoader {
 
     for (const loadedModule of [...this.modules.values()]) {
       if (loadedModule.state !== 'unsatisfied') continue
+      if (this.disabled.has(loadedModule.manifest.id)) continue
       if (!this.isSatisfied(loadedModule.manifest)) continue
 
       if (this.exceedsCascadeBudget(loadedModule)) continue
@@ -577,6 +586,7 @@ export class ModuleLoader {
     this.dynamicBindings.clear()
     this.boundRegistrations.clear()
     this.declarationMismatches.clear()
+    this.disabled.clear()
   }
 
   /**
@@ -702,6 +712,12 @@ export class ModuleLoader {
     manifest: ModuleManifest,
     options: { awaitCascade?: boolean } = {}
   ): Promise<LoadedModule> {
+    if (this.disabled.has(manifest.id)) {
+      this.logger.warn(`Module ${manifest.id} is disabled — enableModule() first`)
+      const existing = this.modules.get(manifest.id)
+      if (existing) return existing
+    }
+
     // Already loaded, waiting, or being processed right now. The last case is
     // what stops ensureDependencies() from recursing forever on a cycle: the
     // modules involved end up parked on each other instead of overflowing the
@@ -1123,6 +1139,7 @@ export class ModuleLoader {
     // Remove
     this.modules.delete(moduleId)
     this.scopes.delete(moduleId)
+    this.disabled.delete(moduleId)
     delete window[moduleId]
 
     this.emit({
@@ -1224,6 +1241,96 @@ export class ModuleLoader {
       exports[path] = value
     }
     return exports as T
+  }
+
+  /**
+   * Stop a module and keep it stopped.
+   *
+   * Deactivating alone would not last: the module is satisfied, so the next
+   * reconcile activates it again. A disabled module stays stopped until
+   * `enableModule()`, which is what makes a manual stop meaningful — the
+   * `enabled` flag of DS components.
+   *
+   * Its services are withdrawn, so consumers are parked in the usual cascade.
+   */
+  async disableModule(moduleId: string): Promise<boolean> {
+    if (!this.manifests.has(moduleId)) return false
+
+    this.disabled.add(moduleId)
+
+    const loadedModule = this.modules.get(moduleId)
+    if (loadedModule && loadedModule.state === 'active') {
+      await this.deactivate(loadedModule)
+    }
+
+    this.enqueue(() => this.reconcile())
+    await this.settle()
+
+    this.logger.info(`Module ${moduleId} disabled`)
+    return true
+  }
+
+  /**
+   * Allow a disabled module to run again. It activates as soon as what it needs
+   * is available — immediately, if that is already the case.
+   */
+  async enableModule(moduleId: string): Promise<boolean> {
+    if (!this.disabled.delete(moduleId)) return false
+
+    const loadedModule = this.modules.get(moduleId)
+    if (loadedModule && loadedModule.state === 'stopped') {
+      // Hand it back to the reconciler rather than activating here: it decides
+      // on the same conditions as for any other waiting module
+      this.park(loadedModule, this.unsatisfiedReasons(loadedModule.manifest))
+    }
+
+    this.enqueue(() => this.reconcile())
+    await this.settle()
+
+    this.logger.info(`Module ${moduleId} enabled`)
+    return true
+  }
+
+  /** Whether a module is switched off */
+  isDisabled(moduleId: string): boolean {
+    return this.disabled.has(moduleId)
+  }
+
+  /** Every module that is currently switched off */
+  getDisabledModules(): string[] {
+    return [...this.disabled]
+  }
+
+  /**
+   * Which modules declared a requirement on a service, and how.
+   *
+   * The counterpart to `getBindingInfo().providedBy`: that answers who offers a
+   * service, this answers who asked for it — `inspect service` in OSGi terms.
+   * Derived from the manifests, so it also covers modules that are not running.
+   */
+  getServiceConsumers(serviceId: string): Array<{
+    moduleId: string
+    state: ModuleState | 'not loaded'
+    requirement: ServiceRequirement
+  }> {
+    const consumers: Array<{
+      moduleId: string
+      state: ModuleState | 'not loaded'
+      requirement: ServiceRequirement
+    }> = []
+
+    for (const manifest of this.manifests.values()) {
+      const requirement = manifest.requiresService?.find(entry => entry.id === serviceId)
+      if (!requirement) continue
+
+      consumers.push({
+        moduleId: manifest.id,
+        state: this.modules.get(manifest.id)?.state ?? 'not loaded',
+        requirement
+      })
+    }
+
+    return consumers
   }
 
   /**

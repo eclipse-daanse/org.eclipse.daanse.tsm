@@ -24,6 +24,7 @@ import type {
   PluginRepository,
   ServiceReference
 } from '../types.js'
+
 import { consoleOutput, css, type DevtoolsOutput } from './output.js'
 
 export type { DevtoolsOutput } from './output.js'
@@ -67,6 +68,10 @@ export interface TsmDevtools {
   unload(moduleId: string): Promise<boolean>
   reload(moduleId: string): Promise<void>
   loadAll(): Promise<void>
+  /** Stop a module and keep it stopped */
+  disable(moduleId: string): Promise<void>
+  /** Let a disabled module run again */
+  enable(moduleId: string): Promise<void>
 
   /** Modules waiting for something, and what for */
   unsatisfied(): void
@@ -79,6 +84,8 @@ export interface TsmDevtools {
   service<T = unknown>(serviceId: string): T | undefined
   /** Every registration for a service ID, best first */
   providers(serviceId: string, target?: string): ServiceReference[]
+  /** Which modules asked for a service, and how */
+  consumers(serviceId: string): void
   /** Shared libraries the host registered */
   shared(): void
 
@@ -166,11 +173,12 @@ export function installDevtools(options: DevtoolsOptions): TsmDevtools {
       out.log('%cModules', css('heading'))
       for (const manifest of manifests) {
         const state = stateOf(manifest.id)
+        const off = loader.isDisabled(manifest.id) ? ' (disabled)' : ''
         out.log(
-          `  %c${manifest.id}%c v${manifest.version} %c[${state}]`,
+          `  %c${manifest.id}%c v${manifest.version} %c[${state}]${off}`,
           css('name'),
           css('muted'),
-          css(STATE_STYLE[state])
+          css(off ? 'warn' : STATE_STYLE[state])
         )
       }
       out.log(
@@ -255,6 +263,22 @@ export function installDevtools(options: DevtoolsOptions): TsmDevtools {
       }
     },
 
+    async disable(moduleId) {
+      if (!await loader.disableModule(moduleId)) {
+        out.error(`Unknown module: ${moduleId}`)
+        return
+      }
+      out.log(`%c${moduleId} disabled`, css('warn'))
+    },
+
+    async enable(moduleId) {
+      if (!await loader.enableModule(moduleId)) {
+        out.log(`%c${moduleId} was not disabled`, css('muted'))
+        return
+      }
+      out.log(`%c${moduleId} is ${stateOf(moduleId)}`, css(STATE_STYLE[stateOf(moduleId)]))
+    },
+
     unsatisfied() {
       const waiting = loader.getUnsatisfiedModules()
       if (waiting.length === 0) {
@@ -336,6 +360,29 @@ export function installDevtools(options: DevtoolsOptions): TsmDevtools {
         )
       }
       return references
+    },
+
+    consumers(serviceId) {
+      const asking = loader.getServiceConsumers(serviceId)
+      if (asking.length === 0) {
+        out.log(`%cNobody declared ${serviceId}`, css('muted'))
+        return
+      }
+
+      out.log(`%cConsumers of ${serviceId}`, css('heading'))
+      for (const entry of asking) {
+        const how = [
+          entry.requirement.cardinality ?? (entry.requirement.optional ? '0..1' : '1..1'),
+          entry.requirement.policy ?? 'static',
+          entry.requirement.target
+        ].filter(Boolean).join(' · ')
+
+        out.log(
+          `  %c${entry.moduleId}%c [${entry.state}] ${how}`,
+          css('name'),
+          css('muted')
+        )
+      }
     },
 
     shared() {
@@ -514,7 +561,9 @@ export function installDevtools(options: DevtoolsOptions): TsmDevtools {
           'load(id)             load and activate, waiting for the cascade',
           'unload(id)           deactivate and remove',
           'reload(id)           hot reload, with its dependents',
-          'loadAll()            load everything registered'
+          'loadAll()            load everything registered',
+          'disable(id)          stop it and keep it stopped',
+          'enable(id)           let it run again'
         ]],
         ['Diagnosis', [
           'unsatisfied()        what is waiting, and for what',
@@ -524,6 +573,7 @@ export function installDevtools(options: DevtoolsOptions): TsmDevtools {
           'services()           every service with its provider',
           'service(id)          resolve one service',
           'providers(id, flt?)  every registration, best first',
+          'consumers(id)        which modules asked for it',
           'shared()             shared libraries of the host'
         ]],
         ['Repositories', [

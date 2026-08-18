@@ -1233,6 +1233,166 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
   })
 
+  describe('disable and enable', () => {
+    it('should stop a module and keep it stopped', async () => {
+      const loader = new ModuleLoader()
+      const onDeactivate = vi.fn()
+      stub(loader, 'alpha', { onDeactivate })
+      await loader.loadAll()
+
+      expect(await loader.disableModule('alpha')).toBe(true)
+
+      expect(loader.getModule('alpha')?.state).toBe('stopped')
+      expect(onDeactivate).toHaveBeenCalledTimes(1)
+      expect(loader.isDisabled('alpha')).toBe(true)
+      expect(loader.getDisabledModules()).toEqual(['alpha'])
+    })
+
+    it('should not let a reconcile bring a disabled module back', async () => {
+      const loader = new ModuleLoader()
+      const registry = loader.getServiceRegistry()
+      registry.register('geo.service', {})
+      const onActivate = vi.fn()
+      stub(loader, 'alpha', { requires: [{ id: 'geo.service' }], onActivate })
+      await loader.loadAll()
+      expect(onActivate).toHaveBeenCalledTimes(1)
+
+      await loader.disableModule('alpha')
+
+      // Everything it needs is there, and it still stays off
+      registry.unregister('geo.service')
+      registry.register('geo.service', {})
+      await loader.settle()
+
+      expect(loader.getModule('alpha')?.state).toBe('stopped')
+      expect(onActivate).toHaveBeenCalledTimes(1)
+    })
+
+    it('should park consumers when a disabled module took its service along', async () => {
+      const loader = new ModuleLoader()
+      stub(loader, 'provider', {
+        provides: ['geo.service'],
+        onActivate: services => { services.register('geo.service', {}) }
+      })
+      stub(loader, 'consumer', { requires: [{ id: 'geo.service' }] })
+      await loader.loadAll()
+
+      await loader.disableModule('provider')
+
+      expect(loader.getModule('consumer')?.state).toBe('unsatisfied')
+      expect(loader.getServiceRegistry().has('geo.service')).toBe(false)
+    })
+
+    it('should activate a module again on enable', async () => {
+      const loader = new ModuleLoader()
+      const onActivate = vi.fn()
+      stub(loader, 'alpha', { onActivate })
+      await loader.loadAll()
+      await loader.disableModule('alpha')
+
+      expect(await loader.enableModule('alpha')).toBe(true)
+
+      expect(loader.getModule('alpha')?.state).toBe('active')
+      expect(onActivate).toHaveBeenCalledTimes(2)
+      expect(loader.isDisabled('alpha')).toBe(false)
+    })
+
+    it('should leave an enabled module waiting when its service is gone', async () => {
+      const loader = new ModuleLoader()
+      const registry = loader.getServiceRegistry()
+      registry.register('geo.service', {})
+      stub(loader, 'alpha', { requires: [{ id: 'geo.service' }] })
+      await loader.loadAll()
+
+      await loader.disableModule('alpha')
+      registry.unregister('geo.service')
+      await loader.enableModule('alpha')
+
+      expect(loader.getModule('alpha')?.state).toBe('unsatisfied')
+
+      registry.register('geo.service', {})
+      await loader.settle()
+      expect(loader.getModule('alpha')?.state).toBe('active')
+    })
+
+    it('should restore the whole chain on enable', async () => {
+      const loader = new ModuleLoader()
+      stub(loader, 'provider', {
+        provides: ['geo.service'],
+        onActivate: services => { services.register('geo.service', {}) }
+      })
+      stub(loader, 'consumer', { requires: [{ id: 'geo.service' }] })
+      await loader.loadAll()
+      await loader.disableModule('provider')
+
+      await loader.enableModule('provider')
+
+      expect(loader.getModule('provider')?.state).toBe('active')
+      expect(loader.getModule('consumer')?.state).toBe('active')
+    })
+
+    it('should refuse to load a disabled module', async () => {
+      const loader = new ModuleLoader()
+      const manifest = stub(loader, 'alpha', {})
+      await loader.loadAll()
+      await loader.disableModule('alpha')
+
+      const loaded = await loader.loadModule(manifest)
+
+      expect(loaded.state).toBe('stopped')
+    })
+
+    it('should report an unknown module and a module that was not disabled', async () => {
+      const loader = new ModuleLoader()
+      stub(loader, 'alpha', {})
+
+      expect(await loader.disableModule('ghost')).toBe(false)
+      expect(await loader.enableModule('alpha')).toBe(false)
+    })
+
+    it('should forget the flag when the module is unloaded', async () => {
+      const loader = new ModuleLoader()
+      stub(loader, 'alpha', {})
+      await loader.loadAll()
+      await loader.disableModule('alpha')
+
+      await loader.unloadModule('alpha')
+
+      expect(loader.isDisabled('alpha')).toBe(false)
+    })
+  })
+
+  describe('getServiceConsumers', () => {
+    it('should name the modules that asked for a service', async () => {
+      const loader = new ModuleLoader()
+      stub(loader, 'map', { requires: [{ id: 'geo.service' }] })
+      stub(loader, 'chart', {
+        requires: [{ id: 'geo.service', optional: true, policy: 'dynamic' }]
+      })
+      stub(loader, 'unrelated', { requires: [{ id: 'other.service' }] })
+      await loader.loadAll()
+
+      const consumers = loader.getServiceConsumers('geo.service')
+
+      expect(consumers.map(entry => entry.moduleId)).toEqual(['map', 'chart'])
+      expect(consumers[0].state).toBe('unsatisfied')
+      expect(consumers[1].requirement.policy).toBe('dynamic')
+    })
+
+    it('should include modules that were never loaded', () => {
+      const loader = new ModuleLoader()
+      stub(loader, 'map', { requires: [{ id: 'geo.service' }] })
+
+      expect(loader.getServiceConsumers('geo.service')).toEqual([
+        { moduleId: 'map', state: 'not loaded', requirement: { id: 'geo.service' } }
+      ])
+    })
+
+    it('should return nothing for a service nobody declared', () => {
+      expect(new ModuleLoader().getServiceConsumers('nothing')).toEqual([])
+    })
+  })
+
   describe('hot reload', () => {
     /**
      * unloadModule() removes the container from window, and loadEntry() would
