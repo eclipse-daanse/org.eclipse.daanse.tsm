@@ -1,5 +1,8 @@
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
-import { transformTsmImports } from '../vite/plugin'
+import { transformTsmImports, tsmPlugin } from '../vite/plugin'
 
 describe('tsmPlugin type import handling', () => {
   describe('inline type imports with tsm: prefix', () => {
@@ -108,5 +111,173 @@ import { ref } from 'tsm:vue'`
       const result = transformTsmImports(input)
       expect(result).toBeNull()
     })
+  })
+})
+
+describe('tsmPlugin manifest validation', () => {
+  interface PluginContext {
+    errors: string[]
+    warnings: string[]
+    error(message: string): never
+    warn(message: string): void
+  }
+
+  function context(): PluginContext {
+    const errors: string[] = []
+    const warnings: string[] = []
+    return {
+      errors,
+      warnings,
+      error(message: string): never {
+        errors.push(message)
+        throw new Error(message)
+      },
+      warn(message: string) {
+        warnings.push(message)
+      }
+    }
+  }
+
+  type Hook = (this: PluginContext, ...args: unknown[]) => unknown
+
+  async function run(
+    options: Parameters<typeof tsmPlugin>[0],
+    files: Array<{ id: string; code: string }>
+  ) {
+    const plugin = tsmPlugin(options)
+    const ctx = context()
+
+    try {
+      await (plugin.buildStart as Hook).call(ctx)
+    } catch {
+      // this.error() throws by contract; the message is recorded in ctx
+    }
+    for (const file of files) {
+      try {
+        await (plugin.transform as Hook).call(ctx, file.code, file.id)
+      } catch {
+        // this.error() throws by contract; the message is recorded in ctx
+      }
+    }
+    await (plugin.buildEnd as Hook).call(ctx)
+
+    return ctx
+  }
+
+  const manifest = {
+    id: 'my-module',
+    dependencies: ['plugin-a'],
+    sharedDependencies: [{ id: 'vue', versionRange: '^3.0.0' }]
+  }
+
+  it('should do nothing without a manifest', async () => {
+    const ctx = await run({}, [
+      { id: '/src/Widget.vue', code: `import { X } from 'tsm:nowhere'` }
+    ])
+
+    expect(ctx.errors).toEqual([])
+    expect(ctx.warnings).toEqual([])
+  })
+
+  it('should fail on an import the manifest does not declare', async () => {
+    const ctx = await run({ manifest }, [
+      { id: '/src/Widget.vue', code: `\nimport { GEO } from 'tsm:plugin-missing'` }
+    ])
+
+    expect(ctx.errors).toHaveLength(1)
+    expect(ctx.errors[0]).toContain('/src/Widget.vue:2')
+    expect(ctx.errors[0]).toContain('plugin-missing')
+    expect(ctx.errors[0]).toContain('not declared')
+  })
+
+  it('should warn instead of failing when strict is off', async () => {
+    const ctx = await run({ manifest, strict: false }, [
+      { id: '/src/Widget.vue', code: `import { GEO } from 'tsm:plugin-missing'` }
+    ])
+
+    expect(ctx.errors).toEqual([])
+    expect(ctx.warnings.some(warning => warning.includes('plugin-missing'))).toBe(true)
+  })
+
+  it('should accept a declared dependency', async () => {
+    const ctx = await run({ manifest }, [
+      { id: '/src/Widget.vue', code: `import { GEO } from 'tsm:plugin-a'` }
+    ])
+
+    expect(ctx.errors).toEqual([])
+    expect(ctx.warnings).toEqual([])
+  })
+
+  it('should accept a shared library import', async () => {
+    const ctx = await run({ manifest }, [
+      { id: '/src/Widget.vue', code: `import { ref } from 'tsm:my-module/vue'` },
+      { id: '/src/Other.vue', code: `import { GEO } from 'tsm:plugin-a'` }
+    ])
+
+    expect(ctx.errors).toEqual([])
+  })
+
+  it('should exempt type-only imports', async () => {
+    const ctx = await run({ manifest }, [
+      { id: '/src/types.ts', code: `import type { Widget } from 'tsm:plugin-typed'` },
+      { id: '/src/more.ts', code: `import { type Ref } from 'tsm:plugin-typed'` },
+      { id: '/src/Widget.vue', code: `import { GEO } from 'tsm:plugin-a'` }
+    ])
+
+    expect(ctx.errors).toEqual([])
+    expect(ctx.warnings).toEqual([])
+  })
+
+  it('should warn about a dependency nothing imports', async () => {
+    const ctx = await run({ manifest }, [
+      { id: '/src/Widget.vue', code: `const x = 1` }
+    ])
+
+    expect(ctx.warnings).toHaveLength(1)
+    expect(ctx.warnings[0]).toContain('plugin-a')
+    expect(ctx.warnings[0]).toContain('nothing imports')
+  })
+
+  it('should not warn when a type-only import is the only use', async () => {
+    // A type import leaves no runtime trace, so the declaration really is unused
+    const ctx = await run({ manifest }, [
+      { id: '/src/types.ts', code: `import type { A } from 'tsm:plugin-a'` }
+    ])
+
+    expect(ctx.warnings.some(warning => warning.includes('plugin-a'))).toBe(true)
+  })
+
+  it('should skip files outside the source set', async () => {
+    const ctx = await run({ manifest }, [
+      { id: '/node_modules/dep/index.js', code: `import { X } from 'tsm:plugin-missing'` },
+      { id: '/src/styles.css', code: `import { X } from 'tsm:plugin-missing'` },
+      { id: '/src/Widget.vue', code: `import { GEO } from 'tsm:plugin-a'` }
+    ])
+
+    expect(ctx.errors).toEqual([])
+  })
+
+  it('should read a manifest given as a path', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'tsm-plugin-'))
+    const path = join(directory, 'manifest.json')
+    await writeFile(path, JSON.stringify({ id: 'm', dependencies: ['plugin-a'] }))
+
+    try {
+      const ctx = await run({ manifest: path }, [
+        { id: '/src/Widget.vue', code: `import { X } from 'tsm:plugin-missing'` }
+      ])
+
+      expect(ctx.errors).toHaveLength(1)
+      expect(ctx.errors[0]).toContain('plugin-missing')
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('should report a manifest it cannot read', async () => {
+    const ctx = await run({ manifest: '/nonexistent/manifest.json' }, [])
+
+    expect(ctx.errors).toHaveLength(1)
+    expect(ctx.errors[0]).toContain('cannot read manifest')
   })
 })

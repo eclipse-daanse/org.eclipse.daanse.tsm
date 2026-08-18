@@ -50,7 +50,7 @@ export interface ServiceDeclaration {
    * Properties this service is published with, so a consumer can select it
    * through a target filter. Applied to a registration that passes none itself.
    */
-  properties?: Record<string, string | number | boolean>
+  properties?: ServiceProperties
 
   /**
    * Ranking for this service, used when several modules provide the same ID.
@@ -280,13 +280,28 @@ export interface BindClassOptions {
   /** Higher wins when several registrations share an ID */
   ranking?: number
   /** Properties a consumer's target filter can select on */
-  properties?: Record<string, string | number | boolean>
+  properties?: ServiceProperties
   /**
    * Additional service IDs this class implements.
    * The class will be resolvable under both its primary ID and all implements IDs.
    */
   implements?: string[]
 }
+
+/**
+ * A value a service property may carry.
+ *
+ * An array matches when any of its elements does, as in OSGi: "a filter matches
+ * a key that has multiple values if it matches at least one of those values".
+ */
+export type ServicePropertyValue =
+  | string
+  | number
+  | boolean
+  | ReadonlyArray<string | number | boolean>
+
+/** Properties a registration publishes, matched by a target filter */
+export type ServiceProperties = Record<string, ServicePropertyValue>
 
 /**
  * Handle for one registration, returned by register/bind/bindClass.
@@ -325,7 +340,7 @@ export interface ServiceReference {
    * Properties this registration was made with, plus `service.ranking` and
    * `service.providedBy`. What a target filter is matched against.
    */
-  readonly properties: Readonly<Record<string, string | number | boolean>>
+  readonly properties: Readonly<ServiceProperties>
 
   /** Whether a singleton instance for this registration already exists */
   readonly instantiated: boolean
@@ -356,7 +371,7 @@ export interface ServiceRegistry {
     options?: {
       providedBy?: string
       ranking?: number
-      properties?: Record<string, string | number | boolean>
+      properties?: ServiceProperties
     }
   ): ServiceRegistration
 
@@ -373,7 +388,7 @@ export interface ServiceRegistry {
       scope?: 'singleton' | 'transient'
       providedBy?: string
       ranking?: number
-      properties?: Record<string, string | number | boolean>
+      properties?: ServiceProperties
     }
   ): ServiceRegistration
 

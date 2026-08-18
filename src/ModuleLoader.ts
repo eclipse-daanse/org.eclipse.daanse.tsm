@@ -15,6 +15,7 @@ import type {
   ModuleLogger,
   ServiceRegistry,
   ServiceRequirement,
+  ServiceProperties,
   ObservableServiceRegistry,
   ServiceRegistryListener
 } from './types.js'
@@ -1044,7 +1045,7 @@ export class ModuleLoader {
     let scope = this.scopes.get(moduleId)
     if (!scope) {
       const declaredRankings = new Map<string, number>()
-      const declaredProperties = new Map<string, Record<string, string | number | boolean>>()
+      const declaredProperties = new Map<string, ServiceProperties>()
       for (const service of this.manifests.get(moduleId)?.provides ?? []) {
         if (service.ranking !== undefined) {
           declaredRankings.set(service.id, service.ranking)

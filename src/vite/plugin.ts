@@ -19,7 +19,15 @@
  *   import { Button } from 'tsm:my-app/ui'
  */
 
+import { readFile } from 'node:fs/promises'
 import type { Plugin } from 'vite'
+import {
+  collectTsmImports,
+  declaredIds,
+  requiredDependencyIds,
+  isDeclared,
+  type ValidatableManifest
+} from './manifestImports.js'
 
 const TSM_PREFIX = 'tsm:'
 
@@ -29,6 +37,25 @@ export interface TsmPluginOptions {
    * Default: true
    */
   useRenderChunk?: boolean
+
+  /**
+   * Manifest to validate `tsm:` imports against — a path to read or the parsed
+   * object. Without it no validation happens.
+   *
+   * Code and manifest are otherwise two independent sources of truth, and a
+   * mismatch only shows at runtime: an import of an undeclared module resolves
+   * to nothing and the module fails to activate.
+   */
+  manifest?: string | ValidatableManifest
+
+  /**
+   * Whether an import of an undeclared module fails the build.
+   * Default: true. With `false` it is reported as a warning.
+   *
+   * A `dependencies` entry no import references is always a warning — it costs
+   * a needless module load, it does not break anything.
+   */
+  strict?: boolean
 
   /**
    * Shared modules whose bare imports should also be transformed.
@@ -159,11 +186,33 @@ export function transformTsmImports(code: string, sharedModules: string[] = []):
  * TSM Vite Plugin for development and production builds
  */
 export function tsmPlugin(options: TsmPluginOptions = {}): Plugin {
-  const { useRenderChunk = true, sharedModules = [] } = options
+  const { useRenderChunk = true, sharedModules = [], manifest, strict = true } = options
+
+  let validatable: ValidatableManifest | undefined
+  /** Module IDs actually imported, collected across files for the unused check */
+  const importedModuleIds = new Set<string>()
 
   return {
     name: 'tsm-plugin',
     enforce: 'pre',
+
+    async buildStart() {
+      importedModuleIds.clear()
+      validatable = undefined
+
+      if (manifest === undefined) return
+
+      if (typeof manifest !== 'string') {
+        validatable = manifest
+        return
+      }
+
+      try {
+        validatable = JSON.parse(await readFile(manifest, 'utf-8')) as ValidatableManifest
+      } catch (error) {
+        this.error(`tsm: cannot read manifest '${manifest}': ${(error as Error).message}`)
+      }
+    },
 
     // Mark tsm: imports and shared modules as external
     resolveId(source: string) {
@@ -179,14 +228,55 @@ export function tsmPlugin(options: TsmPluginOptions = {}): Plugin {
       return null
     },
 
-    // For development: transform during build
+    // Validation lives here rather than in renderChunk: only a source file can
+    // name the file and line a bad import sits on
     transform(code: string, id: string) {
-      if (useRenderChunk) return null
       if (!id.match(/\.(ts|js|tsx|jsx|vue)$/)) return null
       if (id.includes('node_modules')) return null
 
+      if (validatable) {
+        const declared = declaredIds(validatable)
+
+        for (const reference of collectTsmImports(code)) {
+          // A type-only import leaves no runtime trace, so it needs no dependency
+          if (reference.typeOnly) continue
+
+          importedModuleIds.add(reference.moduleId)
+          if (isDeclared(reference, declared)) continue
+
+          const message =
+            `tsm: '${id}:${reference.line}' imports 'tsm:${reference.specifier}', ` +
+            `but '${reference.moduleId}' is not declared in the manifest. ` +
+            `Add it to dependencies, or to sharedDependencies if the host provides it.`
+
+          if (strict) {
+            this.error(message)
+          } else {
+            this.warn(message)
+          }
+        }
+      }
+
+      if (useRenderChunk) return null
+
       const transformed = transformTsmImports(code, sharedModules)
       return transformed ? { code: transformed, map: null } : null
+    },
+
+    // A declaration nothing imports keeps the resolver loading a module for no
+    // reason — worth reporting, but not worth failing a build over
+    buildEnd() {
+      if (!validatable) return
+
+      const unused = requiredDependencyIds(validatable).filter(
+        dependencyId => !importedModuleIds.has(dependencyId)
+      )
+
+      if (unused.length > 0) {
+        this.warn(
+          `tsm: manifest declares dependencies that nothing imports: ${unused.join(', ')}`
+        )
+      }
     },
 
     // For production: transform final output

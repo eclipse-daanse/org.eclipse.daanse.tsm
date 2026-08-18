@@ -77,9 +77,15 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
   meaningful with ranking; before, there was no "better".
 - **Target filters.** `requiresService[].target` takes an LDAP-style filter in OSGi syntax — `(kind=chart)`,
   `(&(kind=chart)(service.ranking>=10))`, `(!(experimental=true))`, `(label=chart*)`, `(kind=*)` — so a filter
-  written for a Java `@Reference` reads the same here. Supported: `&` `|` `!`, `=`, `>=`, `<=`, presence and
-  `*` wildcards; `~=` is rejected rather than guessed at. An invalid filter throws, naming the position,
-  instead of silently matching nothing.
+  written for a Java `@Reference` reads the same here. Operators `&` `|` `!`, `=`, `>=`, `<=`, `~=`, presence
+  and `*` wildcards. An invalid filter throws, naming the position, instead of silently matching nothing.
+
+  Semantics follow `org.osgi.framework.FilterImpl`, checked against it rather than guessed:
+  attribute names match **case-insensitively**; comparison is driven by the **type of the property value**, not
+  by what the filter text looks like (a string property compares lexically even when both sides parse as
+  numbers, so `(version>=10)` against `'9'` holds); a property holding an **array matches when any element
+  matches**; booleans have no ordering; `~=` strips whitespace and compares case-insensitively, the minimum
+  the spec allows.
 - **Service properties.** `register`/`bind`/`bindClass` take `properties`, and `ServiceDeclaration.properties`
   declares them in the manifest (a registration passing its own wins). `service.ranking` and
   `service.providedBy` are added by the registry, so they are filterable too. A filter narrows what satisfies
@@ -176,6 +182,21 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
   interfaces the new provider never declared.
 - `ModuleEvent.type` has an additional value (`'service-withdrawn'`), which affects consumers that handle the
   union exhaustively in a `switch`.
+
+#### Build-time manifest validation ([#17](https://github.com/eclipse-daanse/org.eclipse.daanse.tms/issues/17))
+
+- **`tsmPlugin({ manifest, strict })`** checks every `tsm:` import against the manifest while transforming.
+  An import of a module the manifest does not declare fails the build with file and line (`strict: false`
+  reports it as a warning instead), and a `dependencies` entry no import references is warned about at
+  `buildEnd` as a dead declaration. Code and manifest were otherwise two independent sources of truth whose
+  mismatch only surfaced on activation, on the user's machine.
+- **Type-only imports are exempt**, including `import { type A }` where every specifier is inline `type`: they
+  leave no runtime trace, and that they vanish is what makes cross-module typing work without bundling.
+- Validation runs in `transform` regardless of `useRenderChunk`, because only a source file can name the line
+  an import sits on. An import is accepted when the manifest declares the module ID, the full specifier, or
+  its subpath — `tsm:` serves both module imports and host libraries, and insisting on one spelling would
+  produce false alarms rather than findings.
+- `manifest` takes a path to read or the parsed object; a path that cannot be read fails the build.
 
 #### Diagnostics
 

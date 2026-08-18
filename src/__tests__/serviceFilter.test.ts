@@ -4,7 +4,10 @@ import { createServiceFilter } from '../serviceFilter'
 describe('createServiceFilter', () => {
   const chart = { kind: 'chart', label: 'chart-widget', 'service.ranking': 10, experimental: false }
 
-  function matches(expression: string, properties: Record<string, string | number | boolean> = chart) {
+  function matches(
+    expression: string,
+    properties: Record<string, string | number | boolean | ReadonlyArray<string | number | boolean>> = chart
+  ) {
     return createServiceFilter(expression)(properties)
   }
 
@@ -75,6 +78,61 @@ describe('createServiceFilter', () => {
     })
   })
 
+  describe('OSGi semantics', () => {
+    it('should match attribute names case-insensitively', () => {
+      expect(matches('(KIND=chart)')).toBe(true)
+      expect(matches('(Service.Ranking>=10)')).toBe(true)
+    })
+
+    it('should compare by the type of the property, not by the filter text', () => {
+      // A string property compares lexically even though both sides parse as numbers:
+      // '9' >= '10' holds lexically, 9 >= 10 does not
+      expect(matches('(version>=10)', { version: '9' })).toBe(true)
+      expect(matches('(version>=10)', { version: 9 })).toBe(false)
+      expect(matches('(version<=10)', { version: 9 })).toBe(true)
+    })
+
+    it('should give booleans no ordering', () => {
+      expect(matches('(experimental=false)', { experimental: false })).toBe(true)
+      expect(matches('(experimental>=false)', { experimental: false })).toBe(false)
+      expect(matches('(experimental<=true)', { experimental: true })).toBe(false)
+    })
+
+    it('should match an array property when any element matches', () => {
+      const properties = { kinds: ['chart', 'table'], sizes: [1, 5] }
+
+      expect(matches('(kinds=chart)', properties)).toBe(true)
+      expect(matches('(kinds=table)', properties)).toBe(true)
+      expect(matches('(kinds=map)', properties)).toBe(false)
+      expect(matches('(sizes>=5)', properties)).toBe(true)
+      expect(matches('(sizes>=6)', properties)).toBe(false)
+      expect(matches('(kinds=cha*)', properties)).toBe(true)
+      expect(matches('(kinds=*)', properties)).toBe(true)
+    })
+
+    it('should ignore whitespace and case for approximate match', () => {
+      expect(matches('(kind~=CHART)')).toBe(true)
+      expect(matches('(label~=chart - widget)', { label: 'Chart-Widget' })).toBe(true)
+      expect(matches('(kind~=table)')).toBe(false)
+    })
+
+    it('should apply approximate match to numbers as text', () => {
+      expect(matches('(service.ranking~=10)')).toBe(true)
+      expect(matches('(service.ranking~=11)')).toBe(false)
+    })
+
+    it('should not match a missing property with any operator', () => {
+      expect(matches('(missing=x)')).toBe(false)
+      expect(matches('(missing>=1)')).toBe(false)
+      expect(matches('(missing~=x)')).toBe(false)
+      expect(matches('(missing=*)')).toBe(false)
+    })
+
+    it('should trim the filter value for numeric comparison', () => {
+      expect(matches('(service.ranking>= 10 )')).toBe(true)
+    })
+  })
+
   describe('escaping', () => {
     it('should take an escaped character literally', () => {
       expect(matches('(label=chart\\*widget)', { label: 'chart*widget' })).toBe(true)
@@ -92,7 +150,6 @@ describe('createServiceFilter', () => {
       expect(() => createServiceFilter('(kind=chart')).toThrow("expected ')'")
       expect(() => createServiceFilter('(=chart)')).toThrow('missing attribute name')
       expect(() => createServiceFilter('(&)')).toThrow('operator without operands')
-      expect(() => createServiceFilter('(kind~=chart)')).toThrow('approximate match')
       expect(() => createServiceFilter('(kind=chart)(x=y)')).toThrow('trailing input')
     })
 

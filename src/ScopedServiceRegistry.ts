@@ -9,6 +9,7 @@ import type {
   InjectableConstructor,
   BindClassOptions,
   ServiceCardinality,
+  ServiceProperties,
   ServiceReference,
   ServiceRegistration,
   ServiceRegistryListener
@@ -39,7 +40,7 @@ export class ScopedServiceRegistry implements IObservableServiceRegistry {
     private readonly moduleId: string,
     private readonly target: IServiceRegistry,
   private readonly declaredRankings: Map<string, number> = new Map(),
-    private readonly declaredProperties: Map<string, Record<string, string | number | boolean>> = new Map()
+    private readonly declaredProperties: Map<string, ServiceProperties> = new Map()
   ) {}
 
   private rankingFor(id: string, given?: number): number | undefined {
@@ -48,8 +49,8 @@ export class ScopedServiceRegistry implements IObservableServiceRegistry {
 
   private propertiesFor(
     id: string,
-    given?: Record<string, string | number | boolean>
-  ): Record<string, string | number | boolean> | undefined {
+    given?: ServiceProperties
+  ): ServiceProperties | undefined {
     return given ?? this.declaredProperties.get(id)
   }
 
@@ -59,7 +60,7 @@ export class ScopedServiceRegistry implements IObservableServiceRegistry {
     options: {
       providedBy?: string
       ranking?: number
-      properties?: Record<string, string | number | boolean>
+      properties?: ServiceProperties
     } = {}
   ): ServiceRegistration {
     return this.track(this.target.register(id, service, {
@@ -77,7 +78,7 @@ export class ScopedServiceRegistry implements IObservableServiceRegistry {
       scope?: 'singleton' | 'transient'
       providedBy?: string
       ranking?: number
-      properties?: Record<string, string | number | boolean>
+      properties?: ServiceProperties
     } = {}
   ): ServiceRegistration {
     return this.track(this.target.bind(id, factory, {
