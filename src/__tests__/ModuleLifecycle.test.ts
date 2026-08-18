@@ -349,6 +349,196 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
   })
 
+  describe('unloading and reloading', () => {
+    it('should keep a dependent parked after its dependency is unloaded', async () => {
+      const loader = new ModuleLoader()
+      const registry = loader.getServiceRegistry()
+
+      stub(loader, 'base', { requires: [{ id: 'geo.service' }] })
+      stub(loader, 'feature', { dependencies: ['base'] })
+      await loader.loadAll()
+
+      await loader.unloadModule('base')
+
+      expect(loader.getModule('base')).toBeUndefined()
+      expect(loader.getUnsatisfiedModules()).toEqual([
+        { moduleId: 'feature', waitingFor: ['module base'] }
+      ])
+
+      // The service arriving must not activate a module whose dependency is gone
+      registry.register('geo.service', {})
+      await loader.settle()
+
+      expect(loader.getModule('feature')?.state).toBe('unsatisfied')
+    })
+
+    it('should park consumers when an unloaded module took its services with it', async () => {
+      const loader = new ModuleLoader()
+
+      stub(loader, 'provider', {
+        provides: ['s1'],
+        onActivate: services => { services.register('s1', {}) }
+      })
+      stub(loader, 'consumer', { requires: [{ id: 's1' }] })
+      await loader.loadAll()
+      expect(loader.getModule('consumer')?.state).toBe('active')
+
+      await loader.unloadModule('provider')
+
+      expect(loader.getModule('consumer')?.state).toBe('unsatisfied')
+      expect(loader.getServiceRegistry().has('s1')).toBe(false)
+    })
+
+    it('should refuse to unload a module that active modules depend on', async () => {
+      const loader = new ModuleLoader()
+
+      stub(loader, 'base', {})
+      stub(loader, 'feature', { dependencies: ['base'] })
+      await loader.loadAll()
+
+      expect(await loader.unloadModule('base')).toBe(false)
+      expect(loader.getModule('base')?.state).toBe('active')
+      expect(loader.getModule('feature')?.state).toBe('active')
+    })
+
+    it('should bring a parked dependent back when the dependency returns', async () => {
+      const loader = new ModuleLoader()
+      const registry = loader.getServiceRegistry()
+
+      // base waits for a service, so feature waits for base
+      stub(loader, 'base', { requires: [{ id: 'geo.service' }] })
+      stub(loader, 'feature', { dependencies: ['base'] })
+      await loader.loadAll()
+
+      // Unloading is allowed here, because no dependent is active
+      expect(await loader.unloadModule('base')).toBe(true)
+      expect(loader.getModule('feature')?.state).toBe('unsatisfied')
+
+      // unloadModule() removed the container from window, so stub again
+      const base = stub(loader, 'base', { requires: [{ id: 'geo.service' }] })
+      await loader.loadModule(base)
+      registry.register('geo.service', {})
+      await loader.settle()
+
+      expect(loader.getModule('base')?.state).toBe('active')
+      expect(loader.getModule('feature')?.state).toBe('active')
+    })
+  })
+
+  describe('dependency cycles', () => {
+    it('should park mutually dependent modules instead of overflowing the stack', async () => {
+      const loader = new ModuleLoader()
+
+      stub(loader, 'a', { dependencies: ['b'] })
+      stub(loader, 'b', { dependencies: ['a'] })
+
+      await loader.loadAll()
+
+      expect(loader.getModule('a')?.state).toBe('unsatisfied')
+      expect(loader.getModule('b')?.state).toBe('unsatisfied')
+      expect(loader.getUnsatisfiedModules()).toEqual(
+        expect.arrayContaining([
+          { moduleId: 'a', waitingFor: ['module b'] },
+          { moduleId: 'b', waitingFor: ['module a'] }
+        ])
+      )
+    })
+
+    it('should not report an error for a dependency cycle', async () => {
+      const loader = new ModuleLoader()
+      const events = collectEvents(loader)
+
+      stub(loader, 'a', { dependencies: ['b'] })
+      stub(loader, 'b', { dependencies: ['a'] })
+
+      await loader.loadAll()
+
+      expect(events.filter(event => event.type === 'error')).toEqual([])
+    })
+  })
+
+  describe('asynchronous hooks', () => {
+    it('should serialize activations that await inside the hook', async () => {
+      const loader = new ModuleLoader()
+      const registry = loader.getServiceRegistry()
+      const sequence: string[] = []
+
+      function asyncStub(id: string, requires: string[], provides?: string) {
+        const manifest: ModuleManifest = {
+          id,
+          name: id,
+          version: '1.0.0',
+          entry: `http://localhost/${id}/remoteEntry.js`,
+          exports: {},
+          requiresService: requires.map(serviceId => ({ id: serviceId })),
+          provides: provides ? [{ id: provides }] : undefined
+        }
+        globalRef.window![id] = {
+          activate: async (context: ModuleContext) => {
+            sequence.push(`${id}:start`)
+            await new Promise(resolve => setTimeout(resolve, 5))
+            if (provides) context.services.register(provides, {})
+            sequence.push(`${id}:done`)
+          },
+          deactivate: async () => {
+            sequence.push(`${id}:stop`)
+            await new Promise(resolve => setTimeout(resolve, 5))
+          }
+        }
+        loader.register([manifest])
+        return manifest
+      }
+
+      asyncStub('consumer', ['s2'])
+      asyncStub('middle', ['s1'], 's2')
+      asyncStub('provider', [], 's1')
+
+      await loader.loadAll()
+
+      expect(loader.getModule('consumer')?.state).toBe('active')
+      // No activation may interleave with another
+      expect(sequence).toEqual([
+        'provider:start', 'provider:done',
+        'middle:start', 'middle:done',
+        'consumer:start', 'consumer:done'
+      ])
+
+      registry.unregister('s1')
+      await loader.settle()
+
+      expect(loader.getModule('middle')?.state).toBe('unsatisfied')
+      expect(loader.getModule('consumer')?.state).toBe('unsatisfied')
+      // Teardown runs consumer-side hooks to completion as well
+      expect(sequence).toContain('middle:stop')
+      expect(sequence).toContain('consumer:stop')
+    })
+
+    it('should settle a cascade triggered while another load is in flight', async () => {
+      const loader = new ModuleLoader()
+      const registry = loader.getServiceRegistry()
+
+      const slow: ModuleManifest = {
+        id: 'slow', name: 'slow', version: '1.0.0',
+        entry: 'http://localhost/slow/remoteEntry.js', exports: {},
+        requiresService: [{ id: 'late.service' }]
+      }
+      globalRef.window!['slow'] = {
+        activate: async () => { await new Promise(resolve => setTimeout(resolve, 10)) }
+      }
+      loader.register([slow])
+
+      const loading = loader.loadModule(slow)
+      // Arrives while the module is still being loaded
+      registry.register('late.service', {})
+
+      await loading
+      await loader.settle()
+
+      expect(loader.getModule('slow')?.state).toBe('active')
+      expect(loader.getUnsatisfiedModules()).toEqual([])
+    })
+  })
+
   describe('loop protection', () => {
     it('should give up on a module that keeps flipping within one cascade', async () => {
       const loader = new ModuleLoader()

@@ -14,6 +14,17 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
 
 ### Fixed
 
+- **Circular module `dependencies` crashed the loader.** `ensureDependencies()` called `loadModule()`, which
+  restarted a module that was already being loaded, so two modules depending on each other recursed until
+  `RangeError: Maximum call stack size exceeded`. The resolver detected the cycle and warned, but loading ran
+  into it anyway. `loadModule()` now returns the existing entry for a module in flight, and the modules end up
+  parked on each other — visible in `getUnsatisfiedModules()` instead of a stack overflow.
+- **A dependent could activate after its dependency was unloaded.** Satisfaction only counted a dependency
+  that was present but not active, so once the dependency was removed from the loader it stopped counting at
+  all and the dependent looked satisfied. Any dependency that is not active now blocks activation, whether it
+  is parked, still loading, failed, or gone.
+- `unloadModule()` and `reloadModule()` await the resulting cascade, so callers see a settled state rather
+  than a half-processed queue.
 - **`unregister()` left alias bindings behind.** `bindClass(id, ctor, { implements: [...] })` creates alias
   bindings that delegate to the primary ID, but unregistering the primary removed only its own entry. The
   aliases survived as dangling entries, where `has(alias)` reported the service while `get(alias)` returned
