@@ -93,6 +93,8 @@ export class ModuleLoader {
   /** Activations per cascade, to catch a module that flips between states forever */
   private cascadeActivations = new Map<string, number>()
   private disposed = false
+  /** Per module: which of its dynamic requirements were available at the last check */
+  private dynamicBindings = new Map<string, Set<string>>()
   /** Module-scoped registry facades, so a teardown can withdraw what a module registered */
   private scopes = new Map<string, ScopedServiceRegistry>()
   /** Serializes reactions to registry events; they are async, the events are not */
@@ -168,11 +170,19 @@ export class ModuleLoader {
    * A module whose dependency is parked must wait too, otherwise it activates
    * against code that is not running.
    */
-  private unsatisfiedReasons(manifest: ModuleManifest): {
+  private unsatisfiedReasons(
+    manifest: ModuleManifest,
+    mode: 'activation' | 'runtime' = 'activation'
+  ): {
     services: string[]
     modules: string[]
   } {
-    const requirements = manifest.requiresService ?? []
+    // Cardinality decides whether a module may activate; policy decides what a
+    // withdrawal does. A dynamic requirement must be there to start, but its
+    // later disappearance does not tear the module down — it is notified.
+    const requirements = (manifest.requiresService ?? []).filter(
+      requirement => mode === 'activation' || requirement.policy !== 'dynamic'
+    )
     const services = requirements.length > 0
       ? this.services.checkRequirements(requirements).missing
       : []
@@ -234,7 +244,77 @@ export class ModuleLoader {
   private async reconcile(): Promise<void> {
     if (this.disposed) return
     await this.parkUnsatisfiedActive()
+    await this.notifyDynamicChanges()
     await this.activateSatisfiedPending()
+  }
+
+  /**
+   * Tell active modules about dynamic requirements that came or went.
+   *
+   * The module keeps running; dropping the reference is its job, which is the
+   * contract `policy: 'dynamic'` expresses.
+   */
+  private async notifyDynamicChanges(): Promise<void> {
+    for (const loadedModule of [...this.modules.values()]) {
+      if (loadedModule.state !== 'active') continue
+
+      const dynamicIds = (loadedModule.manifest.requiresService ?? [])
+        .filter(requirement => requirement.policy === 'dynamic')
+        .map(requirement => requirement.id)
+      if (dynamicIds.length === 0) continue
+
+      const moduleId = loadedModule.manifest.id
+      const previous = this.dynamicBindings.get(moduleId) ?? new Set<string>()
+      const current = new Set(dynamicIds.filter(serviceId => this.services.has(serviceId)))
+      this.dynamicBindings.set(moduleId, current)
+
+      for (const serviceId of previous) {
+        if (!current.has(serviceId)) {
+          await this.callDynamicHook(loadedModule, 'onServiceUnbound', serviceId)
+        }
+      }
+      for (const serviceId of current) {
+        if (!previous.has(serviceId)) {
+          await this.callDynamicHook(loadedModule, 'onServiceBound', serviceId)
+        }
+      }
+    }
+  }
+
+  private async callDynamicHook(
+    loadedModule: LoadedModule,
+    hook: 'onServiceBound' | 'onServiceUnbound',
+    serviceId: string
+  ): Promise<void> {
+    const handler = loadedModule.lifecycle?.[hook]
+    if (!handler) return
+
+    try {
+      await handler.call(loadedModule.lifecycle, this.createContext(loadedModule), serviceId)
+    } catch (error) {
+      // A failing hook must not stop the cascade; the module stays active,
+      // which is what the dynamic contract promises
+      this.logger.error(
+        `${hook} of ${loadedModule.manifest.id} failed for service ${serviceId}:`,
+        error
+      )
+    }
+  }
+
+  /**
+   * Record which dynamic requirements are available, so the first reconcile
+   * after activation does not report them as newly bound
+   */
+  private captureDynamicBindings(manifest: ModuleManifest): void {
+    const dynamicIds = (manifest.requiresService ?? [])
+      .filter(requirement => requirement.policy === 'dynamic')
+      .map(requirement => requirement.id)
+    if (dynamicIds.length === 0) return
+
+    this.dynamicBindings.set(
+      manifest.id,
+      new Set(dynamicIds.filter(serviceId => this.services.has(serviceId)))
+    )
   }
 
   private async parkUnsatisfiedActive(): Promise<void> {
@@ -252,7 +332,7 @@ export class ModuleLoader {
     for (const loadedModule of [...this.modules.values()]) {
       if (loadedModule.state !== 'active') continue
 
-      const reasons = this.unsatisfiedReasons(loadedModule.manifest)
+      const reasons = this.unsatisfiedReasons(loadedModule.manifest, 'runtime')
       if (reasons.services.length === 0 && reasons.modules.length === 0) continue
 
       if (reasons.services.length > 0) {
@@ -344,6 +424,7 @@ export class ModuleLoader {
     loadedModule.state = 'activating'
     try {
       await this.activate(loadedModule)
+      this.captureDynamicBindings(manifest)
       loadedModule.state = 'active'
       this.emit({
         type: 'activated',
@@ -378,6 +459,7 @@ export class ModuleLoader {
     this.serviceListener = undefined
     this.scopes.clear()
     this.cascadeActivations.clear()
+    this.dynamicBindings.clear()
   }
 
   /**
@@ -524,6 +606,7 @@ export class ModuleLoader {
 
       // Activate
       await this.activate(loadedModule)
+      this.captureDynamicBindings(manifest)
 
       loadedModule.state = 'active'
       this.emit({
@@ -779,6 +862,7 @@ export class ModuleLoader {
       )
     }
 
+    this.dynamicBindings.delete(loadedModule.manifest.id)
     loadedModule.state = 'stopped'
 
     this.emit({

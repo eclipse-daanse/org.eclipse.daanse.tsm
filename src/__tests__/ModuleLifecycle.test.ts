@@ -1,16 +1,25 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ModuleLoader } from '../ModuleLoader'
-import type { ModuleContext, ModuleEvent, ModuleEventListener, ModuleManifest, ServiceRegistry } from '../types'
+import type {
+  ModuleContext,
+  ModuleEvent,
+  ModuleEventListener,
+  ModuleManifest,
+  ObservableServiceRegistry,
+  ServiceRegistryEvent
+} from '../types'
 
 interface GlobalWithWindow { window?: Record<string, unknown> }
 const globalRef = globalThis as GlobalWithWindow
 
 interface StubOptions {
-  requires?: Array<{ id: string; optional?: boolean }>
+  requires?: Array<{ id: string; optional?: boolean; policy?: 'static' | 'dynamic' }>
   provides?: string[]
   dependencies?: string[]
-  onActivate?: (services: ServiceRegistry) => void
-  onDeactivate?: (services: ServiceRegistry) => void
+  onActivate?: (services: ObservableServiceRegistry) => void
+  onDeactivate?: (services: ObservableServiceRegistry) => void
+  onServiceBound?: (serviceId: string) => void
+  onServiceUnbound?: (serviceId: string) => void
 }
 
 /**
@@ -31,7 +40,13 @@ function stub(loader: ModuleLoader, id: string, options: StubOptions = {}): Modu
 
   globalRef.window![id] = {
     activate: (context: ModuleContext) => { options.onActivate?.(context.services) },
-    deactivate: (context: ModuleContext) => { options.onDeactivate?.(context.services) }
+    deactivate: (context: ModuleContext) => { options.onDeactivate?.(context.services) },
+    onServiceBound: (_context: ModuleContext, serviceId: string) => {
+      options.onServiceBound?.(serviceId)
+    },
+    onServiceUnbound: (_context: ModuleContext, serviceId: string) => {
+      options.onServiceUnbound?.(serviceId)
+    }
   }
 
   loader.register([manifest])
@@ -536,6 +551,166 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
 
       expect(loader.getModule('slow')?.state).toBe('active')
       expect(loader.getUnsatisfiedModules()).toEqual([])
+    })
+  })
+
+  describe('dynamic policy', () => {
+    it('should keep the module active and notify it when the service goes away', async () => {
+      const loader = new ModuleLoader()
+      const registry = loader.getServiceRegistry()
+      registry.register('geo.service', {})
+
+      const onServiceUnbound = vi.fn()
+      const onDeactivate = vi.fn()
+      const manifest = stub(loader, 'map-module', {
+        requires: [{ id: 'geo.service', policy: 'dynamic' }],
+        onServiceUnbound,
+        onDeactivate
+      })
+      const loaded = await loader.loadModule(manifest)
+      await loader.settle()
+
+      registry.unregister('geo.service')
+      await loader.settle()
+
+      expect(loaded.state).toBe('active')
+      expect(onServiceUnbound).toHaveBeenCalledWith('geo.service')
+      expect(onDeactivate).not.toHaveBeenCalled()
+    })
+
+    it('should notify when the service comes back', async () => {
+      const loader = new ModuleLoader()
+      const registry = loader.getServiceRegistry()
+      registry.register('geo.service', {})
+
+      const onServiceBound = vi.fn()
+      const manifest = stub(loader, 'map-module', {
+        requires: [{ id: 'geo.service', policy: 'dynamic' }],
+        onServiceBound
+      })
+      await loader.loadModule(manifest)
+      await loader.settle()
+
+      // Services present at activation are not reported as newly bound
+      expect(onServiceBound).not.toHaveBeenCalled()
+
+      registry.unregister('geo.service')
+      await loader.settle()
+      registry.register('geo.service', {})
+      await loader.settle()
+
+      expect(onServiceBound).toHaveBeenCalledWith('geo.service')
+    })
+
+    it('should still require a mandatory dynamic service to activate', async () => {
+      const loader = new ModuleLoader()
+      const registry = loader.getServiceRegistry()
+
+      const manifest = stub(loader, 'map-module', {
+        requires: [{ id: 'geo.service', policy: 'dynamic' }]
+      })
+      const loaded = await loader.loadModule(manifest)
+      await loader.settle()
+
+      expect(loaded.state).toBe('unsatisfied')
+
+      registry.register('geo.service', {})
+      await loader.settle()
+
+      expect(loaded.state).toBe('active')
+    })
+
+    it('should tear down for a static requirement even when a dynamic one is fine', async () => {
+      const loader = new ModuleLoader()
+      const registry = loader.getServiceRegistry()
+      registry.register('static.service', {})
+      registry.register('dynamic.service', {})
+
+      const onServiceUnbound = vi.fn()
+      const manifest = stub(loader, 'map-module', {
+        requires: [
+          { id: 'static.service' },
+          { id: 'dynamic.service', policy: 'dynamic' }
+        ],
+        onServiceUnbound
+      })
+      const loaded = await loader.loadModule(manifest)
+      await loader.settle()
+
+      registry.unregister('static.service')
+      await loader.settle()
+
+      expect(loaded.state).toBe('unsatisfied')
+      expect(onServiceUnbound).not.toHaveBeenCalled()
+    })
+
+    it('should keep the module active when a dynamic hook throws', async () => {
+      const loader = new ModuleLoader()
+      const registry = loader.getServiceRegistry()
+      registry.register('geo.service', {})
+
+      const manifest = stub(loader, 'map-module', {
+        requires: [{ id: 'geo.service', policy: 'dynamic' }],
+        onServiceUnbound: () => { throw new Error('hook exploded') }
+      })
+      const loaded = await loader.loadModule(manifest)
+      await loader.settle()
+
+      registry.unregister('geo.service')
+      await loader.settle()
+
+      expect(loaded.state).toBe('active')
+    })
+  })
+
+  describe('observing the registry from inside a module', () => {
+    it('should let a module react to services it did not declare', async () => {
+      const loader = new ModuleLoader()
+      const registry = loader.getServiceRegistry()
+      const seen: string[] = []
+
+      // What a registry-style service does: collect whatever shows up
+      const manifest = stub(loader, 'widget-host', {
+        onActivate: services => {
+          services.addListener({
+            onServiceEvent: (event: ServiceRegistryEvent) => {
+              seen.push(`${event.type}:${event.serviceId}`)
+            }
+          })
+        }
+      })
+      await loader.loadModule(manifest)
+      await loader.settle()
+
+      registry.register('widget.chart', {})
+      registry.unregister('widget.chart')
+      await loader.settle()
+
+      expect(seen).toEqual(['registered:widget.chart', 'unregistered:widget.chart'])
+    })
+
+    it('should drop the listener when the module is deactivated', async () => {
+      const loader = new ModuleLoader()
+      const registry = loader.getServiceRegistry()
+      const seen: string[] = []
+
+      const manifest = stub(loader, 'widget-host', {
+        onActivate: services => {
+          services.addListener({
+            onServiceEvent: (event: ServiceRegistryEvent) => { seen.push(event.serviceId) }
+          })
+        }
+      })
+      await loader.loadModule(manifest)
+      await loader.settle()
+
+      await loader.unloadModule('widget-host')
+      seen.length = 0
+
+      registry.register('widget.chart', {})
+      await loader.settle()
+
+      expect(seen).toEqual([])
     })
   })
 

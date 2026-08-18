@@ -38,6 +38,20 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
 
 ### Added
 
+#### Notification
+
+- **`policy: 'dynamic'` is implemented.** A module requiring a service dynamically stays active when the
+  service is withdrawn and is told about it through the new `onServiceUnbound(context, serviceId)` hook;
+  `onServiceBound` reports a service that (re)appears while the module runs. Services present at activation
+  are not reported as newly bound — `activate()` already sees those. Cardinality still decides activation: a
+  mandatory dynamic requirement has to be there to start, its later disappearance does not tear the module
+  down. A throwing hook is logged and the module keeps running, which is what the dynamic contract promises.
+- **`context.services` can be listened to.** It is typed as `ObservableServiceRegistry` now, so a
+  registry-style service inside a module can react to services it never declared — the reactive counterpart
+  to collecting providers by hand. The listener is removed when the module is deactivated, so a collection
+  cannot keep reacting after its module stopped. A custom `ServiceRegistry` without listener support reports
+  that it cannot be observed instead of silently dropping the listener.
+
 #### Satisfaction lifecycle
 
 - **`unsatisfied` module state.** A module whose non-optional `requiresService` entries are unavailable is
@@ -91,6 +105,9 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
 - **`context.services` is a module-scoped facade, not the shared registry.** It implements `ServiceRegistry`,
   so module code compiles unchanged, but registrations made through it are withdrawn when the module is
   deactivated. A module that deliberately outlived its own services no longer can.
+- **`ModuleContext.services` is typed `ObservableServiceRegistry`**, not `ServiceRegistry`. Module code that
+  only consumes the context is unaffected; a hand-written `ModuleContext` (in tests, say) needs the two
+  listener methods.
 - `ModuleState` and `ModuleEvent.type` each gained values (`'unsatisfied'`, plus `'service-withdrawn'`), which
   affects consumers handling those unions exhaustively in a `switch`.
 
@@ -104,9 +121,11 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
 
 ### Known limitations
 
-- `policy: 'dynamic'` is accepted but behaves as `'static'`. Notifying a module while it keeps running
-  requires invalidating cached injections, which is not possible for `bind()` factories whose internals are
-  opaque to the registry.
+- **Cached injections are not invalidated.** A singleton that received a service through `@inject` keeps that
+  reference after the service is unregistered — `policy: 'dynamic'` notifies the module, but does not rebuild
+  anything for it. Dropping the reference is the module's job. Automatic invalidation is possible for
+  `bindClass()`, whose dependencies the registry knows, and impossible for `bind()` factories, whose
+  internals are opaque.
 - The registry still holds at most one service per ID, and `getAll(pattern)` sees only instantiated services,
   so cardinality `0..n` — the whiteboard pattern — is not expressible. Satisfaction rules are defined against
   a single provider per ID and will be revisited when that changes.

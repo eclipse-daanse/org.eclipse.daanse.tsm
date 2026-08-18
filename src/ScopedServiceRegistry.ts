@@ -4,9 +4,11 @@
  */
 
 import type {
+  ObservableServiceRegistry as IObservableServiceRegistry,
   ServiceRegistry as IServiceRegistry,
   InjectableConstructor,
-  BindClassOptions
+  BindClassOptions,
+  ServiceRegistryListener
 } from './types.js'
 
 /**
@@ -20,9 +22,11 @@ import type {
  *
  * Reads are passed straight through: a module sees every service, not only its own.
  */
-export class ScopedServiceRegistry implements IServiceRegistry {
+export class ScopedServiceRegistry implements IObservableServiceRegistry {
   /** Primary IDs registered through this facade, in registration order */
   private ownIds = new Set<string>()
+  /** Listeners this module added, so they do not outlive it */
+  private ownListeners = new Set<ServiceRegistryListener>()
 
   constructor(
     private readonly moduleId: string,
@@ -90,6 +94,34 @@ export class ScopedServiceRegistry implements IServiceRegistry {
     return this.target.getServiceIds()
   }
 
+  /**
+   * Listen for service registrations and withdrawals.
+   *
+   * The listener is removed when the module is deactivated, so a collection
+   * held by the module cannot keep reacting after the module stopped.
+   *
+   * Requires an observable target registry; a custom `ServiceRegistry` without
+   * listener support cannot provide this.
+   */
+  addListener(listener: ServiceRegistryListener): void {
+    const target = this.target as Partial<IObservableServiceRegistry>
+    if (typeof target.addListener !== 'function') {
+      throw new Error(
+        `Service registry does not support listeners, so module ${this.moduleId} cannot observe it`
+      )
+    }
+    this.ownListeners.add(listener)
+    target.addListener(listener)
+  }
+
+  removeListener(listener: ServiceRegistryListener): void {
+    const target = this.target as Partial<IObservableServiceRegistry>
+    this.ownListeners.delete(listener)
+    if (typeof target.removeListener === 'function') {
+      target.removeListener(listener)
+    }
+  }
+
   /** IDs this module registered and has not withdrawn itself */
   getOwnServiceIds(): string[] {
     return [...this.ownIds]
@@ -100,6 +132,12 @@ export class ScopedServiceRegistry implements IServiceRegistry {
    * Returns the IDs that were actually removed.
    */
   releaseAll(): string[] {
+    const target = this.target as Partial<IObservableServiceRegistry>
+    for (const listener of this.ownListeners) {
+      target.removeListener?.(listener)
+    }
+    this.ownListeners.clear()
+
     const released: string[] = []
     // Reverse order, so a service registered later is withdrawn first
     for (const id of [...this.ownIds].reverse()) {
