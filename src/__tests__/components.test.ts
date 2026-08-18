@@ -262,6 +262,34 @@ describe('declarative components', () => {
     })
   })
 
+  describe('components of one module depending on each other', () => {
+    it('should register every component before activating any', async () => {
+      @component({ service: ['metrics.service'] })
+      class MetricsService {
+        readonly tag = 'metrics'
+      }
+
+      @component({ service: ['ui.component'] })
+      class MetricsView {
+        constructor(@inject('metrics.service') readonly metrics: MetricsService) {}
+
+        @activate()
+        start(): void {}
+      }
+
+      const loader = new ModuleLoader()
+      // Declared in the order that used to fail: the consumer comes first
+      globalRef.window!.metrics = { MetricsView, MetricsService }
+
+      const loaded = await loader.loadModule(manifest('metrics'))
+
+      expect(loaded.state).toBe('active')
+      const registry = loader.getServiceRegistry()
+      expect(registry.has('metrics.service')).toBe(true)
+      expect(registry.get<MetricsView>('ui.component')?.metrics.tag).toBe('metrics')
+    })
+  })
+
   describe('teardown', () => {
     it('should call deactivate when the module is unloaded', async () => {
       const stopped = vi.fn()

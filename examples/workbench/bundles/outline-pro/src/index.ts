@@ -1,13 +1,17 @@
-import { injectable, type ModuleContext } from '../../../src/index.js'
-import { UI_COMPONENT, type UiComponent } from '../src/contracts.js'
+import { component } from '@eclipse-daanse/tsm/decorators'
+import { UI_COMPONENT, type UiComponent } from '../../contracts.js'
 
 /**
  * The same sidebar slot, ranked higher in the manifest. Both registrations
  * exist; the shell shows this one and falls back to the plain outline when this
  * module is disabled.
  */
-@injectable()
-class OutlineProView implements UiComponent {
+@component({
+  service: [UI_COMPONENT],
+  properties: { region: 'sidebar', order: 1, slot: 'outline' },
+  ranking: 10
+})
+export class OutlineProView implements UiComponent {
   readonly title = 'Outline Pro'
 
   mount(host: HTMLElement): void {
@@ -19,8 +23,4 @@ class OutlineProView implements UiComponent {
     }))
     host.append(list)
   }
-}
-
-export function activate(context: ModuleContext): void {
-  context.services.bindClass(UI_COMPONENT, OutlineProView)
 }

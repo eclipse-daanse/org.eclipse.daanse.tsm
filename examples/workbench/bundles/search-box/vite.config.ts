@@ -1,0 +1,38 @@
+import { resolve } from 'node:path'
+import { defineConfig } from 'vite'
+import { tsmPlugin } from '../../../../src/vite/index.js'
+
+const root = resolve(__dirname, '../../../..')
+
+/**
+ * Builds this bundle on its own, the way a deployed module is built. `provides`
+ * is not written by hand: `components: 'derive'` reads the `@component()`
+ * declarations and emits a manifest with them.
+ */
+export default defineConfig({
+  resolve: {
+    alias: {
+      '@eclipse-daanse/tsm/decorators': resolve(root, 'src/decorators.ts'),
+      '@eclipse-daanse/tsm': resolve(root, 'src/index.ts')
+    }
+  },
+  plugins: [
+    tsmPlugin({
+      manifest: resolve(__dirname, 'manifest.json'),
+      components: 'derive',
+      // The bundle imports nothing through the tsm: scheme
+      strict: false
+    })
+  ],
+  build: {
+    target: 'es2022',
+    minify: false,
+    outDir: resolve(__dirname, '../../dist-bundles/search-box'),
+    emptyOutDir: true,
+    lib: {
+      entry: resolve(__dirname, 'src/index.ts'),
+      formats: ['es'],
+      fileName: () => 'index.js'
+    }
+  }
+})

@@ -1,0 +1,12 @@
+{
+  "id": "metrics",
+  "name": "Workbench metrics",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "exports": {},
+  "requiresService": [
+    {
+      "id": "workbench.root"
+    }
+  ]
+}

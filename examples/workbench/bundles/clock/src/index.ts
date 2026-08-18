@@ -1,10 +1,10 @@
-import { activate, component, deactivate, inject } from '../../../src/index.js'
+import { activate, component, deactivate, inject } from '@eclipse-daanse/tsm/decorators'
 import {
   METRICS_SERVICE,
   UI_COMPONENT,
   type Metrics,
   type UiComponent
-} from '../src/contracts.js'
+} from '../../contracts.js'
 
 /**
  * A declared component: no `activate` export, no `services.register()` call.

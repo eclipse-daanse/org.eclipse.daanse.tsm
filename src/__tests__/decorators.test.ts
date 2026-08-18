@@ -2,7 +2,46 @@
 import 'reflect-metadata'
 import { describe, it, expect } from 'vitest'
 import { DefaultServiceRegistry } from '../ServiceRegistry'
-import { injectable, inject, singleton, transient } from '../decorators'
+import {
+  injectable,
+  inject,
+  singleton,
+  transient,
+  component,
+  activate,
+  deactivate
+} from '../decorators'
+
+/**
+ * A module built on its own may bring its own copy of this package. The metadata
+ * keys therefore have to come from the global symbol registry — otherwise a
+ * decorator applied in that copy would be invisible to the loader in the host,
+ * and nothing would report it.
+ */
+describe('metadata keys', () => {
+  it('should use globally shared symbols', () => {
+    @injectable()
+    @singleton()
+    class Service {}
+
+    // What a second copy of the package would look the metadata up with
+    expect(Reflect.getOwnMetadata(Symbol.for('tsm:injectable'), Service)).toBe(true)
+    expect(Reflect.getOwnMetadata(Symbol.for('tsm:scope'), Service)).toBe('singleton')
+  })
+
+  it('should share the component keys as well', () => {
+    @component({ service: ['thing'] })
+    class Thing {
+      @activate() start(): void {}
+      @deactivate() stop(): void {}
+    }
+
+    expect(Reflect.getOwnMetadata(Symbol.for('tsm:component'), Thing))
+      .toEqual({ service: ['thing'] })
+    expect(Reflect.getOwnMetadata(Symbol.for('tsm:component:activate'), Thing)).toBe('start')
+    expect(Reflect.getOwnMetadata(Symbol.for('tsm:component:deactivate'), Thing)).toBe('stop')
+  })
+})
 
 describe('Decorator-based Constructor Injection', () => {
   describe('@injectable and @inject', () => {

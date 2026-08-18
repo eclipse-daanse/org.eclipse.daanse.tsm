@@ -1,11 +1,11 @@
-import type { ModuleContext, ServiceReference } from '../../../src/index.js'
+import type { ModuleContext, ServiceReference } from '@eclipse-daanse/tsm'
 import {
   UI_COMPONENT,
   WORKBENCH_ROOT,
   type RegionName,
   type UiComponent,
   type WorkbenchRoot
-} from '../src/contracts.js'
+} from '../../contracts.js'
 
 /**
  * Mounts every contributed component into its region and keeps that in step

@@ -3,8 +3,19 @@
   "compilerOptions": {
     "noEmit": true,
     "rootDir": ".",
-    "types": ["node"]
+    "types": ["node"],
+    "baseUrl": ".",
+    "paths": {
+      "@eclipse-daanse/tsm": ["src/index.ts"],
+      "@eclipse-daanse/tsm/decorators": ["src/decorators.ts"],
+      "@eclipse-daanse/tsm/vite": ["src/vite/index.ts"],
+      "@eclipse-daanse/tsm/devtools": ["src/devtools/index.ts"]
+    }
   },
-  "include": ["examples/whiteboard/**/*.ts", "examples/workbench/**/*.ts", "src/**/*.ts"],
-  "exclude": ["node_modules", "dist", "**/__tests__/**"]
+  "include": [
+    "examples/whiteboard/**/*.ts",
+    "examples/workbench/**/*.ts",
+    "src/**/*.ts"
+  ],
+  "exclude": ["node_modules", "dist", "**/__tests__/**", "examples/*/public/**"]
 }

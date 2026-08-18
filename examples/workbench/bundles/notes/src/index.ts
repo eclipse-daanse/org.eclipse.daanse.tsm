@@ -1,9 +1,12 @@
-import { injectable, type ModuleContext } from '../../../src/index.js'
-import { UI_COMPONENT, type UiComponent } from '../src/contracts.js'
+import { component } from '@eclipse-daanse/tsm/decorators'
+import { UI_COMPONENT, type UiComponent } from '../../contracts.js'
 
 /** A view with a listener, which `unmount()` takes off again */
-@injectable()
-class NotesView implements UiComponent {
+@component({
+  service: [UI_COMPONENT],
+  properties: { region: 'main', order: 2 }
+})
+export class NotesView implements UiComponent {
   readonly title = 'Notes'
 
   private field: HTMLTextAreaElement | undefined
@@ -29,8 +32,4 @@ class NotesView implements UiComponent {
     this.field = undefined
     this.onInput = undefined
   }
-}
-
-export function activate(context: ModuleContext): void {
-  context.services.bindClass(UI_COMPONENT, NotesView)
 }

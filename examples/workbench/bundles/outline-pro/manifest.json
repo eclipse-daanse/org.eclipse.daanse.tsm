@@ -1,0 +1,7 @@
+{
+  "id": "outline-pro",
+  "name": "Outline Pro view",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "exports": {}
+}

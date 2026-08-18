@@ -14,6 +14,14 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
 
 ### Fixed
 
+- **Decorator metadata was invisible across separately built modules.** The metadata keys were created with
+  `Symbol()`, so a module carrying its own copy of the package wrote under keys of its own and every decorator
+  applied there was ignored by the loader — silently. They come from the global registry (`Symbol.for()`) now.
+  Found by building the example's modules as standalone bundles.
+- **A component was constructed before its neighbours were registered.** `startComponents()` registered and
+  activated each component in one pass, so a component injecting a service another component of the same module
+  offers found nothing. Registration now happens for all of them first, activation second — the two phases DS
+  separates for the same reason.
 - **Two classes in one module could not offer the same service ID.** The replacement rule from ranking took the
   provider as the unit, so a second `bindClass()` for the same ID replaced the first — but two classes are two
   providers, as they are in OSGi. A registration is identified by provider *and* origin (the class) now, so
@@ -362,6 +370,9 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
 
 ### Documentation
 
+- **New subpath export `@eclipse-daanse/tsm/decorators`** — just the decorators and their metadata. A
+  separately built module needs them at runtime, and importing the package root would pull the whole loader
+  into every bundle.
 - **New example `examples/workbench`** (`npm run example:workbench`): UI components that come and go while the
   shell keeps running. It distinguishes two mechanisms a workbench needs — a *region* collects every
   contribution (`0..n`, ordered by an `order` property), while a *slot* has several modules competing for one
