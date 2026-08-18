@@ -74,6 +74,62 @@ describe('ScopedServiceRegistry', () => {
     })
   })
 
+  describe('listeners', () => {
+    it('should forward listeners to the shared registry', () => {
+      const { shared, scope } = setup()
+      const seen: string[] = []
+      scope.addListener({ onServiceEvent: event => { seen.push(event.serviceId) } })
+
+      shared.register('foreign.service', {})
+
+      expect(seen).toEqual(['foreign.service'])
+    })
+
+    it('should remove its listeners on releaseAll', () => {
+      const { shared, scope } = setup()
+      const seen: string[] = []
+      scope.addListener({ onServiceEvent: event => { seen.push(event.serviceId) } })
+
+      scope.releaseAll()
+      shared.register('foreign.service', {})
+
+      expect(seen).toEqual([])
+    })
+
+    it('should support removing a listener explicitly', () => {
+      const { shared, scope } = setup()
+      const seen: string[] = []
+      const listener = { onServiceEvent: (event: { serviceId: string }) => { seen.push(event.serviceId) } }
+
+      scope.addListener(listener)
+      scope.removeListener(listener)
+      shared.register('foreign.service', {})
+
+      expect(seen).toEqual([])
+    })
+
+    it('should say so when the target registry cannot be observed', () => {
+      const plain = {
+        register: () => {},
+        bind: () => {},
+        bindClass: () => {},
+        get: () => undefined,
+        getRequired: () => { throw new Error('nope') },
+        getAll: () => [],
+        has: () => false,
+        checkRequirements: () => ({ satisfied: true, missing: [] }),
+        unregister: () => false,
+        getBindingInfo: () => undefined,
+        getServiceIds: () => []
+      }
+      const scope = new ScopedServiceRegistry('map-module', plain)
+
+      expect(() => scope.addListener({ onServiceEvent: () => {} })).toThrow(
+        'does not support listeners'
+      )
+    })
+  })
+
   describe('releaseAll', () => {
     it('should withdraw everything the module registered', () => {
       const { shared, scope } = setup()

@@ -176,6 +176,19 @@ export interface ModuleLifecycle {
    * Use for cleanup, unregistering services, etc.
    */
   deactivate?(context: ModuleContext): Promise<void> | void
+
+  /**
+   * A service required with `policy: 'dynamic'` became available while the
+   * module is active. Not called for the services present at activation —
+   * `activate()` sees those through the context.
+   */
+  onServiceBound?(context: ModuleContext, serviceId: string): Promise<void> | void
+
+  /**
+   * A service required with `policy: 'dynamic'` was withdrawn while the module
+   * stays active. Drop any reference to it; the module is not torn down.
+   */
+  onServiceUnbound?(context: ModuleContext, serviceId: string): Promise<void> | void
 }
 
 /**
@@ -191,8 +204,14 @@ export interface ModuleContext {
   /** Check if a module is loaded */
   isModuleLoaded(moduleId: string): boolean
 
-  /** Registry for services */
-  services: ServiceRegistry
+  /**
+   * Registry for services, scoped to this module: registrations and listeners
+   * made through it are withdrawn when the module is deactivated.
+   *
+   * Listening is what makes a collection inside the module reactive — a
+   * registry-style service can forward the change to its own consumers.
+   */
+  services: ObservableServiceRegistry
 
   /** Logger */
   log: ModuleLogger
