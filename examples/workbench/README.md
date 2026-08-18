@@ -69,15 +69,29 @@ nothing else:
 @component({ service: [UI_COMPONENT], properties: { region: 'main', order: 1 } })
 export class ClockView implements UiComponent {
   constructor(@inject(METRICS_SERVICE, { optional: true }) private metrics?: Metrics) {}
-  @activate() start(): void { this.timer = setInterval(…) }
-  @deactivate() stop(): void { clearInterval(this.timer) }
+
+  mount(host: HTMLElement): void { this.timer = setInterval(…) }
+  unmount(): void { clearInterval(this.timer) }
 }
 ```
 
 A component with `@activate` is created when its bundle activates (*immediate* in
-DS terms); without one, on first resolution (*delayed*). `metrics` holds two
-components — one service, one view — which is why registration and activation
-happen in separate phases: the view injects the service its neighbour offers.
+DS terms); without one, on first resolution (*delayed*). The clock deliberately
+has neither: a view has nothing to do until it is shown, so its interval belongs
+to `mount` — in `@activate` it would tick against nothing. `tsm.providers('ui.component')`
+shows the consequence: the outline hidden by Outline Pro reports
+`instantiated: false`, because nobody ever resolved it.
+
+`metrics` is the counter-example. Its view records that it exists, which is worth
+doing unshown, so it declares `@activate` and `@deactivate`. That bundle also
+holds two components — one service, one view — which is why registration and
+activation happen in separate phases: the view injects the service its neighbour
+offers.
+
+**No bundle depends on the shell.** A view registers a service and does not know
+who collects it; the shell asks for `0..n`, meaning none or many. A dependency the
+other way round would make a provider need its consumer, and the clock would stop
+being usable without a workbench.
 
 **The shell survives all of it.** It is the one bundle that is not a component
 but a module with exported hooks, because notifications about a *changing set*

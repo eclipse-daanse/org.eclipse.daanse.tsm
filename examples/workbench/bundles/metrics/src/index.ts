@@ -1,4 +1,4 @@
-import { component, activate, inject, singleton } from '@eclipse-daanse/tsm/decorators'
+import { component, activate, deactivate, inject, singleton } from '@eclipse-daanse/tsm/decorators'
 import {
   METRICS_SERVICE,
   UI_COMPONENT,
@@ -39,9 +39,18 @@ export class MetricsView implements UiComponent {
 
   constructor(@inject(METRICS_SERVICE) private readonly metrics: Metrics) {}
 
+  /**
+   * This one does have something to do without being shown: it records that it
+   * exists. That makes it an immediate component.
+   */
   @activate()
   start(): void {
     this.metrics.note('metrics view created')
+  }
+
+  @deactivate()
+  stop(): void {
+    this.metrics.note('metrics view gone')
   }
 
   mount(host: HTMLElement): void {
