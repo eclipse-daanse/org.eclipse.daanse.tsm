@@ -1,4 +1,4 @@
-import { activate, component, deactivate, inject } from '@eclipse-daanse/tsm/decorators'
+import { component, inject } from '@eclipse-daanse/tsm/decorators'
 import {
   METRICS_SERVICE,
   UI_COMPONENT,
@@ -10,8 +10,14 @@ import {
  * A declared component: no `activate` export, no `services.register()` call.
  * What it offers stands on the class, and the loader does the registering.
  *
- * `@activate` makes it an immediate component — it starts a ticking clock, which
- * has to happen whether or not anyone resolves its service.
+ * No `@activate` either, on purpose — a view has nothing to do until it is
+ * shown, so it is a delayed component: the class is constructed when a shell
+ * resolves it, and never if none does. The interval belongs to `mount`, not to
+ * the component's lifetime, or it would tick against nothing.
+ *
+ * The bundle declares no dependency on the shell. It registers a service and
+ * does not know who collects it — reversing that would make a provider depend on
+ * its consumer.
  */
 @component({
   service: [UI_COMPONENT],
@@ -32,28 +38,20 @@ export class ClockView implements UiComponent {
    */
   constructor(@inject(METRICS_SERVICE, { optional: true }) private readonly metrics?: Metrics) {}
 
-  @activate()
-  start(): void {
-    this.timer = setInterval(() => this.paint(), 1000)
-  }
-
-  /** Releases the interval — the difference between disappearing and leaking */
-  @deactivate()
-  stop(): void {
-    clearInterval(this.timer)
-    this.timer = undefined
-  }
-
   mount(host: HTMLElement): void {
     this.time = document.createElement('output')
     this.counter = document.createElement('small')
     host.append(this.time, this.counter)
 
     this.paint()
+    this.timer = setInterval(() => this.paint(), 1000)
     this.metrics?.note('clock mounted')
   }
 
+  /** Releases the interval — the difference between disappearing and leaking */
   unmount(): void {
+    clearInterval(this.timer)
+    this.timer = undefined
     this.time = undefined
     this.counter = undefined
   }
