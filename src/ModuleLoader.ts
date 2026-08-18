@@ -14,6 +14,7 @@ import type {
   ModuleEventListener,
   ModuleLogger,
   ServiceRegistry,
+  ServiceRequirement,
   ObservableServiceRegistry,
   ServiceRegistryListener
 } from './types.js'
@@ -99,6 +100,14 @@ export class ModuleLoader {
    * hears about a provider joining or leaving an already non-empty set.
    */
   private dynamicBindings = new Map<string, Map<string, number>>()
+  /**
+   * Per module: which registration served each of its requirements when it was
+   * activated. Identity of the registration, not of the service object, so a
+   * lazily bound provider is not instantiated just to be compared.
+   */
+  private boundRegistrations = new Map<string, Map<string, string>>()
+  /** Per module: services it declared in `provides` but never registered */
+  private declarationMismatches = new Map<string, string[]>()
   /** Module-scoped registry facades, so a teardown can withdraw what a module registered */
   private scopes = new Map<string, ScopedServiceRegistry>()
   /** Serializes reactions to registry events; they are async, the events are not */
@@ -248,8 +257,76 @@ export class ModuleLoader {
   private async reconcile(): Promise<void> {
     if (this.disposed) return
     await this.parkUnsatisfiedActive()
+    await this.rebindGreedyRequirements()
     await this.notifyDynamicChanges()
     await this.activateSatisfiedPending()
+  }
+
+  /**
+   * Move active modules to a better-ranked provider where they asked for it.
+   *
+   * Without `policyOption: 'greedy'` a running module stays with the provider it
+   * has, even after a higher-ranked one appears — the ranking then only decides
+   * what a later lookup gets. This is DS' reluctant/greedy distinction.
+   */
+  private async rebindGreedyRequirements(): Promise<void> {
+    for (const loadedModule of [...this.modules.values()]) {
+      if (loadedModule.state !== 'active') continue
+
+      const greedy = (loadedModule.manifest.requiresService ?? [])
+        .filter(requirement => requirement.policyOption === 'greedy')
+      if (greedy.length === 0) continue
+
+      const moduleId = loadedModule.manifest.id
+      const bound = this.boundRegistrations.get(moduleId)
+      if (!bound) continue
+
+      for (const requirement of greedy) {
+        const current = this.visibleRegistrationKey(requirement.id, requirement.target)
+        const inUse = bound.get(requirement.id)
+        if (current === undefined || inUse === undefined || current === inUse) continue
+
+        if (requirement.policy === 'dynamic') {
+          // Report it as a swap: the old service is gone for this module, the new one is there
+          await this.callDynamicHook(loadedModule, 'onServiceUnbound', requirement.id)
+          await this.callDynamicHook(loadedModule, 'onServiceBound', requirement.id)
+          bound.set(requirement.id, current)
+          continue
+        }
+
+        this.logger.info(
+          `Rebuilding ${moduleId}: a better provider for ${requirement.id} appeared`
+        )
+        await this.deactivate(loadedModule)
+        await this.activateLoaded(loadedModule)
+        // Activation re-captured every requirement, so the remaining ones are current
+        break
+      }
+    }
+  }
+
+  /**
+   * Identity of the registration currently serving an ID, without resolving it.
+   * Undefined when the registry predates references or nothing serves the ID.
+   */
+  private visibleRegistrationKey(serviceId: string, target?: string): string | undefined {
+    const registry = this.services as Partial<ServiceRegistry>
+    if (typeof registry.getServiceReferences !== 'function') return undefined
+    return registry.getServiceReferences(serviceId, target)[0]?.key
+  }
+
+  private captureBoundRegistrations(manifest: ModuleManifest): void {
+    const requirements = manifest.requiresService ?? []
+    if (requirements.length === 0) return
+
+    const bound = new Map<string, string>()
+    for (const requirement of requirements) {
+      const key = this.visibleRegistrationKey(requirement.id, requirement.target)
+      if (key !== undefined) {
+        bound.set(requirement.id, key)
+      }
+    }
+    this.boundRegistrations.set(manifest.id, bound)
   }
 
   /**
@@ -262,23 +339,22 @@ export class ModuleLoader {
     for (const loadedModule of [...this.modules.values()]) {
       if (loadedModule.state !== 'active') continue
 
-      const dynamicIds = (loadedModule.manifest.requiresService ?? [])
+      const dynamic = (loadedModule.manifest.requiresService ?? [])
         .filter(requirement => requirement.policy === 'dynamic')
-        .map(requirement => requirement.id)
-      if (dynamicIds.length === 0) continue
+      if (dynamic.length === 0) continue
 
       const moduleId = loadedModule.manifest.id
       const previous = this.dynamicBindings.get(moduleId) ?? new Map<string, number>()
-      const current = this.countDynamicProviders(dynamicIds)
+      const current = this.countDynamicProviders(dynamic)
       this.dynamicBindings.set(moduleId, current)
 
-      for (const serviceId of dynamicIds) {
-        const before = previous.get(serviceId) ?? 0
-        const now = current.get(serviceId) ?? 0
+      for (const requirement of dynamic) {
+        const before = previous.get(requirement.id) ?? 0
+        const now = current.get(requirement.id) ?? 0
         if (now < before) {
-          await this.callDynamicHook(loadedModule, 'onServiceUnbound', serviceId)
+          await this.callDynamicHook(loadedModule, 'onServiceUnbound', requirement.id)
         } else if (now > before) {
-          await this.callDynamicHook(loadedModule, 'onServiceBound', serviceId)
+          await this.callDynamicHook(loadedModule, 'onServiceBound', requirement.id)
         }
       }
     }
@@ -309,30 +385,35 @@ export class ModuleLoader {
    * after activation does not report them as newly bound
    */
   private captureDynamicBindings(manifest: ModuleManifest): void {
-    const dynamicIds = (manifest.requiresService ?? [])
+    const dynamic = (manifest.requiresService ?? [])
       .filter(requirement => requirement.policy === 'dynamic')
-      .map(requirement => requirement.id)
-    if (dynamicIds.length === 0) return
+    if (dynamic.length === 0) return
 
-    this.dynamicBindings.set(manifest.id, this.countDynamicProviders(dynamicIds))
+    this.dynamicBindings.set(manifest.id, this.countDynamicProviders(dynamic))
   }
 
   /**
-   * How many providers each service currently has. Falls back to presence for a
-   * registry that predates countProviders().
+   * What each dynamic requirement currently sees.
+   *
+   * A collection counts providers, so it hears about one joining or leaving.
+   * A single-valued requirement only counts presence — that a second provider
+   * waits on the bench is none of its business, and reporting it would double
+   * up with the greedy swap.
    */
-  private countDynamicProviders(serviceIds: string[]): Map<string, number> {
+  private countDynamicProviders(requirements: ServiceRequirement[]): Map<string, number> {
     const counts = new Map<string, number>()
-    for (const serviceId of serviceIds) {
-      counts.set(serviceId, this.countProviders(serviceId))
+    for (const requirement of requirements) {
+      const providers = this.countProviders(requirement.id, requirement.target)
+      const collects = requirement.cardinality?.endsWith('..n') === true
+      counts.set(requirement.id, collects ? providers : Math.min(providers, 1))
     }
     return counts
   }
 
-  private countProviders(serviceId: string): number {
+  private countProviders(serviceId: string, target?: string): number {
     const registry = this.services as Partial<ServiceRegistry>
     if (typeof registry.countProviders === 'function') {
-      return registry.countProviders(serviceId)
+      return registry.countProviders(serviceId, target)
     }
     return this.services.has(serviceId) ? 1 : 0
   }
@@ -445,6 +526,7 @@ export class ModuleLoader {
     try {
       await this.activate(loadedModule)
       this.captureDynamicBindings(manifest)
+      this.captureBoundRegistrations(manifest)
       loadedModule.state = 'active'
       this.emit({
         type: 'activated',
@@ -480,6 +562,8 @@ export class ModuleLoader {
     this.scopes.clear()
     this.cascadeActivations.clear()
     this.dynamicBindings.clear()
+    this.boundRegistrations.clear()
+    this.declarationMismatches.clear()
   }
 
   /**
@@ -532,6 +616,14 @@ export class ModuleLoader {
     // so the caller should see a settled state, not a half-processed queue
     await this.settle()
 
+    const mismatches = this.getDeclarationMismatches()
+    if (mismatches.length > 0) {
+      this.logger.warn(
+        `${mismatches.length} module(s) declared services they did not register:`,
+        mismatches.map(entry => `${entry.moduleId} -> ${entry.serviceIds.join(', ')}`)
+      )
+    }
+
     const pending = this.getUnsatisfiedModules()
     if (pending.length > 0) {
       this.logger.warn(
@@ -539,6 +631,21 @@ export class ModuleLoader {
         pending.map(entry => `${entry.moduleId} <- ${entry.waitingFor.join(', ')}`)
       )
     }
+  }
+
+  /**
+   * Services declared in a manifest's `provides` that the module did not
+   * register on activation.
+   *
+   * The resolver builds load-order edges from `provides`, so a declaration
+   * nothing backs orders modules after a provider that never delivers. Query
+   * this in CI to catch the drift where it is cheap to fix.
+   */
+  getDeclarationMismatches(): Array<{ moduleId: string; serviceIds: string[] }> {
+    return [...this.declarationMismatches].map(([moduleId, serviceIds]) => ({
+      moduleId,
+      serviceIds
+    }))
   }
 
   /**
@@ -627,6 +734,7 @@ export class ModuleLoader {
       // Activate
       await this.activate(loadedModule)
       this.captureDynamicBindings(manifest)
+      this.captureBoundRegistrations(manifest)
 
       loadedModule.state = 'active'
       this.emit({
@@ -842,14 +950,35 @@ export class ModuleLoader {
       await loadedModule.lifecycle.activate(context)
     }
 
-    // Log provided services after activation
+    // Compare what the manifest promised against what was actually registered
     if (manifest.provides && manifest.provides.length > 0) {
+      const undelivered: string[] = []
+
       for (const service of manifest.provides) {
         if (this.services.has(service.id)) {
           this.logger.info(`Module ${manifest.id} provides service: ${service.id} (${service.scope ?? 'singleton'})`)
         } else {
-          this.logger.warn(`Module ${manifest.id} declared service ${service.id} but did not register it`)
+          undelivered.push(service.id)
         }
+      }
+
+      if (undelivered.length > 0) {
+        // A declaration nothing backs is worth more than a log line: the resolver
+        // derives load order from `provides`, so drift there produces edges to a
+        // module that never delivers
+        this.declarationMismatches.set(manifest.id, undelivered)
+        this.logger.warn(
+          `Module ${manifest.id} declared service(s) it did not register: ${undelivered.join(', ')}`
+        )
+        this.emit({
+          type: 'declaration-mismatch',
+          moduleId: manifest.id,
+          manifest,
+          serviceIds: undelivered,
+          timestamp: new Date()
+        })
+      } else {
+        this.declarationMismatches.delete(manifest.id)
       }
     }
   }
@@ -883,6 +1012,8 @@ export class ModuleLoader {
     }
 
     this.dynamicBindings.delete(loadedModule.manifest.id)
+    this.boundRegistrations.delete(loadedModule.manifest.id)
+    this.declarationMismatches.delete(loadedModule.manifest.id)
     loadedModule.state = 'stopped'
 
     this.emit({
@@ -913,12 +1044,21 @@ export class ModuleLoader {
     let scope = this.scopes.get(moduleId)
     if (!scope) {
       const declaredRankings = new Map<string, number>()
+      const declaredProperties = new Map<string, Record<string, string | number | boolean>>()
       for (const service of this.manifests.get(moduleId)?.provides ?? []) {
         if (service.ranking !== undefined) {
           declaredRankings.set(service.id, service.ranking)
         }
+        if (service.properties !== undefined) {
+          declaredProperties.set(service.id, service.properties)
+        }
       }
-      scope = new ScopedServiceRegistry(moduleId, this.services, declaredRankings)
+      scope = new ScopedServiceRegistry(
+        moduleId,
+        this.services,
+        declaredRankings,
+        declaredProperties
+      )
       this.scopes.set(moduleId, scope)
     }
     return scope

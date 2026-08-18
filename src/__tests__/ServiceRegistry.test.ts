@@ -742,3 +742,101 @@ describe('DefaultServiceRegistry - ranking and several providers per ID', () => 
     })
   })
 })
+
+describe('DefaultServiceRegistry - target filters', () => {
+  function withWidgets() {
+    const registry = new DefaultServiceRegistry()
+    registry.register('widget', { name: 'chart' }, {
+      providedBy: 'charts', properties: { kind: 'chart', experimental: false }
+    })
+    registry.register('widget', { name: 'table' }, {
+      providedBy: 'tables', ranking: 5, properties: { kind: 'table', experimental: false }
+    })
+    registry.register('widget', { name: 'sketch' }, {
+      providedBy: 'labs', properties: { kind: 'chart', experimental: true }
+    })
+    return registry
+  }
+
+  it('should narrow references to matching registrations', () => {
+    const registry = withWidgets()
+
+    const kinds = registry
+      .getServiceReferences('widget', '(kind=chart)')
+      .map(reference => reference.providedBy)
+
+    expect(kinds).toEqual(['labs', 'charts'])
+  })
+
+  it('should count only matching registrations', () => {
+    const registry = withWidgets()
+
+    expect(registry.countProviders('widget')).toBe(3)
+    expect(registry.countProviders('widget', '(kind=chart)')).toBe(2)
+    expect(registry.countProviders('widget', '(!(experimental=true))')).toBe(2)
+    expect(registry.countProviders('widget', '(kind=map)')).toBe(0)
+  })
+
+  it('should resolve the best matching service with getMatching', () => {
+    const registry = withWidgets()
+
+    // get() answers with the highest ranked one regardless of properties
+    expect(registry.get('widget')).toEqual({ name: 'table' })
+    expect(registry.getMatching('widget', '(kind=chart)')).toEqual({ name: 'sketch' })
+    expect(registry.getMatching('widget', '(&(kind=chart)(!(experimental=true)))'))
+      .toEqual({ name: 'chart' })
+    expect(registry.getMatching('widget', '(kind=map)')).toBeUndefined()
+  })
+
+  it('should expose ranking and provider as filterable properties', () => {
+    const registry = withWidgets()
+
+    expect(registry.countProviders('widget', '(service.ranking>=5)')).toBe(1)
+    expect(registry.getMatching<{ name: string }>('widget', '(service.providedBy=labs)')?.name)
+      .toBe('sketch')
+  })
+
+  it('should report the properties on the reference', () => {
+    const registry = withWidgets()
+
+    const [best] = registry.getServiceReferences('widget', '(kind=table)')
+
+    expect(best.properties).toEqual({
+      kind: 'table',
+      experimental: false,
+      'service.ranking': 5,
+      'service.providedBy': 'tables'
+    })
+  })
+
+  it('should treat a requirement with a target as unsatisfied without a match', () => {
+    const registry = withWidgets()
+
+    expect(registry.checkRequirements([{ id: 'widget', target: '(kind=map)' }])).toEqual({
+      satisfied: false,
+      missing: ['widget']
+    })
+    expect(registry.checkRequirements([{ id: 'widget', target: '(kind=table)' }]).satisfied)
+      .toBe(true)
+  })
+
+  it('should reject an invalid filter instead of matching nothing', () => {
+    const registry = withWidgets()
+
+    expect(() => registry.countProviders('widget', '(kind=chart')).toThrow('Invalid service filter')
+  })
+
+  it('should filter lazily bound providers without instantiating them', () => {
+    const registry = new DefaultServiceRegistry()
+    const built: string[] = []
+    registry.bind('widget', () => { built.push('a'); return { name: 'a' } }, {
+      providedBy: 'a', properties: { kind: 'chart' }
+    })
+    registry.bind('widget', () => { built.push('b'); return { name: 'b' } }, {
+      providedBy: 'b', properties: { kind: 'table' }
+    })
+
+    expect(registry.countProviders('widget', '(kind=chart)')).toBe(1)
+    expect(built).toEqual([])
+  })
+})
