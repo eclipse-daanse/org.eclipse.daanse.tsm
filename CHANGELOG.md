@@ -236,6 +236,21 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
 - **`ModuleLoader.getManifests()`** returns every registered manifest, loaded or not. `getLoadedModuleIds()`
   answers what runs; a listing needs what is known, in order to show a module as not loaded.
 
+#### Switching modules off
+
+- **`disableModule()` / `enableModule()`**, plus `isDisabled()` and `getDisabledModules()`. Deactivating alone
+  does not last: the module is satisfied, so the next reconcile brings it back. Disabling is a separate
+  dimension from the state — as with DS component `enabled` — so a module stays stopped until it is enabled
+  again. Its services are withdrawn on the way, so consumers are parked through the usual cascade, and
+  `loadModule()` refuses to activate a disabled module. This is what makes a manual stop meaningful, for
+  instance from a console.
+- **`getServiceConsumers(serviceId)`** names the modules that declared a requirement on a service, with their
+  state and how they asked (cardinality, policy, target). The counterpart to `getBindingInfo().providedBy`,
+  which answers who offers a service — `inspect service` in OSGi terms. Derived from the manifests, so modules
+  that never loaded are included.
+- DevTools gained `disable(id)`, `enable(id)` and `consumers(id)`, and `modules()` marks a disabled module as
+  such.
+
 #### Diagnostics
 
 - **`loadModule(manifest, { awaitCascade: true })`** returns only once the cascade it triggered has run, so the

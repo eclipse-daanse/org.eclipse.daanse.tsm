@@ -141,6 +141,8 @@ installDevtools({ loader, registry, resolver, runtime })
 //   tsm.modules()        every known module with its state
 //   tsm.unsatisfied()    what is waiting, and for what
 //   tsm.providers('ui.layout')   every registration, best first
+//   tsm.consumers('ui.layout')   which modules asked for it
+//   tsm.disable('heavy-module')  stop it and keep it stopped
 ```
 
 `loader` is required, the rest is optional — a command whose collaborator is

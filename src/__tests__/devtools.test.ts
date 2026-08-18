@@ -224,6 +224,66 @@ describe('installDevtools', () => {
     })
   })
 
+  describe('disable and enable', () => {
+    it('should switch a module off and show it as disabled', async () => {
+      const loader = new ModuleLoader()
+      stub(loader, 'alpha', {})
+      await loader.loadAll()
+      const tools = devtools(loader)
+
+      await tools.disable('alpha')
+      expect(out.text()).toContain('alpha disabled')
+
+      tools.modules()
+      expect(out.text()).toContain('(disabled)')
+    })
+
+    it('should switch it on again and report the resulting state', async () => {
+      const loader = new ModuleLoader()
+      stub(loader, 'alpha', {})
+      await loader.loadAll()
+      const tools = devtools(loader)
+      await tools.disable('alpha')
+
+      await tools.enable('alpha')
+
+      expect(out.text()).toContain('alpha is active')
+    })
+
+    it('should report an unknown module and one that was not disabled', async () => {
+      const loader = new ModuleLoader()
+      stub(loader, 'alpha', {})
+      const tools = devtools(loader)
+
+      await tools.disable('ghost')
+      expect(out.errors[0].message).toContain('Unknown module: ghost')
+
+      await tools.enable('alpha')
+      expect(out.text()).toContain('was not disabled')
+    })
+  })
+
+  describe('consumers', () => {
+    it('should list who asked for a service and how', async () => {
+      const loader = new ModuleLoader()
+      stub(loader, 'map', { requires: [{ id: 'geo.service' }] })
+      await loader.loadAll()
+
+      devtools(loader).consumers('geo.service')
+
+      expect(out.text()).toContain('map')
+      expect(out.text()).toContain('[unsatisfied]')
+      expect(out.text()).toContain('1..1')
+      expect(out.text()).toContain('static')
+    })
+
+    it('should say when nobody declared the service', () => {
+      devtools(new ModuleLoader()).consumers('nothing')
+
+      expect(out.text()).toContain('Nobody declared nothing')
+    })
+  })
+
   describe('diagnosis', () => {
     it('should list waiting modules and what they wait for', async () => {
       const loader = new ModuleLoader()
