@@ -577,3 +577,57 @@ describe('DependencyResolver - service requirements as load order edges', () => 
     expect(result.indexOf('geo')).toBeLessThan(result.indexOf('ui'))
   })
 })
+
+describe('DependencyResolver.getTransitiveDependents', () => {
+  const resolver = new DependencyResolver()
+
+  function manifest(id: string, dependencies: string[] = []): ModuleManifest {
+    return {
+      id,
+      name: id,
+      version: '1.0.0',
+      entry: `/${id}/remoteEntry.js`,
+      exports: {},
+      dependencies
+    }
+  }
+
+  it('should reach a whole chain, nearest first', () => {
+    const modules = [manifest('a'), manifest('b', ['a']), manifest('c', ['b'])]
+
+    expect(resolver.getTransitiveDependents('a', modules)).toEqual(['b', 'c'])
+  })
+
+  it('should list every branch of a fan-out', () => {
+    const modules = [
+      manifest('core'),
+      manifest('ui', ['core']),
+      manifest('api', ['core']),
+      manifest('app', ['ui', 'api'])
+    ]
+
+    const dependents = resolver.getTransitiveDependents('core', modules)
+
+    expect(dependents.slice(0, 2).sort()).toEqual(['api', 'ui'])
+    expect(dependents).toContain('app')
+    // No duplicates even though 'app' is reachable through both branches
+    expect(new Set(dependents).size).toBe(dependents.length)
+  })
+
+  it('should return nothing for a module nobody depends on', () => {
+    expect(resolver.getTransitiveDependents('leaf', [manifest('leaf'), manifest('other')]))
+      .toEqual([])
+  })
+
+  it('should terminate on a dependency cycle', () => {
+    const modules = [manifest('a', ['b']), manifest('b', ['a'])]
+
+    expect(resolver.getTransitiveDependents('a', modules)).toEqual(['b'])
+  })
+
+  it('should not include the module itself', () => {
+    const modules = [manifest('a'), manifest('b', ['a'])]
+
+    expect(resolver.getTransitiveDependents('a', modules)).not.toContain('a')
+  })
+})

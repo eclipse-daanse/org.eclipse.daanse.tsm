@@ -425,6 +425,37 @@ export class DependencyResolver {
   }
 
   /**
+   * Every module that depends on the given one, directly or through others,
+   * nearest first.
+   *
+   * `getDependents()` stops at the first level; reloading a module has to reach
+   * the whole chain, or a module two steps away keeps running against code that
+   * was replaced.
+   */
+  getTransitiveDependents(moduleId: string, modules: ModuleManifest[]): string[] {
+    const found: string[] = []
+    const seen = new Set<string>([moduleId])
+    let frontier = [moduleId]
+
+    while (frontier.length > 0) {
+      const next: string[] = []
+
+      for (const current of frontier) {
+        for (const dependent of this.getDependents(current, modules)) {
+          if (seen.has(dependent)) continue
+          seen.add(dependent)
+          found.push(dependent)
+          next.push(dependent)
+        }
+      }
+
+      frontier = next
+    }
+
+    return found
+  }
+
+  /**
    * Check if all version constraints can be satisfied
    * Returns list of modules with unsatisfiable constraints
    */
