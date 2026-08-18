@@ -38,6 +38,17 @@ export interface ComponentProperties {
   slot?: string
 }
 
+/**
+ * Counts what the workbench does. Registered as a class through `bindClass()`,
+ * so the registry constructs it and injects what it declares.
+ */
+export const METRICS_SERVICE = 'workbench.metrics'
+
+export interface Metrics {
+  mounts(): number
+  note(event: string): void
+}
+
 /** The shell's regions, provided by the host */
 export const WORKBENCH_ROOT = 'workbench.root'
 

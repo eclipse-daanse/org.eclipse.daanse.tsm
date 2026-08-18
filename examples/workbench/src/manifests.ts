@@ -1,5 +1,5 @@
 import type { ModuleManifest } from '../../../src/index.js'
-import { UI_COMPONENT, WORKBENCH_ROOT } from './contracts.js'
+import { METRICS_SERVICE, UI_COMPONENT, WORKBENCH_ROOT } from './contracts.js'
 
 function view(
   id: string,
@@ -23,6 +23,23 @@ function view(
   }
 }
 
+/**
+ * Registers a class rather than an object, so the registry constructs it and
+ * injects its dependencies. Declares both what it offers and what its view is.
+ */
+const metrics: ModuleManifest = {
+  id: 'metrics',
+  name: 'Workbench metrics',
+  version: '1.0.0',
+  entry: '/modules/metrics.ts',
+  exports: {},
+  provides: [
+    { id: METRICS_SERVICE },
+    { id: UI_COMPONENT, properties: { region: 'main', order: 3 } }
+  ],
+  requiresService: [{ id: WORKBENCH_ROOT }]
+}
+
 export const shell: ModuleManifest = {
   id: 'shell',
   name: 'Workbench shell',
@@ -42,7 +59,8 @@ export const startupViews: ModuleManifest[] = [
   // Both offer the 'outline' slot, so only the higher ranked one is shown
   view('outline', 'sidebar', 1, { slot: 'outline' }),
   view('outline-pro', 'sidebar', 1, { slot: 'outline', ranking: 10 }),
-  view('notes', 'main', 2)
+  view('notes', 'main', 2),
+  metrics
 ]
 
 /** Loaded and unloaded on demand, to watch a view come and go */

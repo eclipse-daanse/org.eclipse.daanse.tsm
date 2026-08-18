@@ -304,7 +304,7 @@ export class DefaultServiceRegistry implements IServiceRegistry {
       providedBy: options.providedBy,
       ranking: options.ranking ?? 0,
       seq: this.nextSeq++,
-      properties: options.properties,
+      properties: options.propertiesById?.[id] ?? options.properties,
       deps: metadata.map(m => ({ serviceId: m.serviceId, optional: m.optional })),
       propertyDeps: propertyMetadata.length > 0 ? propertyMetadata : undefined
     })
@@ -332,7 +332,8 @@ export class DefaultServiceRegistry implements IServiceRegistry {
           providedBy: options.providedBy,
           ranking: options.ranking ?? 0,
           seq: this.nextSeq++,
-          properties: options.properties
+          // The interface is what consumers filter on, so it may carry its own
+          properties: options.propertiesById?.[interfaceId] ?? options.properties
         })
         aliases.add(interfaceId)
       }

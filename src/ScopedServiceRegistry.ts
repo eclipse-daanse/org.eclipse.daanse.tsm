@@ -109,11 +109,20 @@ export class ScopedServiceRegistry implements IObservableServiceRegistry {
   ): ServiceRegistration {
     // Alias registrations from `implements` are removed with their primary,
     // so they need no separate tracking
+    // Every ID this class answers to can have its own declared properties, so
+    // the manifest can describe the interface differently from the class itself
+    const propertiesById: Record<string, ServiceProperties> = {}
+    for (const serviceId of [id, ...(options.implements ?? [])]) {
+      const properties = this.propertiesFor(serviceId, options.propertiesById?.[serviceId])
+      if (properties) propertiesById[serviceId] = properties
+    }
+
     return this.track(this.target.bindClass(id, ctor, {
       ...options,
       providedBy: options.providedBy ?? this.moduleId,
       ranking: this.rankingFor(id, options.ranking),
-      properties: this.propertiesFor(id, options.properties)
+      properties: this.propertiesFor(id, options.properties),
+      propertiesById
     }))
   }
 

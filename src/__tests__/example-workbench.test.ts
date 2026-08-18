@@ -11,6 +11,7 @@ import * as clockModule from '../../examples/workbench/modules/clock'
 import * as notes from '../../examples/workbench/modules/notes'
 import * as outline from '../../examples/workbench/modules/outline'
 import * as outlinePro from '../../examples/workbench/modules/outline-pro'
+import * as metrics from '../../examples/workbench/modules/metrics'
 import * as searchBox from '../../examples/workbench/modules/search-box'
 import * as shellModule from '../../examples/workbench/modules/shell'
 
@@ -40,7 +41,8 @@ describe('examples/workbench', () => {
       notes,
       outline,
       'outline-pro': outlinePro,
-      'search-box': searchBox
+      'search-box': searchBox,
+      metrics
     }
     for (const [id, container] of Object.entries(containers)) {
       (window as unknown as Record<string, unknown>)[id] = container
@@ -70,7 +72,7 @@ describe('examples/workbench', () => {
     await loader.loadAll()
 
     expect(titles('toolbar')).toEqual(['Search'])
-    expect(titles('main')).toEqual(['Notes'])
+    expect(titles('main')).toEqual(['Notes', 'Metrics'])
   })
 
   it('should show only the highest ranked contribution for a slot', async () => {
@@ -79,7 +81,7 @@ describe('examples/workbench', () => {
     await loader.loadAll()
 
     // Both outlines are registered; they share a slot, so one is shown
-    expect(loader.getServiceRegistry().countProviders('ui.component')).toBe(4)
+    expect(loader.getServiceRegistry().countProviders('ui.component')).toBe(5)
     expect(titles('sidebar')).toEqual(['Outline Pro'])
   })
 
@@ -100,8 +102,8 @@ describe('examples/workbench', () => {
 
     await loader.loadModule(clock, { awaitCascade: true })
 
-    // clock declares order 1, notes order 2 — appending would put it last
-    expect(titles('main')).toEqual(['Clock', 'Notes'])
+    // clock declares order 1 — appending would have put it last
+    expect(titles('main')).toEqual(['Clock', 'Notes', 'Metrics'])
   })
 
   it('should take a view down again when its module is unloaded', async () => {
@@ -111,7 +113,7 @@ describe('examples/workbench', () => {
 
     await loader.unloadModule('clock')
 
-    expect(titles('main')).toEqual(['Notes'])
+    expect(titles('main')).toEqual(['Notes', 'Metrics'])
     expect(activity).toContain('unmounted Clock')
   })
 
@@ -146,6 +148,44 @@ describe('examples/workbench', () => {
     expect(titles('main')).toEqual([])
   })
 
+  it('should construct a decorated class and inject its dependencies', async () => {
+    const loader = setup()
+
+    await loader.loadAll()
+
+    // MetricsView got the metrics service, which got the host's root service
+    const view = [...regions.main.querySelectorAll('.view')]
+      .find(node => node.querySelector('h3')?.textContent === 'Metrics')
+    expect(view).toBeDefined()
+    expect(view?.querySelector('output')?.textContent).toBe('1')
+    expect(activity.some(entry => entry.startsWith('metrics:'))).toBe(true)
+  })
+
+  it('should place a class registered through implements by its declared properties', async () => {
+    const loader = setup()
+
+    await loader.loadAll()
+
+    // The alias under ui.component carries the manifest's region and order
+    const [reference] = loader.getServiceRegistry()
+      .getServiceReferences('ui.component', '(&(region=main)(order=3))')
+    expect(reference?.providedBy).toBe('metrics')
+    expect(titles('main')).toEqual(['Notes', 'Metrics'])
+  })
+
+  it('should not construct the injected service before it is needed', async () => {
+    const loader = setup()
+    loader.register([shell])
+
+    // Bound lazily: registering the class must not build it
+    await loader.loadModule(
+      loader.getManifests().find(manifest => manifest.id === 'metrics')!
+    )
+
+    const [reference] = loader.getServiceRegistry().getServiceReferences('workbench.metrics')
+    expect(reference.instantiated).toBe(false)
+  })
+
   it('should keep the shell running while views come and go', async () => {
     const loader = setup()
     await loader.loadAll()
@@ -153,6 +193,7 @@ describe('examples/workbench', () => {
     await loader.loadModule(clock, { awaitCascade: true })
     await loader.unloadModule('clock')
     await loader.disableModule('notes')
+    await loader.disableModule('metrics')
 
     expect(loader.getModule('shell')?.state).toBe('active')
     expect(titles('main')).toEqual([])

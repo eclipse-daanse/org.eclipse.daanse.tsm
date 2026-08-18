@@ -20,6 +20,13 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
   declared — and `getManifests()` denied the running module existed. The manifest is registered now if it is
   new. Found by loading a view on demand in the workbench example: it activated, registered its component, and
   was never mounted because the declared `region` had gone missing.
+- **A class offered through `implements` could not be described by the manifest.** The module scope applied
+  declared properties only to the ID a registration was made under, so the alias registrations from
+  `bindClass(id, ctor, { implements: [...] })` got none — and the interface is exactly what consumers filter
+  on. `BindClassOptions.propertiesById` now carries properties per ID, filled by the scope from the manifest's
+  `provides`, and usable directly for an alias that needs different properties from the class. Found by adding
+  a decorated class to the workbench example: it registered its view and was never placed, because the declared
+  `region` never reached the interface.
 - **Properties declared in a manifest were dropped as soon as the code passed any.**
   `ServiceDeclaration.properties` and the `properties` of a registration replaced each other; they are merged
   per key now, as DS overlays component properties with configuration. The manifest describes where a service
@@ -297,7 +304,11 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
   contribution (`0..n`, ordered by an `order` property), while a *slot* has several modules competing for one
   place and shows the highest ranked. `unmount()` releases what `mount()` acquired, and the test proves it by
   keeping a reference to the detached element and advancing the clock: a leaked interval would keep writing
-  into it. A churn button loads and unloads a view every 2.5 seconds.
+  into it. A churn button loads and unloads a view every 2.5 seconds. One module registers decorated classes
+  through `bindClass()` rather than plain objects, which also settles a question the examples left open:
+  `@inject` names the service ID explicitly, so no type reflection is involved and `experimentalDecorators`
+  suffices — esbuild's missing `emitDecoratorMetadata` does not matter, and decorators need no extra setup
+  under Vite.
 - **New example `examples/whiteboard`** (`npm run example:whiteboard`): six modules that find each other
   through services, no framework and no separate install, running against the package sources. It shows load
   order following from the manifests rather than from the registration order, a `0..n` collection with
