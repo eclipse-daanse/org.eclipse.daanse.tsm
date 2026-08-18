@@ -170,7 +170,15 @@ export class ModuleLoader {
 
   /**
    * Wait until every queued reaction has run, including those a reaction caused.
-   * Needed for deterministic startup and tests.
+   *
+   * `loadAll()`, `unloadModule()` and `reloadModule()` await this themselves.
+   * After a single `loadModule()` it has to be called by the caller: activating
+   * one module can satisfy others, and that cascade runs in the queue.
+   *
+   * Do not call it from a lifecycle hook — a hook runs inside the cascade it
+   * would be waiting for, which deadlocks. Whether a call sits inside a queued
+   * reaction cannot be detected from here without async context tracking, so
+   * this is a rule rather than a guard.
    */
   async settle(): Promise<void> {
     while (this.pendingTasks > 0) {
@@ -676,7 +684,11 @@ export class ModuleLoader {
   }
 
   /**
-   * Load a single module
+   * Load a single module.
+   *
+   * Returns once this module is loaded, activated or parked. Modules that become
+   * satisfied *because* of it are activated in the queued cascade afterwards —
+   * call `settle()` when the whole picture has to be stable, as `loadAll()` does.
    */
   async loadModule(manifest: ModuleManifest): Promise<LoadedModule> {
     // Already loaded, waiting, or being processed right now. The last case is
@@ -1131,20 +1143,25 @@ export class ModuleLoader {
 
     this.logger.info(`Reloading module ${moduleId}...`)
 
-    // Get dependents to reload them too
-    const dependents = this.resolver.getDependents(
-      moduleId,
-      Array.from(this.manifests.values())
-    )
+    // The whole chain, not just the first level: a module two steps away would
+    // otherwise keep running against replaced code. Parked modules count too —
+    // they hold the old container and would activate with it later.
+    const affected = this.resolver
+      .getTransitiveDependents(moduleId, Array.from(this.manifests.values()))
+      .filter(dependentId => this.modules.has(dependentId))
 
-    // Unload dependents (in reverse order)
-    const loadedDependents = dependents.filter(d => this.isLoaded(d))
-    for (const dep of loadedDependents.reverse()) {
-      await this.unloadModule(dep)
+    // Consumers first, so nothing is unloaded from under a running module
+    for (const dependentId of [...affected].reverse()) {
+      if (!await this.unloadModule(dependentId)) {
+        throw new Error(
+          `Cannot reload ${moduleId}: dependent ${dependentId} could not be unloaded`
+        )
+      }
     }
 
-    // Unload this module
-    await this.unloadModule(moduleId)
+    if (!await this.unloadModule(moduleId)) {
+      throw new Error(`Cannot reload ${moduleId}: it could not be unloaded`)
+    }
 
     // Reload with cache bust
     const manifest = this.manifests.get(moduleId)!
@@ -1153,11 +1170,11 @@ export class ModuleLoader {
     // Reload
     await this.loadModule(manifest)
 
-    // Reload dependents
-    for (const dep of loadedDependents) {
-      const depManifest = this.manifests.get(dep)
-      if (depManifest) {
-        await this.loadModule(depManifest)
+    // Reload the chain, nearest first
+    for (const dependentId of affected) {
+      const dependentManifest = this.manifests.get(dependentId)
+      if (dependentManifest) {
+        await this.loadModule(dependentManifest)
       }
     }
 

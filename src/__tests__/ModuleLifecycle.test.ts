@@ -1151,6 +1151,114 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
   })
 
+  describe('hot reload', () => {
+    /**
+     * unloadModule() removes the container from window, and loadEntry() would
+     * then try a real import. A proxy that survives the delete stands in for a
+     * browser, where re-importing yields a module again.
+     */
+    function persistentWindow() {
+      const containers = new Map<string, unknown>()
+      globalRef.window = new Proxy({}, {
+        get: (_target, property) => containers.get(String(property)),
+        set: (_target, property, value) => {
+          containers.set(String(property), value)
+          return true
+        },
+        deleteProperty: () => true,
+        has: (_target, property) => containers.has(String(property))
+      }) as Record<string, unknown>
+    }
+
+    it('should reload the whole dependent chain, not just the first level', async () => {
+      persistentWindow()
+      const loader = new ModuleLoader({ hotReload: true })
+      const activations: string[] = []
+
+      const base = stub(loader, 'base', { onActivate: () => { activations.push('base') } })
+      stub(loader, 'middle', {
+        dependencies: ['base'],
+        onActivate: () => { activations.push('middle') }
+      })
+      stub(loader, 'leaf', {
+        dependencies: ['middle'],
+        onActivate: () => { activations.push('leaf') }
+      })
+
+      await loader.loadAll()
+      expect(activations).toEqual(['base', 'middle', 'leaf'])
+
+      await loader.reloadModule('base')
+
+      // Every module in the chain ran its activate hook a second time
+      expect(activations).toEqual([
+        'base', 'middle', 'leaf',
+        'base', 'middle', 'leaf'
+      ])
+      expect(loader.getModule('leaf')?.state).toBe('active')
+      expect(base.entry).toContain('?t=')
+    })
+
+    it('should include a parked dependent in the reload', async () => {
+      persistentWindow()
+      const loader = new ModuleLoader({ hotReload: true })
+      const registry = loader.getServiceRegistry()
+      const activations: string[] = []
+
+      stub(loader, 'base', { onActivate: () => { activations.push('base') } })
+      // Parked: waits for a service nobody provides
+      stub(loader, 'waiting', {
+        dependencies: ['base'],
+        requires: [{ id: 'geo.service' }],
+        onActivate: () => { activations.push('waiting') }
+      })
+
+      await loader.loadAll()
+      expect(loader.getModule('waiting')?.state).toBe('unsatisfied')
+      expect(activations).toEqual(['base'])
+
+      await loader.reloadModule('base')
+
+      // The parked module was taken along: still parked, but on the new container
+      expect(loader.getModule('waiting')?.state).toBe('unsatisfied')
+      expect(activations).toEqual(['base', 'base'])
+
+      // And it activates from the reloaded code once its service shows up
+      registry.register('geo.service', {})
+      await loader.settle()
+
+      expect(loader.getModule('waiting')?.state).toBe('active')
+      expect(activations).toEqual(['base', 'base', 'waiting'])
+    })
+
+    it('should refuse to reload without hot reload enabled', async () => {
+      persistentWindow()
+      const loader = new ModuleLoader()
+      stub(loader, 'base', {})
+      await loader.loadAll()
+
+      await expect(loader.reloadModule('base')).rejects.toThrow('Hot reload is not enabled')
+    })
+
+    it('should leave a settled state behind', async () => {
+      persistentWindow()
+      const loader = new ModuleLoader({ hotReload: true })
+
+      stub(loader, 'provider', {
+        provides: ['s1'],
+        onActivate: services => { services.register('s1', {}) }
+      })
+      stub(loader, 'consumer', { requires: [{ id: 's1' }] })
+      await loader.loadAll()
+
+      await loader.reloadModule('provider')
+
+      // No settle() here on purpose
+      expect(loader.getModule('consumer')?.state).toBe('active')
+      expect(loader.getUnsatisfiedModules()).toEqual([])
+    })
+  })
+
   describe('loop protection', () => {
     it('should give up on a module that keeps flipping within one cascade', async () => {
       const loader = new ModuleLoader()

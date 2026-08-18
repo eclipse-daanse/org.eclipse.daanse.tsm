@@ -14,6 +14,12 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
 
 ### Fixed
 
+- **`reloadModule()` only reached the first level of dependents, and skipped parked ones.** Dependents were
+  taken from `getDependents()`, which stops at direct dependents, and filtered by `isLoaded()`, which is true
+  only for `'active'`. In a chain A ← B ← C, reloading A left C running against replaced code, and a parked
+  module kept its old container to activate with later. The whole chain is now reloaded, parked modules
+  included, via the new `DependencyResolver.getTransitiveDependents()`; a dependent that cannot be unloaded
+  fails the reload instead of leaving it half done.
 - **Circular module `dependencies` crashed the loader.** `ensureDependencies()` called `loadModule()`, which
   restarted a module that was already being loaded, so two modules depending on each other recursed until
   `RangeError: Maximum call stack size exceeded`. The resolver detected the cycle and warned, but loading ran
@@ -210,6 +216,11 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
 - `manifest` takes a path to read or the parsed object; a path that cannot be read fails the build.
 
 #### Diagnostics
+
+- `settle()` documents what it is for and its one rule: `loadAll()`, `unloadModule()` and `reloadModule()`
+  await it themselves, after a single `loadModule()` the caller has to, and it must not be called from a
+  lifecycle hook — a hook runs inside the cascade it would wait for. Detecting that from inside would need
+  async context tracking, which is not available in a browser, so it is a documented rule rather than a guard.
 
 - **`getDeclarationMismatches()`** lists services a module declared in `provides` but never registered, and a
   `declaration-mismatch` module event reports the same on activation. This is not cosmetic: the resolver
