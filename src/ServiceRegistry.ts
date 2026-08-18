@@ -47,12 +47,26 @@ interface ServiceBinding {
   seq: number
   /** Properties a target filter selects on */
   properties?: ServiceProperties
+  /**
+   * What produced this registration, when the provider alone is not specific
+   * enough: the class for `bindClass()`. Two classes in one module offering the
+   * same ID are two providers, not one replacing the other.
+   */
+  origin?: unknown
   /** Dependencies for automatic resolution (set by bindClass) */
   deps?: DependencyInfo[]
   /** Property dependencies for injection after construction (set by bindClass) */
   propertyDeps?: PropertyInjectMetadata[]
   /** Alias target — if set, this binding delegates to another ID */
   aliasOf?: string
+  /**
+   * The registration the alias belongs to, by its `seq`.
+   *
+   * Without it an alias delegates to whatever is currently visible under
+   * `aliasOf`, so a later registration under that ID would answer for an
+   * interface it never claimed.
+   */
+  aliasSeq?: number
 }
 
 /**
@@ -104,9 +118,12 @@ export class DefaultServiceRegistry implements IServiceRegistry {
     const previouslyKnown = this.bindings.has(id)
     const visible = this.bindings.get(id)
 
-    // Drop this provider's earlier registration, wherever it sits
-    this.removeShadowed(id, candidate => candidate.providedBy === binding.providedBy)
-    const replacesVisible = visible !== undefined && visible.providedBy === binding.providedBy
+    const sameSource = (candidate: ServiceBinding): boolean =>
+      candidate.providedBy === binding.providedBy && candidate.origin === binding.origin
+
+    // Drop this source's earlier registration, wherever it sits
+    this.removeShadowed(id, sameSource)
+    const replacesVisible = visible !== undefined && sameSource(visible)
 
     if (!visible || replacesVisible || this.outranks(binding, visible)) {
       if (visible && !replacesVisible) {
@@ -186,7 +203,14 @@ export class DefaultServiceRegistry implements IServiceRegistry {
       serviceId: id,
       providedBy: binding.providedBy,
       ranking: binding.ranking,
-      unregister: () => this.unregisterRegistration(id, binding.seq)
+      unregister: () => this.unregisterRegistration(id, binding.seq),
+      resolve: <T>() => {
+        // Gone already: nothing to resolve
+        if (!this.registrationsOf(id).some(candidate => candidate.seq === binding.seq)) {
+          return undefined
+        }
+        return this.instantiate<T>(id, binding, new Set())
+      }
     }
   }
 
@@ -298,12 +322,16 @@ export class DefaultServiceRegistry implements IServiceRegistry {
       injectors.add(id)
     }
 
+    const primarySeq = this.nextSeq++
     const registration = this.addRegistration(id, {
       factory: (...resolvedDeps: unknown[]) => new ctor(...resolvedDeps),
       scope,
+      // The class identifies the registration, so a second class from the same
+      // module does not replace this one
+      origin: ctor,
       providedBy: options.providedBy,
       ranking: options.ranking ?? 0,
-      seq: this.nextSeq++,
+      seq: primarySeq,
       properties: options.propertiesById?.[id] ?? options.properties,
       deps: metadata.map(m => ({ serviceId: m.serviceId, optional: m.optional })),
       propertyDeps: propertyMetadata.length > 0 ? propertyMetadata : undefined
@@ -329,6 +357,8 @@ export class DefaultServiceRegistry implements IServiceRegistry {
         this.addRegistration(interfaceId, {
           scope,
           aliasOf: id,
+          aliasSeq: primarySeq,
+          origin: ctor,
           providedBy: options.providedBy,
           ranking: options.ranking ?? 0,
           seq: this.nextSeq++,
@@ -348,6 +378,46 @@ export class DefaultServiceRegistry implements IServiceRegistry {
    * For transients: creates new instance on each call
    * Automatically resolves dependencies declared via @inject()
    */
+  /**
+   * Construct an injectable class with its dependencies injected, without
+   * registering it: the same resolution as `bindClass()`, minus the registration.
+   */
+  construct<T>(ctor: InjectableConstructor<T>): T {
+    if (!isInjectable(ctor)) {
+      throw new Error(
+        `Class '${ctor.name}' is not decorated with @injectable() or @component(), ` +
+        `so its dependencies are unknown`
+      )
+    }
+
+    const resolving = new Set<string>()
+
+    const args = getInjectMetadata(ctor).map(dependency => {
+      const resolved = this.get(dependency.serviceId, resolving)
+      if (resolved === undefined && !dependency.optional) {
+        throw new Error(
+          `Dependency '${dependency.serviceId}' not found (required by '${ctor.name}')`
+        )
+      }
+      return resolved
+    })
+
+    const instance = new ctor(...args)
+
+    for (const property of getPropertyInjectMetadata(ctor)) {
+      const resolved = this.get(property.serviceId, resolving)
+      if (resolved === undefined && !property.optional) {
+        throw new Error(
+          `Property dependency '${property.serviceId}' not found ` +
+          `(required by '${ctor.name}' on property '${String(property.propertyKey)}')`
+        )
+      }
+      (instance as Record<string | symbol, unknown>)[property.propertyKey] = resolved
+    }
+
+    return instance
+  }
+
   get<T>(id: string, _resolving?: Set<string>): T | undefined {
     // Check direct instances first (for backwards compatibility)
     if (this.services.has(id)) {
@@ -375,7 +445,9 @@ export class DefaultServiceRegistry implements IServiceRegistry {
     resolving: Set<string>
   ): T | undefined {
     if (binding.aliasOf) {
-      return this.get<T>(binding.aliasOf, resolving)
+      const target = this.aliasTarget(binding)
+      if (!target) return undefined
+      return this.instantiate<T>(binding.aliasOf, target, resolving)
     }
 
     if (binding.scope === 'singleton' && binding.instance !== undefined) {
@@ -470,8 +542,24 @@ export class DefaultServiceRegistry implements IServiceRegistry {
 
     const binding = this.bindings.get(id)
     if (!binding) return undefined
-    if (binding.aliasOf) return this.resolveExisting(binding.aliasOf, seen)
+    if (binding.aliasOf) {
+      const target = this.aliasTarget(binding)
+      return target ? this.resolveExisting(binding.aliasOf, seen) && target : undefined
+    }
     return binding
+  }
+
+  /**
+   * The registration an alias stands for: the one it was created with, not
+   * whatever is visible under that ID now.
+   */
+  private aliasTarget(alias: ServiceBinding): ServiceBinding | undefined {
+    if (alias.aliasOf === undefined) return undefined
+
+    const candidates = this.registrationsOf(alias.aliasOf)
+    if (alias.aliasSeq === undefined) return candidates[0]
+
+    return candidates.find(candidate => candidate.seq === alias.aliasSeq)
   }
 
   /**

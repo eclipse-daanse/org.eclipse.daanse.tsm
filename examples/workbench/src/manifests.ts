@@ -63,5 +63,16 @@ export const startupViews: ModuleManifest[] = [
   metrics
 ]
 
-/** Loaded and unloaded on demand, to watch a view come and go */
-export const clock: ModuleManifest = view('clock', 'main', 1)
+/**
+ * Loaded and unloaded on demand, to watch a view come and go.
+ *
+ * Declares no `provides`: the clock is a `@component()`, so its registration is
+ * on the class. Nothing can drift here, because there is only one place.
+ */
+export const clock: ModuleManifest = {
+  id: 'clock',
+  name: 'clock',
+  version: '1.0.0',
+  entry: '/modules/clock.ts',
+  exports: {}
+}

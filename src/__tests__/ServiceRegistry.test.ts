@@ -351,14 +351,29 @@ describe('DefaultServiceRegistry - registration ownership and alias cleanup', ()
       expect(registry.has('geo.v2')).toBe(true)
     })
 
-    it('should drop aliases when the primary is replaced by a plain registration', () => {
+    it('should keep an alias pointing at its own class when the ID gains another provider', () => {
       const registry = new DefaultServiceRegistry()
       registry.bindClass('geo.impl', GeoService, { implements: ['geo.api'] })
 
+      // A second provider for the same ID, not a replacement: different source
       registry.register('geo.impl', { locate: () => 'elsewhere' })
 
+      expect(registry.countProviders('geo.impl')).toBe(2)
+      // The ID answers with the later registration...
+      expect(registry.get<{ locate(): string }>('geo.impl')?.locate()).toBe('elsewhere')
+      // ...while the alias still stands for the class that claimed the interface
+      expect(registry.get('geo.api')).toBeInstanceOf(GeoService)
+    })
+
+    it('should drop the alias when its own class is unregistered', () => {
+      const registry = new DefaultServiceRegistry()
+      const handle = registry.bindClass('geo.impl', GeoService, { implements: ['geo.api'] })
+      registry.register('geo.impl', { locate: () => 'elsewhere' })
+
+      handle.unregister()
+
       expect(registry.has('geo.api')).toBe(false)
-      expect(registry.get('geo.impl')).toEqual({ locate: expect.any(Function) })
+      expect(registry.has('geo.impl')).toBe(true)
     })
 
     it('should move an alias when it is reassigned to another primary', () => {

@@ -14,6 +14,15 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
 
 ### Fixed
 
+- **Two classes in one module could not offer the same service ID.** The replacement rule from ranking took the
+  provider as the unit, so a second `bindClass()` for the same ID replaced the first — but two classes are two
+  providers, as they are in OSGi. A registration is identified by provider *and* origin (the class) now, so
+  registering the same class again still replaces while a different class accumulates. Found by declaring two
+  components under `ui.component` in one module: only one survived.
+- **An alias resolved through its ID rather than to its own class.** `bindClass(id, ctor, { implements: [iface] })`
+  made `iface` delegate to whatever was visible under `id`, so a later registration there would answer for an
+  interface it never claimed. An alias resolves to the registration it was created with now, and disappears
+  when that one does.
 - **`loadModule()` did not make an unregistered manifest known.** Handing a manifest straight to
   `loadModule()` loaded the module but left `manifests` untouched, so the module scope found no declared
   properties or ranking for it — a service registered by such a module lost the `properties` its manifest
@@ -140,6 +149,38 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
   — all without instantiating anything. `getMatching(id, target)` is the filtered counterpart to `get(id)`,
   which stays unfiltered.
 - `createServiceFilter(expression)` is exported for use outside the registry.
+
+#### Declarative components
+
+- **`@component()`, `@activate()` and `@deactivate()`.** A class declares what it offers, and the loader
+  registers and runs it — no `services.register()` in a module's `activate` export:
+
+  ```ts
+  @component({ service: [UI_COMPONENT], properties: { region: 'main', order: 1 } })
+  export class ClockView {
+    constructor(@inject(METRICS_SERVICE, { optional: true }) private metrics?: Metrics) {}
+    @activate() start(): void { … }
+    @deactivate() stop(): void { clearInterval(this.timer) }
+  }
+  ```
+
+  This addresses what makes the activator style discouraged in modern OSGi: it forces eager work and keeps the
+  declaration beside the code instead of in it. With a component the declaration *is* the registration, so
+  `provides` in the manifest becomes optional — and the drift `getDeclarationMismatches()` detects cannot arise
+  where there is only one place to state it.
+- **Immediate and delayed, as in DS.** A component with an `@activate` method is created when its module
+  activates, because something has to run whether or not anyone resolves its service; without one it is created
+  on first resolution. `immediate: true` forces the former. An `async` activate method is awaited — that is
+  where the synchronous `get()` draws the line, and the distinction resolves it rather than hiding it.
+- `@deactivate` runs on the same instance, in reverse creation order, when the module stops — including when a
+  withdrawn service parks it. A throwing teardown does not stop the others.
+- Both styles work side by side; an imperative `activate` export runs **first**, so it can set up what a
+  component gets injected.
+- `ServiceRegistry.construct(ctor)` builds an injectable class with its dependencies without registering it —
+  what a component that only has a lifecycle needs.
+- **`ServiceRegistration.resolve()`** resolves exactly its own registration. With several providers under one
+  ID, `get(id)` answers with the visible one; the registrant needs its own. OSGi has the same pair
+  (`ServiceRegistration` → `ServiceReference` → `getService`).
 
 #### Notification
 

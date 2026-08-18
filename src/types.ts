@@ -270,6 +270,40 @@ export interface InjectableConstructor<T = unknown> {
 }
 
 /**
+ * What `@component()` declares about a class.
+ *
+ * Together with `@activate`/`@deactivate` this replaces the imperative
+ * registration in a module's `activate` export: the loader reads the declaration
+ * and does the registering.
+ */
+export interface ComponentOptions {
+  /**
+   * Service IDs to register the component under. The first is the primary one,
+   * the rest become aliases. Omit for a component that only has a lifecycle.
+   */
+  service?: string[]
+
+  /** Properties for the registration */
+  properties?: ServiceProperties
+
+  /** Properties per service ID, when the interface differs from the class */
+  propertiesById?: Record<string, ServiceProperties>
+
+  /** Higher wins when several components share a service ID */
+  ranking?: number
+
+  /** Scope of the registered service. Default: singleton */
+  scope?: 'singleton' | 'transient'
+
+  /**
+   * Create the component when its module activates, even without an `@activate`
+   * method. Default: true when an `@activate` method exists, false otherwise —
+   * DS' immediate/delayed distinction.
+   */
+  immediate?: boolean
+}
+
+/**
  * Options for bindClass()
  */
 export interface BindClassOptions {
@@ -329,6 +363,15 @@ export interface ServiceRegistration {
 
   /** Withdraw exactly this registration. Returns false if it is already gone. */
   unregister(): boolean
+
+  /**
+   * Resolve exactly this registration, not whatever currently answers to the ID.
+   *
+   * With several providers under one ID, `get(id)` returns the visible one — the
+   * registrant needs its own. OSGi has the same pair: `ServiceRegistration`
+   * yields a `ServiceReference`, and that resolves to its own service.
+   */
+  resolve<T>(): T | undefined
 }
 
 /**
@@ -425,6 +468,13 @@ export interface ServiceRegistry {
     ctor: InjectableConstructor<T>,
     options?: BindClassOptions
   ): ServiceRegistration
+
+  /**
+   * Construct an `@injectable()` class with its dependencies injected, without
+   * registering the result as a service — for an object that belongs to nobody
+   * else, such as a component that only has a lifecycle.
+   */
+  construct<T>(ctor: InjectableConstructor<T>): T
 
   /** Get a service (creates singleton on first access, resolves dependencies automatically) */
   get<T>(id: string): T | undefined
