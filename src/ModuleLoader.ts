@@ -14,11 +14,11 @@ import type {
   ModuleLogger,
   ServiceRegistry,
   ObservableServiceRegistry,
-  ServiceRegistryEvent,
   ServiceRegistryListener
 } from './types.js'
 import { DependencyResolver } from './DependencyResolver.js'
 import { DefaultServiceRegistry } from './ServiceRegistry.js'
+import { ScopedServiceRegistry } from './ScopedServiceRegistry.js'
 import { isTsmRuntimeAvailable, tsmRuntime } from './TsmRuntime.js'
 
 // Type for Module Federation containers
@@ -36,11 +36,15 @@ interface ModuleFederationContainer {
 /**
  * Default options
  */
+/** How often a module may activate and park within one cascade before giving up */
+const MAX_ACTIVATIONS_PER_CASCADE = 10
+
 const DEFAULT_OPTIONS: Required<ModuleLoaderOptions> = {
   loadTimeout: 10000,
   continueOnError: true,
   hotReload: false,
   serviceRegistry: undefined as unknown as ServiceRegistry,
+  strictRequirements: false,
   logger: undefined as unknown as ModuleLogger
 }
 
@@ -75,9 +79,15 @@ export class ModuleLoader {
   private options: Required<ModuleLoaderOptions>
   private services: ServiceRegistry
   private logger: ModuleLogger
-  /** Reverse index: service ID -> IDs of active modules that declared it in requiresService */
-  private requiredBy = new Map<string, Set<string>>()
   private serviceListener?: ServiceRegistryListener
+  /** Activations per cascade, to catch a module that flips between states forever */
+  private cascadeActivations = new Map<string, number>()
+  private disposed = false
+  /** Module-scoped registry facades, so a teardown can withdraw what a module registered */
+  private scopes = new Map<string, ScopedServiceRegistry>()
+  /** Serializes reactions to registry events; they are async, the events are not */
+  private queue: Promise<void> = Promise.resolve()
+  private pendingTasks = 0
 
   constructor(options: ModuleLoaderOptions = {}) {
     this.options = { ...DEFAULT_OPTIONS, ...options }
@@ -101,57 +111,247 @@ export class ModuleLoader {
     }
 
     this.serviceListener = {
-      onServiceEvent: (event: ServiceRegistryEvent) => {
-        if (event.type !== 'unregistered') return
-        this.reportWithdrawal(event.serviceId)
+      onServiceEvent: () => {
+        this.enqueue(() => this.reconcile())
       }
     }
     registry.addListener(this.serviceListener)
   }
 
-  private reportWithdrawal(serviceId: string): void {
-    const moduleIds = this.requiredBy.get(serviceId)
-    if (!moduleIds || moduleIds.size === 0) return
-
-    for (const moduleId of moduleIds) {
-      const loadedModule = this.modules.get(moduleId)
-      if (!loadedModule || loadedModule.state !== 'active') continue
-
-      this.logger.warn(
-        `Service ${serviceId} was unregistered while ${moduleId} is active and requires it`
-      )
-      this.emit({
-        type: 'service-withdrawn',
-        moduleId,
-        manifest: loadedModule.manifest,
-        serviceIds: [serviceId],
-        timestamp: new Date()
+  /**
+   * Queue a reaction to a registry event.
+   *
+   * Registry listeners are synchronous while activation is not, so reactions
+   * cannot run inside the event. Serializing them also keeps a cascade in
+   * order when a teardown withdraws further services.
+   */
+  private enqueue(task: () => Promise<void>): void {
+    if (this.disposed) return
+    if (this.pendingTasks === 0) {
+      this.cascadeActivations.clear()
+    }
+    this.pendingTasks++
+    this.queue = this.queue
+      .then(task)
+      .catch(error => {
+        this.logger.error('Service event reaction failed:', error)
       })
+      .finally(() => {
+        this.pendingTasks--
+      })
+  }
+
+  /**
+   * Wait until every queued reaction has run, including those a reaction caused.
+   * Needed for deterministic startup and tests.
+   */
+  async settle(): Promise<void> {
+    while (this.pendingTasks > 0) {
+      await this.queue
     }
   }
 
   /**
-   * Track/untrack which active modules require which services
+   * Why a module cannot run right now: missing services, and dependencies
+   * that are not active themselves.
+   *
+   * A module whose dependency is parked must wait too, otherwise it activates
+   * against code that is not running.
    */
-  private trackRequirements(manifest: ModuleManifest): void {
-    for (const requirement of manifest.requiresService ?? []) {
-      let moduleIds = this.requiredBy.get(requirement.id)
-      if (!moduleIds) {
-        moduleIds = new Set<string>()
-        this.requiredBy.set(requirement.id, moduleIds)
+  private unsatisfiedReasons(manifest: ModuleManifest): {
+    services: string[]
+    modules: string[]
+  } {
+    const requirements = manifest.requiresService ?? []
+    const services = requirements.length > 0
+      ? this.services.checkRequirements(requirements).missing
+      : []
+
+    const modules: string[] = []
+    for (const dep of manifest.dependencies ?? []) {
+      const depSpec = typeof dep === 'string' ? { id: dep } : dep
+      if (depSpec.optional) continue
+
+      const depModule = this.modules.get(depSpec.id)
+      // Only a module that is known but not running counts as a reason to wait;
+      // a dependency that was never registered is handled by ensureDependencies
+      if (depModule && depModule.state !== 'active') {
+        modules.push(depSpec.id)
       }
-      moduleIds.add(manifest.id)
+    }
+
+    return { services, modules }
+  }
+
+  private isSatisfied(manifest: ModuleManifest): boolean {
+    const reasons = this.unsatisfiedReasons(manifest)
+    return reasons.services.length === 0 && reasons.modules.length === 0
+  }
+
+  /**
+   * Park a loaded module until what it needs is available.
+   *
+   * Kept apart from 'error': nothing failed, the module is simply not due yet.
+   */
+  private park(loadedModule: LoadedModule, reasons: { services: string[]; modules: string[] }): void {
+    const { manifest } = loadedModule
+    const waitingFor = [
+      ...reasons.services,
+      ...reasons.modules.map(id => `module ${id}`)
+    ]
+
+    loadedModule.state = 'unsatisfied'
+    loadedModule.error = undefined
+
+    this.logger.info(`Module ${manifest.id} waits for: ${waitingFor.join(', ')}`)
+    this.emit({
+      type: 'unsatisfied',
+      moduleId: manifest.id,
+      manifest,
+      serviceIds: reasons.services,
+      timestamp: new Date()
+    })
+  }
+
+  /**
+   * Bring loaded modules in line with what is currently available.
+   *
+   * Two directions, in this order: active modules whose requirements are gone
+   * are torn down, then parked modules that became satisfied are activated.
+   * Tearing a module down withdraws its own services, which produces further
+   * registry events — that is what carries a cascade to indirect consumers.
+   */
+  private async reconcile(): Promise<void> {
+    if (this.disposed) return
+    await this.parkUnsatisfiedActive()
+    await this.activateSatisfiedPending()
+  }
+
+  private async parkUnsatisfiedActive(): Promise<void> {
+    // Repeat until nothing changes: parking a module can leave its dependents
+    // unsatisfied in turn, and those are not announced by a registry event
+    let changed = true
+    while (changed) {
+      changed = await this.parkUnsatisfiedActiveOnce()
     }
   }
 
-  private untrackRequirements(manifest: ModuleManifest): void {
-    for (const requirement of manifest.requiresService ?? []) {
-      const moduleIds = this.requiredBy.get(requirement.id)
-      if (!moduleIds) continue
-      moduleIds.delete(manifest.id)
-      if (moduleIds.size === 0) {
-        this.requiredBy.delete(requirement.id)
+  private async parkUnsatisfiedActiveOnce(): Promise<boolean> {
+    let changed = false
+
+    for (const loadedModule of [...this.modules.values()]) {
+      if (loadedModule.state !== 'active') continue
+
+      const reasons = this.unsatisfiedReasons(loadedModule.manifest)
+      if (reasons.services.length === 0 && reasons.modules.length === 0) continue
+
+      if (reasons.services.length > 0) {
+        this.logger.warn(
+          `Service(s) ${reasons.services.join(', ')} withdrawn while ` +
+          `${loadedModule.manifest.id} is active and requires them`
+        )
+        this.emit({
+          type: 'service-withdrawn',
+          moduleId: loadedModule.manifest.id,
+          manifest: loadedModule.manifest,
+          serviceIds: reasons.services,
+          timestamp: new Date()
+        })
       }
+
+      await this.deactivate(loadedModule)
+      // Park with the reasons that caused the teardown. Whether they still hold
+      // is decided by the next fixpoint pass, which may activate it again.
+      this.park(loadedModule, reasons)
+      changed = true
+    }
+
+    return changed
+  }
+
+  private async activateSatisfiedPending(): Promise<void> {
+    // Repeat until nothing changes: one activation can satisfy the next module
+    // even when it registers no service of its own
+    let changed = true
+    while (changed) {
+      changed = await this.activateSatisfiedPendingOnce()
+    }
+  }
+
+  private async activateSatisfiedPendingOnce(): Promise<boolean> {
+    let changed = false
+
+    for (const loadedModule of [...this.modules.values()]) {
+      if (loadedModule.state !== 'unsatisfied') continue
+      if (!this.isSatisfied(loadedModule.manifest)) continue
+
+      if (this.exceedsCascadeBudget(loadedModule)) continue
+
+      await this.activateLoaded(loadedModule)
+      changed = true
+    }
+
+    return changed
+  }
+
+  /**
+   * Guard against a module that keeps activating and parking within one cascade
+   * (for instance one that registers a service on activate and withdraws the
+   * same service on deactivate while requiring it).
+   */
+  private exceedsCascadeBudget(loadedModule: LoadedModule): boolean {
+    const moduleId = loadedModule.manifest.id
+    const attempts = (this.cascadeActivations.get(moduleId) ?? 0) + 1
+    this.cascadeActivations.set(moduleId, attempts)
+
+    if (attempts <= MAX_ACTIVATIONS_PER_CASCADE) {
+      return false
+    }
+
+    const error = new Error(
+      `Module ${moduleId} activated and parked ${MAX_ACTIVATIONS_PER_CASCADE} times ` +
+      `in one cascade; giving up to avoid an endless loop`
+    )
+    loadedModule.state = 'error'
+    loadedModule.error = error
+    this.logger.error(error.message)
+    this.emit({
+      type: 'error',
+      moduleId,
+      manifest: loadedModule.manifest,
+      error,
+      timestamp: new Date()
+    })
+    return true
+  }
+
+  /**
+   * Run activation for an already loaded module and record the outcome
+   */
+  private async activateLoaded(loadedModule: LoadedModule): Promise<void> {
+    const { manifest } = loadedModule
+
+    loadedModule.state = 'activating'
+    try {
+      await this.activate(loadedModule)
+      loadedModule.state = 'active'
+      this.emit({
+        type: 'activated',
+        moduleId: manifest.id,
+        manifest,
+        timestamp: new Date()
+      })
+      this.logger.info(`Module ${manifest.id} activated`)
+    } catch (error) {
+      loadedModule.state = 'error'
+      loadedModule.error = error as Error
+      this.emit({
+        type: 'error',
+        moduleId: manifest.id,
+        manifest,
+        error: error as Error,
+        timestamp: new Date()
+      })
     }
   }
 
@@ -160,12 +360,14 @@ export class ModuleLoader {
    * otherwise its listener outlives it.
    */
   dispose(): void {
+    this.disposed = true
     const registry = this.services as Partial<ObservableServiceRegistry>
     if (this.serviceListener && typeof registry.removeListener === 'function') {
       registry.removeListener(this.serviceListener)
     }
     this.serviceListener = undefined
-    this.requiredBy.clear()
+    this.scopes.clear()
+    this.cascadeActivations.clear()
   }
 
   /**
@@ -213,15 +415,50 @@ export class ModuleLoader {
         }
       }
     }
+
+    // Modules parked during the run may become satisfied by later ones,
+    // so the caller should see a settled state, not a half-processed queue
+    await this.settle()
+
+    const pending = this.getUnsatisfiedModules()
+    if (pending.length > 0) {
+      this.logger.warn(
+        `${pending.length} module(s) waiting for dependencies:`,
+        pending.map(entry => `${entry.moduleId} <- ${entry.waitingFor.join(', ')}`)
+      )
+    }
+  }
+
+  /**
+   * Modules that are loaded but waiting, with what each of them waits for.
+   * The answer to "why is this module not running?".
+   */
+  getUnsatisfiedModules(): Array<{ moduleId: string; waitingFor: string[] }> {
+    const result: Array<{ moduleId: string; waitingFor: string[] }> = []
+
+    for (const loadedModule of this.modules.values()) {
+      if (loadedModule.state !== 'unsatisfied') continue
+
+      const reasons = this.unsatisfiedReasons(loadedModule.manifest)
+      result.push({
+        moduleId: loadedModule.manifest.id,
+        waitingFor: [
+          ...reasons.services,
+          ...reasons.modules.map(id => `module ${id}`)
+        ]
+      })
+    }
+
+    return result
   }
 
   /**
    * Load a single module
    */
   async loadModule(manifest: ModuleManifest): Promise<LoadedModule> {
-    // Check if already loaded
+    // Check if already loaded, or already waiting
     const existing = this.modules.get(manifest.id)
-    if (existing && existing.state === 'active') {
+    if (existing && (existing.state === 'active' || existing.state === 'unsatisfied')) {
       return existing
     }
 
@@ -260,6 +497,18 @@ export class ModuleLoader {
         timestamp: new Date()
       })
 
+      // Wait for what is missing instead of failing on it
+      const reasons = this.unsatisfiedReasons(manifest)
+      if (reasons.services.length > 0 || reasons.modules.length > 0) {
+        if (this.options.strictRequirements && reasons.services.length > 0) {
+          throw new Error(
+            `Module ${manifest.id} requires services that are not available: ${reasons.services.join(', ')}`
+          )
+        }
+        this.park(loadedModule, reasons)
+        return loadedModule
+      }
+
       // Activate
       await this.activate(loadedModule)
 
@@ -272,6 +521,10 @@ export class ModuleLoader {
       })
 
       this.logger.info(`Module ${manifest.id} activated`)
+
+      // This module may be what others were waiting for
+      this.enqueue(() => this.reconcile())
+
       return loadedModule
 
     } catch (error) {
@@ -461,26 +714,6 @@ export class ModuleLoader {
   private async activate(loadedModule: LoadedModule): Promise<void> {
     const manifest = loadedModule.manifest
 
-    // Check required services before activation
-    if (manifest.requiresService && manifest.requiresService.length > 0) {
-      const { satisfied, missing } = this.services.checkRequirements(manifest.requiresService)
-      if (!satisfied) {
-        const error = new Error(
-          `Module ${manifest.id} requires services that are not available: ${missing.join(', ')}`
-        )
-        loadedModule.state = 'error'
-        loadedModule.error = error
-        this.emit({
-          type: 'error',
-          moduleId: manifest.id,
-          manifest,
-          error,
-          timestamp: new Date()
-        })
-        throw error
-      }
-    }
-
     this.emit({
       type: 'activating',
       moduleId: manifest.id,
@@ -492,8 +725,6 @@ export class ModuleLoader {
       const context = this.createContext(loadedModule)
       await loadedModule.lifecycle.activate(context)
     }
-
-    this.trackRequirements(manifest)
 
     // Log provided services after activation
     if (manifest.provides && manifest.provides.length > 0) {
@@ -525,8 +756,17 @@ export class ModuleLoader {
       await loadedModule.lifecycle.deactivate(context)
     }
 
+    // Withdraw the module's remaining services. A module that unregisters in
+    // its own hook is unaffected; one that does not no longer leaves services
+    // pointing at stopped code. The resulting events cascade to consumers.
+    const released = this.scopes.get(loadedModule.manifest.id)?.releaseAll() ?? []
+    if (released.length > 0) {
+      this.logger.debug(
+        `Withdrew service(s) of ${loadedModule.manifest.id}: ${released.join(', ')}`
+      )
+    }
+
     loadedModule.state = 'stopped'
-    this.untrackRequirements(loadedModule.manifest)
 
     this.emit({
       type: 'deactivated',
@@ -544,9 +784,21 @@ export class ModuleLoader {
       manifest: loadedModule.manifest,
       getModule: <T>(moduleId: string) => this.getModuleExports<T>(moduleId),
       isModuleLoaded: (moduleId: string) => this.isLoaded(moduleId),
-      services: this.services,
+      services: this.scopeFor(loadedModule.manifest.id),
       log: new ConsoleLogger(`[${loadedModule.manifest.id}]`)
     }
+  }
+
+  /**
+   * The registry facade a module registers through
+   */
+  private scopeFor(moduleId: string): ScopedServiceRegistry {
+    let scope = this.scopes.get(moduleId)
+    if (!scope) {
+      scope = new ScopedServiceRegistry(moduleId, this.services)
+      this.scopes.set(moduleId, scope)
+    }
+    return scope
   }
 
   /**
@@ -578,6 +830,7 @@ export class ModuleLoader {
 
     // Remove
     this.modules.delete(moduleId)
+    this.scopes.delete(moduleId)
     delete window[moduleId]
 
     this.emit({

@@ -12,6 +12,7 @@ export type ModuleState =
   | 'loading'      // Module being loaded
   | 'activating'   // activate() being called
   | 'active'       // Module is running
+  | 'unsatisfied'  // Loaded, waiting for required services
   | 'deactivating' // deactivate() being called
   | 'stopped'      // Module stopped
   | 'error'        // Module failed
@@ -65,6 +66,15 @@ export interface ServiceRequirement {
 
   /** If true, module can work without this service */
   optional?: boolean
+
+  /**
+   * What happens when the service is withdrawn while the module is active
+   * - static (default): the module is deactivated and waits for the service to return
+   * - dynamic: the module stays active and is notified
+   *
+   * Only 'static' is implemented; 'dynamic' is accepted and behaves as 'static'.
+   */
+  policy?: 'static' | 'dynamic'
 }
 
 /**
@@ -353,6 +363,13 @@ export interface ModuleLoaderOptions {
   /** Custom service registry */
   serviceRegistry?: ServiceRegistry
 
+  /**
+   * Fail activation when a required service is missing, instead of parking
+   * the module in 'unsatisfied' until the service appears.
+   * Default: false (the module waits)
+   */
+  strictRequirements?: boolean
+
   /** Custom logger */
   logger?: ModuleLogger
 }
@@ -364,12 +381,14 @@ export interface ModuleEvent {
   type: 'registering' | 'loading' | 'loaded' | 'activating' | 'activated' |
         'deactivating' | 'deactivated' | 'error' | 'unloaded' |
         /** A service listed in requiresService was withdrawn while the module was active */
-        'service-withdrawn'
+        'service-withdrawn' |
+        /** Module is loaded but waiting for required services */
+        'unsatisfied'
   moduleId: string
   manifest?: ModuleManifest
   error?: Error
 
-  /** Service IDs this event refers to (set for 'service-withdrawn') */
+  /** Service IDs this event refers to (set for 'service-withdrawn' and 'unsatisfied') */
   serviceIds?: string[]
 
   timestamp: Date

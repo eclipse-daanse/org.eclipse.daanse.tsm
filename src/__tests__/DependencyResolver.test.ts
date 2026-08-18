@@ -479,3 +479,101 @@ describe('DependencyResolver', () => {
     })
   })
 })
+describe('DependencyResolver - service requirements as load order edges', () => {
+  function serviceManifest(
+    id: string,
+    options: {
+      provides?: string[]
+      requires?: Array<{ id: string; optional?: boolean }>
+      dependencies?: Dependency[]
+    } = {}
+  ): ModuleManifest {
+    return {
+      id,
+      name: id,
+      version: '1.0.0',
+      entry: `/${id}/remoteEntry.js`,
+      exports: {},
+      provides: options.provides?.map(serviceId => ({ id: serviceId })),
+      requiresService: options.requires,
+      dependencies: options.dependencies
+    }
+  }
+
+  function order(modules: ModuleManifest[]): string[] {
+    return new DependencyResolver().resolve(modules).loadOrder.map(m => m.id)
+  }
+
+  it('should order a provider before the module requiring its service', () => {
+    const result = order([
+      serviceManifest('consumer', { requires: [{ id: 'geo.service' }] }),
+      serviceManifest('provider', { provides: ['geo.service'] })
+    ])
+
+    expect(result.indexOf('provider')).toBeLessThan(result.indexOf('consumer'))
+  })
+
+  it('should order a service chain from provider to last consumer', () => {
+    const result = order([
+      serviceManifest('consumer', { requires: [{ id: 's2' }] }),
+      serviceManifest('middle', { requires: [{ id: 's1' }], provides: ['s2'] }),
+      serviceManifest('provider', { provides: ['s1'] })
+    ])
+
+    expect(result).toEqual(['provider', 'middle', 'consumer'])
+  })
+
+  it('should not create an edge for an optional service requirement', () => {
+    const result = new DependencyResolver().resolve([
+      serviceManifest('consumer', { requires: [{ id: 'geo.service', optional: true }] }),
+      serviceManifest('provider', { provides: ['geo.service'] })
+    ])
+
+    // No edge means no cycle risk and no forced order
+    expect(result.circular).toEqual([])
+    expect(result.loadOrder).toHaveLength(2)
+  })
+
+  it('should not create an edge to a service nobody provides', () => {
+    const result = new DependencyResolver().resolve([
+      serviceManifest('consumer', { requires: [{ id: 'nowhere.service' }] })
+    ])
+
+    expect(result.loadOrder.map(m => m.id)).toEqual(['consumer'])
+    expect(result.circular).toEqual([])
+  })
+
+  it('should not create a self edge for a module providing what it requires', () => {
+    const result = new DependencyResolver().resolve([
+      serviceManifest('self-contained', {
+        provides: ['own.service'],
+        requires: [{ id: 'own.service' }]
+      })
+    ])
+
+    expect(result.circular).toEqual([])
+    expect(result.loadOrder.map(m => m.id)).toEqual(['self-contained'])
+  })
+
+  it('should detect a cycle formed by service requirements', () => {
+    const result = new DependencyResolver().resolve([
+      serviceManifest('a', { provides: ['s.a'], requires: [{ id: 's.b' }] }),
+      serviceManifest('b', { provides: ['s.b'], requires: [{ id: 's.a' }] })
+    ])
+
+    expect(result.circular.length).toBeGreaterThan(0)
+    // A cycle must not lose modules from the load order
+    expect(result.loadOrder).toHaveLength(2)
+  })
+
+  it('should combine module dependencies with service edges', () => {
+    const result = order([
+      serviceManifest('ui', { dependencies: ['core'], requires: [{ id: 'geo.service' }] }),
+      serviceManifest('geo', { provides: ['geo.service'] }),
+      serviceManifest('core', {})
+    ])
+
+    expect(result.indexOf('core')).toBeLessThan(result.indexOf('ui'))
+    expect(result.indexOf('geo')).toBeLessThan(result.indexOf('ui'))
+  })
+})

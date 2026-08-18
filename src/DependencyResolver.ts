@@ -176,6 +176,51 @@ export class DependencyResolver {
   }
 
   /**
+   * Which module provides which service, by service ID.
+   * First declaration wins, matching how the registry resolves a single provider.
+   */
+  private serviceProviders(modules: Iterable<ModuleManifest>): Map<string, string> {
+    const providers = new Map<string, string>()
+    for (const mod of modules) {
+      for (const service of mod.provides ?? []) {
+        if (!providers.has(service.id)) {
+          providers.set(service.id, mod.id)
+        }
+      }
+    }
+    return providers
+  }
+
+  /**
+   * Module IDs a module has to be ordered after: its declared dependencies plus
+   * the providers of the services it requires.
+   *
+   * Without the service edges, load order has to be maintained by hand even
+   * though the manifests already say what a module needs.
+   */
+  private effectiveDependencyIds(
+    mod: ModuleManifest,
+    providers: Map<string, string>
+  ): string[] {
+    const ids = new Set<string>()
+
+    for (const dep of mod.dependencies ?? []) {
+      ids.add(getDependencyId(dep))
+    }
+
+    for (const requirement of mod.requiresService ?? []) {
+      if (requirement.optional) continue
+      const providerId = providers.get(requirement.id)
+      // A module providing what it requires needs no edge to itself
+      if (providerId && providerId !== mod.id) {
+        ids.add(providerId)
+      }
+    }
+
+    return [...ids]
+  }
+
+  /**
    * Detect circular dependencies using DFS
    */
   private detectCycles(modules: ModuleManifest[]): string[][] {
@@ -192,6 +237,8 @@ export class DependencyResolver {
       }
     }
 
+    const providers = this.serviceProviders(moduleMap.values())
+
     const dfs = (moduleId: string): boolean => {
       visited.add(moduleId)
       recursionStack.add(moduleId)
@@ -199,8 +246,7 @@ export class DependencyResolver {
 
       const mod = moduleMap.get(moduleId)
       if (mod) {
-        for (const dep of mod.dependencies ?? []) {
-          const depId = getDependencyId(dep)
+        for (const depId of this.effectiveDependencyIds(mod, providers)) {
           if (!visited.has(depId)) {
             if (dfs(depId)) return true
           } else if (recursionStack.has(depId)) {
@@ -238,6 +284,12 @@ export class DependencyResolver {
     // Deduplicate modules by ID (keep highest version)
     const uniqueModules = Array.from(moduleMap.values())
 
+    const providers = this.serviceProviders(uniqueModules)
+    const edges = new Map<string, string[]>()
+    for (const mod of uniqueModules) {
+      edges.set(mod.id, this.effectiveDependencyIds(mod, providers))
+    }
+
     // Calculate in-degree for each module
     const inDegree = new Map<string, number>()
     for (const mod of uniqueModules) {
@@ -245,8 +297,7 @@ export class DependencyResolver {
     }
 
     for (const mod of uniqueModules) {
-      for (const dep of mod.dependencies ?? []) {
-        const depId = getDependencyId(dep)
+      for (const depId of edges.get(mod.id) ?? []) {
         if (moduleMap.has(depId)) {
           inDegree.set(mod.id, (inDegree.get(mod.id) ?? 0) + 1)
         }
@@ -274,9 +325,7 @@ export class DependencyResolver {
 
       // Reduce in-degree for dependent modules
       for (const otherMod of uniqueModules) {
-        const dependsOnMod = otherMod.dependencies?.some(
-          dep => getDependencyId(dep) === mod.id
-        )
+        const dependsOnMod = edges.get(otherMod.id)?.includes(mod.id)
         if (dependsOnMod) {
           const newDegree = (inDegree.get(otherMod.id) ?? 1) - 1
           inDegree.set(otherMod.id, newDegree)
