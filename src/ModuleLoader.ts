@@ -12,7 +12,10 @@ import type {
   ModuleEvent,
   ModuleEventListener,
   ModuleLogger,
-  ServiceRegistry
+  ServiceRegistry,
+  ObservableServiceRegistry,
+  ServiceRegistryEvent,
+  ServiceRegistryListener
 } from './types.js'
 import { DependencyResolver } from './DependencyResolver.js'
 import { DefaultServiceRegistry } from './ServiceRegistry.js'
@@ -72,11 +75,97 @@ export class ModuleLoader {
   private options: Required<ModuleLoaderOptions>
   private services: ServiceRegistry
   private logger: ModuleLogger
+  /** Reverse index: service ID -> IDs of active modules that declared it in requiresService */
+  private requiredBy = new Map<string, Set<string>>()
+  private serviceListener?: ServiceRegistryListener
 
   constructor(options: ModuleLoaderOptions = {}) {
     this.options = { ...DEFAULT_OPTIONS, ...options }
     this.services = options.serviceRegistry ?? new DefaultServiceRegistry()
     this.logger = options.logger ?? new ConsoleLogger()
+    this.observeServiceRegistry()
+  }
+
+  /**
+   * Watch the registry for services that active modules depend on.
+   *
+   * Observation only: a withdrawal is reported, not acted upon. Tearing the
+   * consumer down (or rebinding it) is a lifecycle change and belongs with the
+   * `unsatisfied` state, not here.
+   */
+  private observeServiceRegistry(): void {
+    const registry = this.services as Partial<ObservableServiceRegistry>
+    if (typeof registry.addListener !== 'function') {
+      // Custom registries need not be observable
+      return
+    }
+
+    this.serviceListener = {
+      onServiceEvent: (event: ServiceRegistryEvent) => {
+        if (event.type !== 'unregistered') return
+        this.reportWithdrawal(event.serviceId)
+      }
+    }
+    registry.addListener(this.serviceListener)
+  }
+
+  private reportWithdrawal(serviceId: string): void {
+    const moduleIds = this.requiredBy.get(serviceId)
+    if (!moduleIds || moduleIds.size === 0) return
+
+    for (const moduleId of moduleIds) {
+      const loadedModule = this.modules.get(moduleId)
+      if (!loadedModule || loadedModule.state !== 'active') continue
+
+      this.logger.warn(
+        `Service ${serviceId} was unregistered while ${moduleId} is active and requires it`
+      )
+      this.emit({
+        type: 'service-withdrawn',
+        moduleId,
+        manifest: loadedModule.manifest,
+        serviceIds: [serviceId],
+        timestamp: new Date()
+      })
+    }
+  }
+
+  /**
+   * Track/untrack which active modules require which services
+   */
+  private trackRequirements(manifest: ModuleManifest): void {
+    for (const requirement of manifest.requiresService ?? []) {
+      let moduleIds = this.requiredBy.get(requirement.id)
+      if (!moduleIds) {
+        moduleIds = new Set<string>()
+        this.requiredBy.set(requirement.id, moduleIds)
+      }
+      moduleIds.add(manifest.id)
+    }
+  }
+
+  private untrackRequirements(manifest: ModuleManifest): void {
+    for (const requirement of manifest.requiresService ?? []) {
+      const moduleIds = this.requiredBy.get(requirement.id)
+      if (!moduleIds) continue
+      moduleIds.delete(manifest.id)
+      if (moduleIds.size === 0) {
+        this.requiredBy.delete(requirement.id)
+      }
+    }
+  }
+
+  /**
+   * Detach from the service registry. Call when the loader is discarded,
+   * otherwise its listener outlives it.
+   */
+  dispose(): void {
+    const registry = this.services as Partial<ObservableServiceRegistry>
+    if (this.serviceListener && typeof registry.removeListener === 'function') {
+      registry.removeListener(this.serviceListener)
+    }
+    this.serviceListener = undefined
+    this.requiredBy.clear()
   }
 
   /**
@@ -404,6 +493,8 @@ export class ModuleLoader {
       await loadedModule.lifecycle.activate(context)
     }
 
+    this.trackRequirements(manifest)
+
     // Log provided services after activation
     if (manifest.provides && manifest.provides.length > 0) {
       for (const service of manifest.provides) {
@@ -435,6 +526,7 @@ export class ModuleLoader {
     }
 
     loadedModule.state = 'stopped'
+    this.untrackRequirements(loadedModule.manifest)
 
     this.emit({
       type: 'deactivated',

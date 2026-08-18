@@ -233,3 +233,121 @@ describe('ModuleLoader integration', () => {
     expect(registry).toBe(customRegistry)
   })
 })
+describe('ModuleLoader - service withdrawal observation', () => {
+  interface GlobalWithWindow { window?: Record<string, unknown> }
+  const globalRef = globalThis as GlobalWithWindow
+  let savedWindow: Record<string, unknown> | undefined
+
+  beforeEach(() => {
+    savedWindow = globalRef.window
+    globalRef.window = {}
+  })
+
+  afterEach(() => {
+    globalRef.window = savedWindow
+  })
+
+  function requiringManifest(id: string, serviceIds: string[]): ModuleManifest {
+    return {
+      id,
+      name: id,
+      version: '1.0.0',
+      entry: `http://localhost/${id}/remoteEntry.js`,
+      exports: {},
+      requiresService: serviceIds.map(serviceId => ({ id: serviceId }))
+    }
+  }
+
+  async function loadActive(loader: ModuleLoader, manifest: ModuleManifest): Promise<void> {
+    // loadEntry() short-circuits on an existing window entry, so no import happens
+    globalRef.window![manifest.id] = { activate: vi.fn(), deactivate: vi.fn() }
+    loader.register([manifest])
+    const loaded = await loader.loadModule(manifest)
+    expect(loaded.state).toBe('active')
+  }
+
+  it('should emit service-withdrawn when a required service disappears', async () => {
+    const loader = new ModuleLoader()
+    const registry = loader.getServiceRegistry()
+    registry.register('geo.service', { locate: () => 'here' })
+
+    await loadActive(loader, requiringManifest('map-module', ['geo.service']))
+
+    const listener: ModuleEventListener = { onModuleEvent: vi.fn() }
+    loader.addEventListener(listener)
+
+    registry.unregister('geo.service')
+
+    expect(listener.onModuleEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'service-withdrawn',
+        moduleId: 'map-module',
+        serviceIds: ['geo.service']
+      })
+    )
+  })
+
+  it('should not emit for services no active module requires', async () => {
+    const loader = new ModuleLoader()
+    const registry = loader.getServiceRegistry()
+    registry.register('geo.service', { locate: () => 'here' })
+    registry.register('unrelated.service', {})
+
+    await loadActive(loader, requiringManifest('map-module', ['geo.service']))
+
+    const listener: ModuleEventListener = { onModuleEvent: vi.fn() }
+    loader.addEventListener(listener)
+
+    registry.unregister('unrelated.service')
+
+    expect(listener.onModuleEvent).not.toHaveBeenCalled()
+  })
+
+  it('should stop reporting once the module is unloaded', async () => {
+    const loader = new ModuleLoader()
+    const registry = loader.getServiceRegistry()
+    registry.register('geo.service', { locate: () => 'here' })
+
+    const manifest = requiringManifest('map-module', ['geo.service'])
+    await loadActive(loader, manifest)
+    await loader.unloadModule('map-module')
+
+    const listener: ModuleEventListener = { onModuleEvent: vi.fn() }
+    loader.addEventListener(listener)
+
+    registry.unregister('geo.service')
+
+    expect(listener.onModuleEvent).not.toHaveBeenCalled()
+  })
+
+  it('should detach from the registry on dispose', async () => {
+    const loader = new ModuleLoader()
+    const registry = loader.getServiceRegistry()
+    registry.register('geo.service', { locate: () => 'here' })
+
+    await loadActive(loader, requiringManifest('map-module', ['geo.service']))
+
+    const listener: ModuleEventListener = { onModuleEvent: vi.fn() }
+    loader.addEventListener(listener)
+    loader.dispose()
+
+    registry.unregister('geo.service')
+
+    expect(listener.onModuleEvent).not.toHaveBeenCalled()
+  })
+
+  it('should accept a registry that does not support listeners', () => {
+    const plainRegistry = {
+      register: vi.fn(),
+      get: vi.fn(),
+      getAll: vi.fn().mockReturnValue([]),
+      has: vi.fn(),
+      unregister: vi.fn()
+    }
+
+    expect(() => {
+      const loader = new ModuleLoader({ serviceRegistry: plainRegistry })
+      loader.dispose()
+    }).not.toThrow()
+  })
+})

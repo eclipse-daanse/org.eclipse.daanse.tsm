@@ -3,7 +3,16 @@
  * Service Registry - DI container for module services
  */
 
-import type { ServiceRegistry as IServiceRegistry, InjectableConstructor, BindClassOptions } from './types.js'
+import type {
+  ServiceRegistry as IServiceRegistry,
+  InjectableConstructor,
+  BindClassOptions,
+  ServiceRegistryEvent,
+  ServiceRegistryListener
+} from './types.js'
+
+// Re-exported for backwards compatibility; the definitions live in types.ts
+export type { ServiceRegistryEvent, ServiceRegistryListener }
 import { getInjectMetadata, getPropertyInjectMetadata, isInjectable, getScopeMetadata, type PropertyInjectMetadata } from './decorators.js'
 
 /**
@@ -43,17 +52,21 @@ export class DefaultServiceRegistry implements IServiceRegistry {
   private services = new Map<string, unknown>()
   private bindings = new Map<string, ServiceBinding>()
   private listeners = new Set<ServiceRegistryListener>()
+  /** Reverse index: primary service ID -> alias IDs created for it */
+  private aliasesOf = new Map<string, Set<string>>()
 
   /**
    * Register a service instance directly
    */
-  register<T>(id: string, service: T): void {
+  register<T>(id: string, service: T, options: { providedBy?: string } = {}): void {
     const existed = this.services.has(id) || this.bindings.has(id)
+    this.dropAliasesOf(id)
     this.services.set(id, service)
     // Also create a binding for consistency
     this.bindings.set(id, {
       instance: service,
-      scope: 'singleton'
+      scope: 'singleton',
+      providedBy: options.providedBy
     })
 
     this.notify({
@@ -72,6 +85,7 @@ export class DefaultServiceRegistry implements IServiceRegistry {
     options: { scope?: 'singleton' | 'transient'; providedBy?: string } = {}
   ): void {
     const existed = this.bindings.has(id)
+    this.dropAliasesOf(id)
     this.bindings.set(id, {
       factory,
       scope: options.scope ?? 'singleton',
@@ -112,6 +126,7 @@ export class DefaultServiceRegistry implements IServiceRegistry {
     const scope = options.scope ?? decoratorScope ?? 'singleton'
 
     const existed = this.bindings.has(id)
+    this.dropAliasesOf(id)
     this.bindings.set(id, {
       factory: (...resolvedDeps: unknown[]) => new ctor(...resolvedDeps),
       scope,
@@ -128,12 +143,26 @@ export class DefaultServiceRegistry implements IServiceRegistry {
 
     // Create alias bindings for implemented interfaces
     if (options.implements) {
+      let aliases = this.aliasesOf.get(id)
+      if (!aliases) {
+        aliases = new Set<string>()
+        this.aliasesOf.set(id, aliases)
+      }
+
       for (const interfaceId of options.implements) {
-        const aliasExisted = this.bindings.has(interfaceId)
+        const previous = this.bindings.get(interfaceId)
+        const aliasExisted = previous !== undefined
+        // Detach the ID from a primary it aliased before
+        if (previous?.aliasOf && previous.aliasOf !== id) {
+          this.aliasesOf.get(previous.aliasOf)?.delete(interfaceId)
+        }
+
         this.bindings.set(interfaceId, {
           scope,
           aliasOf: id
         })
+        aliases.add(interfaceId)
+
         this.notify({
           type: aliasExisted ? 'updated' : 'registered',
           serviceId: interfaceId,
@@ -241,7 +270,25 @@ export class DefaultServiceRegistry implements IServiceRegistry {
    * Check if a service exists (registered or bound)
    */
   has(id: string): boolean {
-    return this.services.has(id) || this.bindings.has(id)
+    return this.resolveExisting(id, new Set()) !== undefined
+  }
+
+  /**
+   * Resolve an ID to the binding that would actually serve it.
+   * Follows aliases, so an alias whose target is gone resolves to undefined.
+   */
+  private resolveExisting(id: string, seen: Set<string>): ServiceBinding | undefined {
+    if (seen.has(id)) return undefined
+    seen.add(id)
+
+    if (this.services.has(id)) {
+      return this.bindings.get(id) ?? { scope: 'singleton', instance: this.services.get(id) }
+    }
+
+    const binding = this.bindings.get(id)
+    if (!binding) return undefined
+    if (binding.aliasOf) return this.resolveExisting(binding.aliasOf, seen)
+    return binding
   }
 
   /**
@@ -279,19 +326,52 @@ export class DefaultServiceRegistry implements IServiceRegistry {
    */
   unregister(id: string): boolean {
     const service = this.services.get(id)
-    const hadBinding = this.bindings.has(id)
+    const binding = this.bindings.get(id)
+    const hadBinding = binding !== undefined
 
-    if (service !== undefined || hadBinding) {
-      this.services.delete(id)
-      this.bindings.delete(id)
+    if (service === undefined && !hadBinding) {
+      return false
+    }
+
+    // An alias only detaches itself from its target
+    if (binding?.aliasOf) {
+      this.aliasesOf.get(binding.aliasOf)?.delete(id)
+    }
+
+    this.services.delete(id)
+    this.bindings.delete(id)
+    this.notify({
+      type: 'unregistered',
+      serviceId: id,
+      service
+    })
+
+    // Aliases pointing here would otherwise survive as dangling entries,
+    // where has() reported the service while get() returned undefined
+    this.dropAliasesOf(id)
+
+    return true
+  }
+
+  /**
+   * Remove every alias binding that delegates to the given primary ID
+   */
+  private dropAliasesOf(primaryId: string): void {
+    const aliases = this.aliasesOf.get(primaryId)
+    if (!aliases) return
+    this.aliasesOf.delete(primaryId)
+
+    for (const aliasId of aliases) {
+      const alias = this.bindings.get(aliasId)
+      if (alias?.aliasOf !== primaryId) continue // reused for something else
+      this.bindings.delete(aliasId)
+      this.services.delete(aliasId)
       this.notify({
         type: 'unregistered',
-        serviceId: id,
-        service
+        serviceId: aliasId,
+        service: undefined
       })
-      return true
     }
-    return false
   }
 
   /**
@@ -317,7 +397,8 @@ export class DefaultServiceRegistry implements IServiceRegistry {
    * Clear all services
    */
   clear(): void {
-    for (const id of this.services.keys()) {
+    const ids = new Set([...this.services.keys(), ...this.bindings.keys()])
+    for (const id of ids) {
       this.unregister(id)
     }
   }
@@ -345,20 +426,4 @@ export class DefaultServiceRegistry implements IServiceRegistry {
       }
     }
   }
-}
-
-/**
- * Service registry event
- */
-export interface ServiceRegistryEvent {
-  type: 'registered' | 'updated' | 'unregistered'
-  serviceId: string
-  service: unknown
-}
-
-/**
- * Service registry listener
- */
-export interface ServiceRegistryListener {
-  onServiceEvent(event: ServiceRegistryEvent): void
 }
