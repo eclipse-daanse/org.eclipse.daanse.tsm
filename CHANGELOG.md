@@ -80,12 +80,23 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
   written for a Java `@Reference` reads the same here. Operators `&` `|` `!`, `=`, `>=`, `<=`, `~=`, presence
   and `*` wildcards. An invalid filter throws, naming the position, instead of silently matching nothing.
 
-  Semantics follow `org.osgi.framework.FilterImpl`, checked against it rather than guessed:
-  attribute names match **case-insensitively**; comparison is driven by the **type of the property value**, not
-  by what the filter text looks like (a string property compares lexically even when both sides parse as
-  numbers, so `(version>=10)` against `'9'` holds); a property holding an **array matches when any element
-  matches**; booleans have no ordering; `~=` strips whitespace and compares case-insensitively, the minimum
-  the spec allows.
+  Semantics follow `org.osgi.framework.FilterImpl` and are **verified against the OSGi framework TCK**: the
+  cases from `AbstractFilterTests` are part of this test suite, so conformance is checked against the reference
+  suite rather than against a reading of the spec. Consequences worth knowing:
+
+  - attribute names match **case-insensitively** (`cn` and `CN` are one attribute)
+  - comparison is driven by the **type of the property value**, not by the look of the filter text — a string
+    property compares lexically even when both sides parse as numbers, so `(version>=10)` holds for `'9'`
+  - a property holding an **array matches when any element matches**
+  - a **wildcard is a string operation**: `(intvalue=100*)` does not match `1000`
+  - booleans have no ordering, and a value the property's type cannot parse never matches, so `(count=)` does
+    not match `0`
+  - `&`, `|` and `!` are operators **only when a nested filter follows** — `(&=c)` asks about an attribute
+    literally named `&`, and `(!  ab=b)` about one named `!  ab`
+  - `~=` strips whitespace and compares case-insensitively, the minimum the spec allows
+
+  Not represented, for lack of an equivalent property type: `Character`, `BigInteger`/`BigDecimal` as distinct
+  types, `Version`, arbitrary `Comparable`, and filter normalisation (`Filter.toString()`).
 - **Service properties.** `register`/`bind`/`bindClass` take `properties`, and `ServiceDeclaration.properties`
   declares them in the manifest (a registration passing its own wins). `service.ranking` and
   `service.providedBy` are added by the registry, so they are filterable too. A filter narrows what satisfies
@@ -207,6 +218,15 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
 - `getAll(pattern)` is **deprecated**. It matches ID *names* with a wildcard and sees only services already
   instantiated, so a lazily bound provider is invisible until someone resolves it. Collect providers with
   `getServiceReferences(id, target?)` and select on properties instead of naming conventions.
+
+### Documentation
+
+- `SPEC.md` gained **§11.3 Modul-Konfiguration**: how to cover Configuration Admin's lifecycle semantics with
+  what TSM already has — configuration registered as a service per PID, with a mapping table from DS
+  (`configurationPolicy`, `modified`, factory configurations) to the equivalent TSM declarations. TSM
+  deliberately ships no Config Admin: in OSGi it is a separate specification that SCR merely consumes, and the
+  bulk of it is persistence and deployment, which belongs to the application. The one gap is named there too —
+  a target filter in the manifest is static, where DS allows configuration to override it.
 
 ### Deliberately unchanged
 

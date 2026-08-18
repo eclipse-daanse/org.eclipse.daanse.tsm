@@ -53,13 +53,16 @@ class FilterParser {
     const operator = this.source[this.position]
     let filter: ServiceFilter
 
-    if (operator === '&' || operator === '|') {
+    // '&', '|' and '!' introduce an operator only when a nested filter follows.
+    // Otherwise they are the first character of an attribute name — '(&=c)' asks
+    // about an attribute literally called '&'.
+    if ((operator === '&' || operator === '|') && this.filterFollows(1)) {
       this.position++
       const operands = this.parseOperands()
       filter = operator === '&'
         ? properties => operands.every(operand => operand(properties))
         : properties => operands.some(operand => operand(properties))
-    } else if (operator === '!') {
+    } else if (operator === '!' && this.filterFollows(1)) {
       this.position++
       const operand = this.parseFilter()
       filter = properties => !operand(properties)
@@ -70,6 +73,15 @@ class FilterParser {
     this.skipWhitespace()
     this.expect(')')
     return filter
+  }
+
+  /** Whether the next non-whitespace character after an offset opens a filter */
+  private filterFollows(offset: number): boolean {
+    let lookahead = this.position + offset
+    while (lookahead < this.source.length && /\s/.test(this.source[lookahead])) {
+      lookahead++
+    }
+    return this.source[lookahead] === '('
   }
 
   private parseOperands(): ServiceFilter[] {
@@ -109,7 +121,9 @@ class FilterParser {
       const pattern = substringPattern(parts)
       return properties => matches(
         readProperty(properties, attribute),
-        actual => pattern.test(String(actual))
+        // A wildcard is a string operation: OSGi does not apply it to numbers
+        // or booleans, so (intvalue=100*) does not match 1000
+        actual => typeof actual === 'string' && pattern.test(actual)
       )
     }
 
@@ -263,8 +277,20 @@ function matches(
 
 function equals(actual: ScalarValue, expected: string): boolean {
   if (typeof actual === 'boolean') return String(actual) === expected.trim()
-  if (typeof actual === 'number') return Number(expected.trim()) === actual
+  if (typeof actual === 'number') return numeric(expected) === actual
   return actual === expected
+}
+
+/**
+ * The filter value as a number, or NaN when it is not one.
+ *
+ * `Number('')` is 0, which would make `(count=)` match a property of 0 —
+ * OSGi rejects a value its type cannot parse, so an empty string must not
+ * become a number here.
+ */
+function numeric(value: string): number {
+  const trimmed = value.trim()
+  return trimmed.length === 0 ? Number.NaN : Number(trimmed)
 }
 
 /**
@@ -280,7 +306,7 @@ function compare(actual: ScalarValue, expected: string, operator: '>=' | '<='): 
   }
 
   if (typeof actual === 'number') {
-    const expectedNumber = Number(expected.trim())
+    const expectedNumber = numeric(expected)
     if (Number.isNaN(expectedNumber)) return false
     return operator === '>=' ? actual >= expectedNumber : actual <= expectedNumber
   }

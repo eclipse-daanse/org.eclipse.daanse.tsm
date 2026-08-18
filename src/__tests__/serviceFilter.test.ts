@@ -149,12 +149,181 @@ describe('createServiceFilter', () => {
       expect(() => createServiceFilter('kind=chart')).toThrow("expected '('")
       expect(() => createServiceFilter('(kind=chart')).toThrow("expected ')'")
       expect(() => createServiceFilter('(=chart)')).toThrow('missing attribute name')
-      expect(() => createServiceFilter('(&)')).toThrow('operator without operands')
+      // '&' without a nested filter is an attribute name, so what is missing is the operator
+      expect(() => createServiceFilter('(&)')).toThrow('expected =')
+      expect(() => createServiceFilter('(&(a=1)')).toThrow("expected ')'")
       expect(() => createServiceFilter('(kind=chart)(x=y)')).toThrow('trailing input')
     })
 
     it('should include the expression in the message', () => {
       expect(() => createServiceFilter('(kind')).toThrow("'(kind'")
+    })
+  })
+})
+
+/**
+ * Cases taken from the OSGi framework TCK, org.osgi.test.cases.framework
+ * junit/filter/AbstractFilterTests.java (Apache-2.0), so conformance is checked
+ * against the reference suite rather than against my reading of the spec.
+ *
+ * Left out are property types this registry has no equivalent for: Character,
+ * BigInteger/BigDecimal as distinct types, Version, arbitrary Comparable, and a
+ * property holding an opaque object. Everything expressible with string, number,
+ * boolean and arrays of those is kept verbatim.
+ */
+describe('OSGi TCK filter cases', () => {
+  // Mirrors AbstractFilterTests.getProperties(), reduced to representable types
+  const props: Record<string, string | number | boolean | ReadonlyArray<string | number | boolean>> = {
+    room: 'bedroom',
+    channel: [34, '101'],
+    status: '(on\\)*',
+    'max record time': [150, '100'],
+    canrecord: 'true(x)',
+    shortvalue: 1000,
+    intvalue: 100000,
+    longvalue: 10000000000,
+    bytevalue: 10,
+    floatvalue: 1.01,
+    doublevalue: 2.01,
+    booleanvalue: true,
+    primintarrayvalue: [1, 2, 3],
+    primlongarrayvalue: [1, 2, 3],
+    primbytearrayvalue: [1, 2, 3],
+    primshortarrayvalue: [1, 2, 3],
+    primfloatarrayvalue: [1.1, 2.2, 3.3],
+    primdoublearrayvalue: [1.1, 2.2, 3.3],
+    primbooleanarrayvalue: [false],
+    bigintvalue: 4123456,
+    bigdecvalue: 4.123456,
+    '*': 'foo',
+    '!  ab': 'b',
+    '|   ab': 'b',
+    '&    ab': 'b',
+    '!': 'c',
+    '|': 'c',
+    '&': 'c',
+    empty: '',
+    space: ' '
+  }
+
+  function matches(expression: string): boolean {
+    return createServiceFilter(expression)(props)
+  }
+
+  describe('matching (testCaseInsensitive / testCaseSensitive)', () => {
+    const shouldMatch = [
+      '(room=*)',
+      '(room=bedroom)',
+      '(room~= B E D R O O M )',
+      ' ( room >=aaaa)',
+      '  ( room =b*) ',
+      '  ( room =*m) ',
+      '(room=bed*room)',
+      '  ( room =b*oo*m) ',
+      '  ( room =*b*oo*m*) ',
+      '  (& (room =bedroom) (channel ~= 34))',
+      '(| (room =bed*)(channel=222)) ',
+      '(| (room =boom*)(channel=101)) ',
+      '  (! (room =ab*b*oo*m*) ) ',
+      '  (status =\\(o*\\\\\\)\\*) ',
+      '  (canRecord =true\\(x\\)) ',
+      '(max Record Time <=140) ',
+      '(shortValue >= 100) ',
+      '(intValue <= 100001) ',
+      '(longValue >= 10000000000 ) ',
+      '  (  &  (  byteValue <= 100  )  (  byteValue >= 10  )  )  ',
+      '(bigIntValue =4123456) ',
+      '(bigDecValue =4.123456) ',
+      '(floatValue >= 1.0) ',
+      '(doubleValue <= 2.011) ',
+      '(booleanValue = true) ',
+      '(primIntArrayValue = 1) ',
+      '(primLongArrayValue = 2) ',
+      '(primByteArrayValue = 3) ',
+      '(primShortArrayValue = 1) ',
+      '(primFloatArrayValue = 1.1) ',
+      '(primDoubleArrayValue = 2.2) ',
+      '(primBooleanArrayValue = false ) ',
+      '(& (| (room =d*m) (room =bed*) (room=abc)) (! (channel=999)))',
+      '(*=foo)',
+      '(!  ab=b)',
+      '(|   ab=b)',
+      '(&=c)',
+      '(!=c)',
+      '(|=c)',
+      '(&    ab=b)',
+      '(empty=)',
+      '(empty=*)',
+      '(space= )',
+      '(space=*)'
+    ]
+
+    const shouldNotMatch = [
+      '(room=abc)',
+      '(room <=aaaa)',
+      '  ( room =b*b*  *m*) ',
+      '  (&  (room =b*)  (room =*x) (channel=34))',
+      '(!ab=*)',
+      '(|ab=*)',
+      '(&ab=*)'
+    ]
+
+    it.each(shouldMatch)('should match %s', expression => {
+      expect(matches(expression)).toBe(true)
+    })
+
+    it.each(shouldNotMatch)('should not match %s', expression => {
+      expect(matches(expression)).toBe(false)
+    })
+  })
+
+  describe('invalid values (testInvalidValues)', () => {
+    const present = ['intvalue', 'longvalue', 'shortvalue', 'bytevalue', 'floatvalue', 'doublevalue', 'booleanvalue']
+
+    it.each(present)('should report %s as present', attribute => {
+      expect(matches(`(${attribute}=*)`)).toBe(true)
+    })
+
+    it.each(present)('should not match %s against a non-value', attribute => {
+      expect(matches(`(${attribute}=b)`)).toBe(false)
+      expect(matches(`(${attribute}=)`)).toBe(false)
+    })
+  })
+
+  describe('substring against non-strings (testScalarSubstring)', () => {
+    const cases = [
+      '(shortvalue =100*) ',
+      '(intvalue =100*) ',
+      '(longvalue =100*) ',
+      '(  bytevalue =1*00  )',
+      '(bigintvalue =4*23456) ',
+      '(bigdecvalue =4*123456) ',
+      '(floatvalue =1*0) ',
+      '(doublevalue =2*011) ',
+      '(booleanvalue =t*ue) '
+    ]
+
+    it.each(cases)('should not apply a wildcard to %s', expression => {
+      expect(matches(expression)).toBe(false)
+    })
+  })
+
+  describe('invalid filters (testInvalidFilter)', () => {
+    const invalid = [
+      '',
+      '()',
+      '(=foo)',
+      '(',
+      '(abc = ))',
+      '(& (abc = xyz) (& (345))',
+      '  (room = b**oo!*m*) ) ',
+      '  (room = b**oo)*m*) ) ',
+      '  (room = *=b**oo*m*) ) ',
+      '  (room = =b**oo*m*) ) '
+    ]
+
+    it.each(invalid)('should reject %s', expression => {
+      expect(() => createServiceFilter(expression)).toThrow()
     })
   })
 })

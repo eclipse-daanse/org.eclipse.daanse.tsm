@@ -780,6 +780,12 @@ interface ModuleLoaderOptions {
   /** Custom ServiceRegistry */
   serviceRegistry?: ServiceRegistry
 
+  /**
+   * Aktivierung mit fehlendem Pflicht-Service scheitern lassen, statt das Modul
+   * in `unsatisfied` zu parken - Default: false (das Modul wartet)
+   */
+  strictRequirements?: boolean
+
   /** Custom Logger */
   logger?: ModuleLogger
 }
@@ -802,6 +808,72 @@ interface PluginRegistryOptions {
   cacheTtl?: number
 }
 ```
+
+### 11.3 Modul-Konfiguration
+
+TSM bringt **keinen** Configuration Admin mit. Der Grund ist nicht Aufwand, sondern
+Zuständigkeit: In OSGi ist Config Admin eine eigene Spezifikation, die die SCR lediglich
+*konsumiert* — und der überwiegende Teil davon ist Persistenz und Deployment. Wo
+Konfigurationswerte herkommen (Backend, `localStorage`, Build-Artefakt), ist eine
+Entscheidung der Anwendung, nicht des Modulsystems.
+
+Was Config Admin an **Lebenszyklus-Semantik** beiträgt, ist mit den vorhandenen Mitteln
+bereits ausdrückbar: Konfiguration wird als Service pro PID registriert.
+
+```typescript
+// config-module - liefert die Konfiguration als Service
+export async function activate(context: ModuleContext) {
+  const settings = await fetch('/api/settings').then(response => response.json())
+
+  for (const [pid, values] of Object.entries(settings)) {
+    context.services.register(`config/${pid}`, values)
+  }
+}
+```
+
+```json
+// map-module/manifest.json - wartet, bis seine Konfiguration da ist
+{
+  "id": "map-module",
+  "requiresService": [
+    { "id": "config/map-module", "policy": "dynamic" }
+  ]
+}
+```
+
+```typescript
+// map-module - liest die Konfiguration und reagiert auf Änderungen
+export async function activate(context: ModuleContext) {
+  const config = context.services.getRequired<MapSettings>('config/map-module')
+  initialiseMap(config.tileUrl)
+}
+
+export function onServiceBound(context: ModuleContext, serviceId: string) {
+  if (serviceId === 'config/map-module') applyConfiguration(context)
+}
+```
+
+Damit ergibt sich die Semantik der Configuration-Admin-Integration von DS aus
+Bordmitteln:
+
+| OSGi Declarative Services | TSM |
+| --- | --- |
+| `configurationPolicy = require` | Pflicht-`requiresService` auf die Config-ID; das Modul wird geparkt, bis sie existiert |
+| `configurationPolicy = optional` | `optional: true` bzw. `cardinality: "0..1"` |
+| `configurationPolicy = ignore` | kein Requirement deklarieren |
+| kein `modified` → deactivate/activate | `policyOption: "greedy"` — eine erneute Registrierung derselben ID ist eine neue Registrierung, der Loader erkennt den Wechsel und baut das Modul neu auf |
+| `modified`-Methode | `policy: "dynamic"` mit `onServiceBound` |
+| Factory-Konfigurationen (mehrere Instanzen einer Vorlage) | mehrere Provider derselben ID mit unterschiedlichen `properties`, konsumiert über `cardinality: "0..n"` und Target-Filter |
+| Config-PID | Service-ID, konventionell `config/<modul-id>` |
+
+**Bekannte Grenze:** Ein Target-Filter im Manifest ist statisch — DS erlaubt es, ihn per
+Konfiguration (`<referenz>.target`) zu überschreiben. Auf Code-Ebene ist das kein
+Problem, `getServiceReferences(id, target)` nimmt jeden zur Laufzeit gebildeten Filter;
+nur die *deklarative* Erfüllungsbedingung liegt fest. Ein Override-Mechanismus wird
+ergänzt, wenn ein konkreter Fall dafür existiert.
+
+**Metatype** (Schema-Beschreibung für generierte Admin-Oberflächen) hat in TSM kein
+Gegenstück und ist Sache der Anwendung.
 
 ---
 
