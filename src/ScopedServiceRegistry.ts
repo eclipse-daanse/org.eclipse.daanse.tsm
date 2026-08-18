@@ -8,6 +8,9 @@ import type {
   ServiceRegistry as IServiceRegistry,
   InjectableConstructor,
   BindClassOptions,
+  ServiceCardinality,
+  ServiceReference,
+  ServiceRegistration,
   ServiceRegistryListener
 } from './types.js'
 
@@ -23,39 +26,66 @@ import type {
  * Reads are passed straight through: a module sees every service, not only its own.
  */
 export class ScopedServiceRegistry implements IObservableServiceRegistry {
-  /** Primary IDs registered through this facade, in registration order */
-  private ownIds = new Set<string>()
+  /** Registrations made through this facade, in registration order */
+  private ownRegistrations: ServiceRegistration[] = []
   /** Listeners this module added, so they do not outlive it */
   private ownListeners = new Set<ServiceRegistryListener>()
 
+  /**
+   * @param declaredRankings Rankings from the manifest's `provides`, applied when
+   *   a registration passes none of its own
+   */
   constructor(
     private readonly moduleId: string,
-    private readonly target: IServiceRegistry
+    private readonly target: IServiceRegistry,
+    private readonly declaredRankings: Map<string, number> = new Map()
   ) {}
 
-  register<T>(id: string, service: T, options: { providedBy?: string } = {}): void {
-    this.ownIds.add(id)
-    this.target.register(id, service, { providedBy: options.providedBy ?? this.moduleId })
+  private rankingFor(id: string, given?: number): number | undefined {
+    return given ?? this.declaredRankings.get(id)
+  }
+
+  register<T>(
+    id: string,
+    service: T,
+    options: { providedBy?: string; ranking?: number } = {}
+  ): ServiceRegistration {
+    return this.track(this.target.register(id, service, {
+      ...options,
+      providedBy: options.providedBy ?? this.moduleId,
+      ranking: this.rankingFor(id, options.ranking)
+    }))
   }
 
   bind<T>(
     id: string,
     factory: () => T,
-    options: { scope?: 'singleton' | 'transient'; providedBy?: string } = {}
-  ): void {
-    this.ownIds.add(id)
-    this.target.bind(id, factory, { ...options, providedBy: options.providedBy ?? this.moduleId })
+    options: { scope?: 'singleton' | 'transient'; providedBy?: string; ranking?: number } = {}
+  ): ServiceRegistration {
+    return this.track(this.target.bind(id, factory, {
+      ...options,
+      providedBy: options.providedBy ?? this.moduleId,
+      ranking: this.rankingFor(id, options.ranking)
+    }))
   }
 
   bindClass<T>(
     id: string,
     ctor: InjectableConstructor<T>,
     options: BindClassOptions = {}
-  ): void {
-    this.ownIds.add(id)
-    // Alias bindings from `implements` are removed with their primary,
+  ): ServiceRegistration {
+    // Alias registrations from `implements` are removed with their primary,
     // so they need no separate tracking
-    this.target.bindClass(id, ctor, { ...options, providedBy: options.providedBy ?? this.moduleId })
+    return this.track(this.target.bindClass(id, ctor, {
+      ...options,
+      providedBy: options.providedBy ?? this.moduleId,
+      ranking: this.rankingFor(id, options.ranking)
+    }))
+  }
+
+  private track(registration: ServiceRegistration): ServiceRegistration {
+    this.ownRegistrations.push(registration)
+    return registration
   }
 
   get<T>(id: string): T | undefined {
@@ -74,16 +104,44 @@ export class ScopedServiceRegistry implements IObservableServiceRegistry {
     return this.target.has(id)
   }
 
-  checkRequirements(requirements: Array<{ id: string; optional?: boolean }>): {
+  checkRequirements(
+    requirements: Array<{ id: string; optional?: boolean; cardinality?: ServiceCardinality }>
+  ): {
     satisfied: boolean
     missing: string[]
   } {
     return this.target.checkRequirements(requirements)
   }
 
+  getServiceReferences(id: string): ServiceReference[] {
+    return this.target.getServiceReferences(id)
+  }
+
+  resolveReference<T>(reference: ServiceReference): T | undefined {
+    return this.target.resolveReference<T>(reference)
+  }
+
+  countProviders(id: string): number {
+    return this.target.countProviders(id)
+  }
+
+  /**
+   * Withdraw this module's registrations for an ID.
+   *
+   * Only its own: with several providers per ID, delegating to the shared
+   * `unregister(id)` would take other modules' registrations along. An ID this
+   * module never registered still falls through to the shared registry.
+   */
   unregister(id: string): boolean {
-    this.ownIds.delete(id)
-    return this.target.unregister(id)
+    const mine = this.ownRegistrations.filter(registration => registration.serviceId === id)
+    if (mine.length === 0) {
+      return this.target.unregister(id)
+    }
+
+    this.ownRegistrations = this.ownRegistrations.filter(
+      registration => registration.serviceId !== id
+    )
+    return mine.map(registration => registration.unregister()).some(removed => removed)
   }
 
   getBindingInfo(id: string): { scope: 'singleton' | 'transient'; providedBy?: string } | undefined {
@@ -140,7 +198,7 @@ export class ScopedServiceRegistry implements IObservableServiceRegistry {
 
   /** IDs this module registered and has not withdrawn itself */
   getOwnServiceIds(): string[] {
-    return [...this.ownIds]
+    return [...new Set(this.ownRegistrations.map(registration => registration.serviceId))]
   }
 
   /**
@@ -156,12 +214,12 @@ export class ScopedServiceRegistry implements IObservableServiceRegistry {
 
     const released: string[] = []
     // Reverse order, so a service registered later is withdrawn first
-    for (const id of [...this.ownIds].reverse()) {
-      if (this.target.unregister(id)) {
-        released.push(id)
+    for (const registration of [...this.ownRegistrations].reverse()) {
+      if (registration.unregister()) {
+        released.push(registration.serviceId)
       }
     }
-    this.ownIds.clear()
+    this.ownRegistrations = []
     return released
   }
 }

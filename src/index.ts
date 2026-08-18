@@ -37,6 +37,9 @@ export type {
   // Service/DI types
   ServiceDeclaration,
   ServiceRequirement,
+  ServiceCardinality,
+  ServiceRegistration,
+  ServiceReference,
   ServiceRegistry,
   ObservableServiceRegistry,
   ServiceRegistryEvent,

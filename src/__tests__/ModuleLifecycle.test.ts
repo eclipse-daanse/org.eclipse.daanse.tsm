@@ -13,8 +13,13 @@ interface GlobalWithWindow { window?: Record<string, unknown> }
 const globalRef = globalThis as GlobalWithWindow
 
 interface StubOptions {
-  requires?: Array<{ id: string; optional?: boolean; policy?: 'static' | 'dynamic' }>
-  provides?: string[]
+  requires?: Array<{
+    id: string
+    optional?: boolean
+    policy?: 'static' | 'dynamic'
+    cardinality?: '0..1' | '1..1' | '0..n' | '1..n'
+  }>
+  provides?: Array<string | { id: string; ranking: number }>
   dependencies?: string[]
   onActivate?: (services: ObservableServiceRegistry) => void
   onDeactivate?: (services: ObservableServiceRegistry) => void
@@ -34,7 +39,9 @@ function stub(loader: ModuleLoader, id: string, options: StubOptions = {}): Modu
     entry: `http://localhost/${id}/remoteEntry.js`,
     exports: {},
     requiresService: options.requires,
-    provides: options.provides?.map(serviceId => ({ id: serviceId })),
+    provides: options.provides?.map(service =>
+      typeof service === 'string' ? { id: service } : service
+    ),
     dependencies: options.dependencies
   }
 
@@ -711,6 +718,173 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
       await loader.settle()
 
       expect(seen).toEqual([])
+    })
+  })
+
+  describe('several providers for one service', () => {
+    it('should keep the consumer active when a stand-in takes over', async () => {
+      const loader = new ModuleLoader()
+      const registry = loader.getServiceRegistry()
+      const onDeactivate = vi.fn()
+
+      stub(loader, 'default-geo', {
+        provides: ['geo.service'],
+        onActivate: services => { services.register('geo.service', { tag: 'default' }) }
+      })
+      stub(loader, 'premium-geo', {
+        provides: [{ id: 'geo.service', ranking: 10 }],
+        onActivate: services => { services.register('geo.service', { tag: 'premium' }) }
+      })
+      stub(loader, 'map', { requires: [{ id: 'geo.service' }], onDeactivate })
+
+      await loader.loadAll()
+
+      expect(registry.get('geo.service')).toEqual({ tag: 'premium' })
+      expect(loader.getModule('map')?.state).toBe('active')
+
+      // The better provider goes; the default one is still registered
+      await loader.unloadModule('premium-geo')
+
+      expect(registry.get('geo.service')).toEqual({ tag: 'default' })
+      expect(loader.getModule('map')?.state).toBe('active')
+      expect(onDeactivate).not.toHaveBeenCalled()
+    })
+
+    it('should apply the ranking declared in the manifest', async () => {
+      const loader = new ModuleLoader()
+      const registry = loader.getServiceRegistry()
+
+      stub(loader, 'strong', {
+        provides: [{ id: 'geo.service', ranking: 5 }],
+        onActivate: services => { services.register('geo.service', { tag: 'strong' }) }
+      })
+      stub(loader, 'weak', {
+        provides: ['geo.service'],
+        onActivate: services => { services.register('geo.service', { tag: 'weak' }) }
+      })
+
+      await loader.loadAll()
+
+      expect(registry.get('geo.service')).toEqual({ tag: 'strong' })
+      expect(registry.countProviders('geo.service')).toBe(2)
+    })
+
+    it('should only withdraw its own registration when a module is torn down', async () => {
+      const loader = new ModuleLoader()
+      const registry = loader.getServiceRegistry()
+
+      stub(loader, 'a', {
+        provides: ['widget.chart'],
+        onActivate: services => { services.register('widget.chart', { from: 'a' }) }
+      })
+      stub(loader, 'b', {
+        provides: ['widget.chart'],
+        onActivate: services => { services.register('widget.chart', { from: 'b' }) }
+      })
+      await loader.loadAll()
+      expect(registry.countProviders('widget.chart')).toBe(2)
+
+      await loader.unloadModule('b')
+
+      expect(registry.countProviders('widget.chart')).toBe(1)
+      expect(registry.get('widget.chart')).toEqual({ from: 'a' })
+    })
+
+    it('should tear the consumer down only when the last provider is gone', async () => {
+      const loader = new ModuleLoader()
+
+      stub(loader, 'a', {
+        provides: ['widget.chart'],
+        onActivate: services => { services.register('widget.chart', { from: 'a' }) }
+      })
+      stub(loader, 'b', {
+        provides: ['widget.chart'],
+        onActivate: services => { services.register('widget.chart', { from: 'b' }) }
+      })
+      stub(loader, 'palette', { requires: [{ id: 'widget.chart', cardinality: '1..n' }] })
+      await loader.loadAll()
+
+      await loader.unloadModule('b')
+      expect(loader.getModule('palette')?.state).toBe('active')
+
+      await loader.unloadModule('a')
+      expect(loader.getModule('palette')?.state).toBe('unsatisfied')
+    })
+
+    it('should not require a provider for 0..n', async () => {
+      const loader = new ModuleLoader()
+
+      stub(loader, 'palette', { requires: [{ id: 'widget.chart', cardinality: '0..n' }] })
+      await loader.loadAll()
+
+      expect(loader.getModule('palette')?.state).toBe('active')
+    })
+
+    it('should notify a dynamic collector when the set grows or shrinks', async () => {
+      const loader = new ModuleLoader()
+      const bound: string[] = []
+      const unbound: string[] = []
+
+      stub(loader, 'first', {
+        provides: ['widget.chart'],
+        onActivate: services => { services.register('widget.chart', { from: 'first' }) }
+      })
+      stub(loader, 'palette', {
+        requires: [{ id: 'widget.chart', cardinality: '0..n', policy: 'dynamic' }],
+        onServiceBound: id => { bound.push(id) },
+        onServiceUnbound: id => { unbound.push(id) }
+      })
+      await loader.loadAll()
+      // The provider present at activation is not reported
+      expect(bound).toEqual([])
+
+      // A second widget arrives — the palette has to hear about it
+      const second = stub(loader, 'second', {
+        provides: ['widget.chart'],
+        onActivate: services => { services.register('widget.chart', { from: 'second' }) }
+      })
+      await loader.loadModule(second)
+      await loader.settle()
+
+      expect(bound).toEqual(['widget.chart'])
+      expect(loader.getModule('palette')?.state).toBe('active')
+
+      await loader.unloadModule('second')
+
+      expect(unbound).toEqual(['widget.chart'])
+      expect(loader.getModule('palette')?.state).toBe('active')
+    })
+
+    it('should let a collector enumerate providers without instantiating them', async () => {
+      const loader = new ModuleLoader()
+      const built: string[] = []
+      let collected: string[] = []
+
+      stub(loader, 'a', {
+        provides: ['widget.chart'],
+        onActivate: services => {
+          services.bind('widget.chart', () => { built.push('a'); return { from: 'a' } })
+        }
+      })
+      stub(loader, 'b', {
+        provides: ['widget.chart'],
+        onActivate: services => {
+          services.bind('widget.chart', () => { built.push('b'); return { from: 'b' } })
+        }
+      })
+      stub(loader, 'palette', {
+        requires: [{ id: 'widget.chart', cardinality: '0..n' }],
+        onActivate: services => {
+          collected = services
+            .getServiceReferences('widget.chart')
+            .map(reference => reference.providedBy ?? '?')
+        }
+      })
+
+      await loader.loadAll()
+
+      expect(collected.sort()).toEqual(['a', 'b'])
+      expect(built).toEqual([])
     })
   })
 

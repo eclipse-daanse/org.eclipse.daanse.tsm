@@ -93,8 +93,12 @@ export class ModuleLoader {
   /** Activations per cascade, to catch a module that flips between states forever */
   private cascadeActivations = new Map<string, number>()
   private disposed = false
-  /** Per module: which of its dynamic requirements were available at the last check */
-  private dynamicBindings = new Map<string, Set<string>>()
+  /**
+   * Per module: how many providers each of its dynamic requirements had at the
+   * last check. A count, not a flag, so a module consuming cardinality 0..n
+   * hears about a provider joining or leaving an already non-empty set.
+   */
+  private dynamicBindings = new Map<string, Map<string, number>>()
   /** Module-scoped registry facades, so a teardown can withdraw what a module registered */
   private scopes = new Map<string, ScopedServiceRegistry>()
   /** Serializes reactions to registry events; they are async, the events are not */
@@ -264,17 +268,16 @@ export class ModuleLoader {
       if (dynamicIds.length === 0) continue
 
       const moduleId = loadedModule.manifest.id
-      const previous = this.dynamicBindings.get(moduleId) ?? new Set<string>()
-      const current = new Set(dynamicIds.filter(serviceId => this.services.has(serviceId)))
+      const previous = this.dynamicBindings.get(moduleId) ?? new Map<string, number>()
+      const current = this.countDynamicProviders(dynamicIds)
       this.dynamicBindings.set(moduleId, current)
 
-      for (const serviceId of previous) {
-        if (!current.has(serviceId)) {
+      for (const serviceId of dynamicIds) {
+        const before = previous.get(serviceId) ?? 0
+        const now = current.get(serviceId) ?? 0
+        if (now < before) {
           await this.callDynamicHook(loadedModule, 'onServiceUnbound', serviceId)
-        }
-      }
-      for (const serviceId of current) {
-        if (!previous.has(serviceId)) {
+        } else if (now > before) {
           await this.callDynamicHook(loadedModule, 'onServiceBound', serviceId)
         }
       }
@@ -311,10 +314,27 @@ export class ModuleLoader {
       .map(requirement => requirement.id)
     if (dynamicIds.length === 0) return
 
-    this.dynamicBindings.set(
-      manifest.id,
-      new Set(dynamicIds.filter(serviceId => this.services.has(serviceId)))
-    )
+    this.dynamicBindings.set(manifest.id, this.countDynamicProviders(dynamicIds))
+  }
+
+  /**
+   * How many providers each service currently has. Falls back to presence for a
+   * registry that predates countProviders().
+   */
+  private countDynamicProviders(serviceIds: string[]): Map<string, number> {
+    const counts = new Map<string, number>()
+    for (const serviceId of serviceIds) {
+      counts.set(serviceId, this.countProviders(serviceId))
+    }
+    return counts
+  }
+
+  private countProviders(serviceId: string): number {
+    const registry = this.services as Partial<ServiceRegistry>
+    if (typeof registry.countProviders === 'function') {
+      return registry.countProviders(serviceId)
+    }
+    return this.services.has(serviceId) ? 1 : 0
   }
 
   private async parkUnsatisfiedActive(): Promise<void> {
@@ -892,7 +912,13 @@ export class ModuleLoader {
   private scopeFor(moduleId: string): ScopedServiceRegistry {
     let scope = this.scopes.get(moduleId)
     if (!scope) {
-      scope = new ScopedServiceRegistry(moduleId, this.services)
+      const declaredRankings = new Map<string, number>()
+      for (const service of this.manifests.get(moduleId)?.provides ?? []) {
+        if (service.ranking !== undefined) {
+          declaredRankings.set(service.id, service.ranking)
+        }
+      }
+      scope = new ScopedServiceRegistry(moduleId, this.services, declaredRankings)
       this.scopes.set(moduleId, scope)
     }
     return scope

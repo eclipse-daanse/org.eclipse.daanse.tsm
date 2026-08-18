@@ -130,6 +130,66 @@ describe('ScopedServiceRegistry', () => {
     })
   })
 
+  describe('several providers', () => {
+    it('should withdraw only its own registration', () => {
+      const { shared, scope } = setup()
+      shared.register('widget.chart', { from: 'other' }, { providedBy: 'other-module' })
+      scope.register('widget.chart', { from: 'mine' })
+
+      scope.releaseAll()
+
+      expect(shared.countProviders('widget.chart')).toBe(1)
+      expect(shared.get('widget.chart')).toEqual({ from: 'other' })
+    })
+
+    it('should withdraw only its own on unregister(id)', () => {
+      const { shared, scope } = setup()
+      shared.register('widget.chart', { from: 'other' }, { providedBy: 'other-module' })
+      scope.register('widget.chart', { from: 'mine' })
+
+      expect(scope.unregister('widget.chart')).toBe(true)
+
+      expect(shared.countProviders('widget.chart')).toBe(1)
+      expect(shared.get('widget.chart')).toEqual({ from: 'other' })
+    })
+
+    it('should still reach a foreign service it never registered', () => {
+      const { shared, scope } = setup()
+      shared.register('foreign.service', {}, { providedBy: 'other-module' })
+
+      expect(scope.unregister('foreign.service')).toBe(true)
+      expect(shared.has('foreign.service')).toBe(false)
+    })
+
+    it('should apply a ranking declared in the manifest', () => {
+      const shared = new DefaultServiceRegistry()
+      const scope = new ScopedServiceRegistry('map-module', shared, new Map([['geo.service', 7]]))
+
+      const registration = scope.register('geo.service', {})
+
+      expect(registration.ranking).toBe(7)
+    })
+
+    it('should let an explicit ranking win over the manifest', () => {
+      const shared = new DefaultServiceRegistry()
+      const scope = new ScopedServiceRegistry('map-module', shared, new Map([['geo.service', 7]]))
+
+      const registration = scope.register('geo.service', {}, { ranking: 1 })
+
+      expect(registration.ranking).toBe(1)
+    })
+
+    it('should pass collection calls through', () => {
+      const { shared, scope } = setup()
+      shared.register('widget.chart', { from: 'other' }, { providedBy: 'other-module' })
+      scope.register('widget.chart', { from: 'mine' })
+
+      expect(scope.countProviders('widget.chart')).toBe(2)
+      expect(scope.getServiceReferences('widget.chart').map(r => r.providedBy).sort())
+        .toEqual(['map-module', 'other-module'])
+    })
+  })
+
   describe('whenAvailable', () => {
     it('should delegate waiting to the shared registry', async () => {
       const { shared, scope } = setup()
