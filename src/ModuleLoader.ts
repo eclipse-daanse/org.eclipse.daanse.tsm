@@ -740,6 +740,13 @@ export class ModuleLoader {
     manifest: ModuleManifest,
     options: { awaitCascade?: boolean } = {}
   ): Promise<LoadedModule> {
+    // A manifest handed in directly becomes known, so the rest of the loader can
+    // see it: the module scope reads declared properties and rankings from here,
+    // and a listing that does not know the module cannot show it.
+    if (!this.manifests.has(manifest.id)) {
+      this.register([manifest])
+    }
+
     if (this.disabled.has(manifest.id)) {
       this.logger.warn(`Module ${manifest.id} is disabled — enableModule() first`)
       const existing = this.modules.get(manifest.id)

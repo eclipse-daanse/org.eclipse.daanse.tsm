@@ -14,6 +14,16 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
 
 ### Fixed
 
+- **`loadModule()` did not make an unregistered manifest known.** Handing a manifest straight to
+  `loadModule()` loaded the module but left `manifests` untouched, so the module scope found no declared
+  properties or ranking for it — a service registered by such a module lost the `properties` its manifest
+  declared — and `getManifests()` denied the running module existed. The manifest is registered now if it is
+  new. Found by loading a view on demand in the workbench example: it activated, registered its component, and
+  was never mounted because the declared `region` had gone missing.
+- **Properties declared in a manifest were dropped as soon as the code passed any.**
+  `ServiceDeclaration.properties` and the `properties` of a registration replaced each other; they are merged
+  per key now, as DS overlays component properties with configuration. The manifest describes where a service
+  belongs — deployment information a module should not have to repeat — and the code adds what only it knows.
 - **A module was silently not loaded when its ID collided with a global name.** `loadEntry()` returned
   `window[moduleId]` whenever it was truthy, and a browser exposes every element `id` as a global — so an
   `<ul id="palette">` next to a module called `palette` made the loader treat the DOM element as the module
@@ -282,6 +292,12 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
 
 ### Documentation
 
+- **New example `examples/workbench`** (`npm run example:workbench`): UI components that come and go while the
+  shell keeps running. It distinguishes two mechanisms a workbench needs — a *region* collects every
+  contribution (`0..n`, ordered by an `order` property), while a *slot* has several modules competing for one
+  place and shows the highest ranked. `unmount()` releases what `mount()` acquired, and the test proves it by
+  keeping a reference to the detached element and advancing the clock: a leaked interval would keep writing
+  into it. A churn button loads and unloads a view every 2.5 seconds.
 - **New example `examples/whiteboard`** (`npm run example:whiteboard`): six modules that find each other
   through services, no framework and no separate install, running against the package sources. It shows load
   order following from the manifests rather than from the registration order, a `0..n` collection with

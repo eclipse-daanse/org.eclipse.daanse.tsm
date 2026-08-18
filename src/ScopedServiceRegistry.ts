@@ -47,11 +47,24 @@ export class ScopedServiceRegistry implements IObservableServiceRegistry {
     return given ?? this.declaredRankings.get(id)
   }
 
+  /**
+   * Merge the manifest's declared properties with the ones passed at
+   * registration, per key.
+   *
+   * Not "one or the other": the manifest describes where a service belongs —
+   * deployment information a module should not have to repeat — while the code
+   * adds what only it knows. Replacing wholesale would silently drop a declared
+   * property as soon as the code passes any property at all.
+   */
   private propertiesFor(
     id: string,
     given?: ServiceProperties
   ): ServiceProperties | undefined {
-    return given ?? this.declaredProperties.get(id)
+    const declared = this.declaredProperties.get(id)
+    if (!declared) return given
+    if (!given) return declared
+
+    return { ...declared, ...given }
   }
 
   register<T>(

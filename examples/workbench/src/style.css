@@ -1,0 +1,50 @@
+:root {
+  color-scheme: light dark;
+  --line: color-mix(in srgb, currentColor 15%, transparent);
+  --sunken: color-mix(in srgb, currentColor 4%, transparent);
+  font-family: system-ui, sans-serif;
+  line-height: 1.5;
+}
+
+body { margin: 0 auto; max-width: 60rem; padding: 2rem 1.5rem 4rem; }
+h1 { margin-bottom: 0.25rem; }
+header p { color: color-mix(in srgb, currentColor 70%, transparent); max-width: 44rem; }
+
+.controls { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 1rem 0 1.5rem; }
+button { background: transparent; border: 1px solid var(--line); border-radius: 6px;
+  color: inherit; cursor: pointer; font: inherit; padding: 0.45rem 0.9rem; }
+button:hover { background: color-mix(in srgb, currentColor 8%, transparent); }
+
+.workbench {
+  border: 1px solid var(--line); border-radius: 10px;
+  display: grid; grid-template-areas: 'toolbar toolbar' 'sidebar main';
+  grid-template-columns: 14rem 1fr; overflow: hidden;
+}
+.region-toolbar { grid-area: toolbar; border-bottom: 1px solid var(--line);
+  background: var(--sunken); display: flex; gap: 0.5rem; min-height: 3rem; padding: 0.5rem 0.75rem; }
+.region-sidebar { grid-area: sidebar; border-right: 1px solid var(--line);
+  min-height: 16rem; padding: 0.75rem; }
+.region-main { grid-area: main; display: grid; gap: 0.75rem;
+  align-content: start; padding: 0.75rem; }
+
+.region-toolbar:empty::after, .region-sidebar:empty::after, .region-main:empty::after {
+  color: color-mix(in srgb, currentColor 40%, transparent);
+  content: 'empty region'; font-size: 0.85rem;
+}
+
+.view { border: 1px solid var(--line); border-radius: 8px; padding: 0.6rem 0.8rem; }
+.region-toolbar .view { border: none; padding: 0; }
+.view h3 { font-size: 0.8rem; letter-spacing: 0.04em; margin: 0 0 0.4rem;
+  text-transform: uppercase; color: color-mix(in srgb, currentColor 55%, transparent); }
+.region-toolbar .view h3 { display: none; }
+.view ul, .view ol { margin: 0; padding-left: 1.2rem; }
+.view output { font-size: 1.4rem; font-variant-numeric: tabular-nums; }
+.view small { color: color-mix(in srgb, currentColor 55%, transparent); }
+.view textarea, .view input { background: transparent; border: 1px solid var(--line);
+  border-radius: 6px; color: inherit; font: inherit; padding: 0.35rem 0.5rem; width: 100%; }
+
+.activity { margin-top: 2rem; }
+.activity h2 { font-size: 1rem; }
+#activity-log { font-family: ui-monospace, monospace; font-size: 0.85rem;
+  max-height: 12rem; overflow-y: auto; padding-left: 1.5rem; }
+#activity-log li { padding: 0.1rem 0; }

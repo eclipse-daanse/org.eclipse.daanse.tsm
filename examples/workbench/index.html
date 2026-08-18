@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TSM Workbench Example</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <!--
+      Element ids stay clear of module ids: a browser exposes every id as a
+      global, and TSM keeps module containers there for Module Federation.
+    -->
+    <header>
+      <h1>TSM Workbench</h1>
+      <p>
+        Views come and go while the shell keeps running. Watch the activity log —
+        and the clock, which stops ticking because it cleans up after itself.
+      </p>
+      <div class="controls">
+        <button id="btn-clock">Load the clock</button>
+        <button id="btn-pro">Disable Outline Pro</button>
+        <button id="btn-churn">Start churn</button>
+      </div>
+    </header>
+
+    <div class="workbench">
+      <div class="region-toolbar" id="region-toolbar"></div>
+      <aside class="region-sidebar" id="region-sidebar"></aside>
+      <main class="region-main" id="region-main"></main>
+    </div>
+
+    <section class="activity">
+      <h2>Activity</h2>
+      <ol id="activity-log"></ol>
+    </section>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
