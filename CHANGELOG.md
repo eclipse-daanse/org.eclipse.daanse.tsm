@@ -215,6 +215,27 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
   produce false alarms rather than findings.
 - `manifest` takes a path to read or the parsed object; a path that cannot be read fails the build.
 
+#### DevTools
+
+- **New subpath export `@eclipse-daanse/tsm/devtools`** with `installDevtools({ loader, registry?, resolver?,
+  runtime? })`, which puts console commands on `globalThis.tsm`: `modules()`, `manifest()`, `state()`,
+  `load()`/`unload()`/`reload()`/`loadAll()`, `unsatisfied()`, `mismatches()`, `services()`, `service()`,
+  `providers(id, target?)`, `shared()`, discovery and repository commands, a load queue, and `help()`.
+  Adapted from the `tsm-devtools` module in the Eclipse Daanse gene application.
+
+  It was written against an application-side `tsm.system` facade and had to restate four TSM interfaces
+  structurally to do so — which had already drifted (`getBindingInfo` was typed `scope: string` there, against
+  `'singleton' | 'transient'` here). Taking the commands into this repository removes the restatements and ties
+  them to the introspection API they depend on: `getUnsatisfiedModules()`, `getDeclarationMismatches()`,
+  `getServiceReferences()` and `countProviders()` did not exist when it was written, so it could not use them.
+- Output goes through a `DevtoolsOutput` sink — `consoleOutput()` with colours by default, `collectingOutput()`
+  for tests, so a command can be asserted without a browser. `target: null` installs nowhere and returns the
+  command object; `name` changes the property.
+- `load()` passes `awaitCascade`, so after it returns the modules it satisfied are active too, and a parked
+  module reports what it waits for right away.
+- **`ModuleLoader.getManifests()`** returns every registered manifest, loaded or not. `getLoadedModuleIds()`
+  answers what runs; a listing needs what is known, in order to show a module as not loaded.
+
 #### Diagnostics
 
 - **`loadModule(manifest, { awaitCascade: true })`** returns only once the cascade it triggered has run, so the

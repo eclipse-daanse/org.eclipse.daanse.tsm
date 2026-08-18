@@ -1227,6 +1227,16 @@ export class ModuleLoader {
   }
 
   /**
+   * Every registered manifest, whether the module is loaded or not.
+   *
+   * `getLoadedModuleIds()` answers what is running; this answers what is known,
+   * which is what a listing needs in order to show a module as not loaded.
+   */
+  getManifests(): ModuleManifest[] {
+    return Array.from(this.manifests.values())
+  }
+
+  /**
    * Get all loaded module IDs
    */
   getLoadedModuleIds(): string[] {
