@@ -131,6 +131,10 @@ export class ScopedServiceRegistry implements IObservableServiceRegistry {
     return registration
   }
 
+  construct<T>(ctor: InjectableConstructor<T>): T {
+    return this.target.construct(ctor)
+  }
+
   get<T>(id: string): T | undefined {
     return this.target.get<T>(id)
   }

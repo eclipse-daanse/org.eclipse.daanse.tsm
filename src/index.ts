@@ -12,7 +12,15 @@ export { ScopedServiceRegistry } from './ScopedServiceRegistry.js'
 export { createServiceFilter, type ServiceFilter } from './serviceFilter.js'
 
 // Decorators
-export { injectable, inject, singleton, transient } from './decorators.js'
+export {
+  injectable,
+  inject,
+  singleton,
+  transient,
+  component,
+  activate,
+  deactivate
+} from './decorators.js'
 
 // Runtime (for host applications)
 export {
@@ -38,6 +46,7 @@ export type {
   // Service/DI types
   ServiceDeclaration,
   ServiceRequirement,
+  ComponentOptions,
   ServiceCardinality,
   ServiceQuery,
   ServiceRegistration,

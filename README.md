@@ -100,6 +100,33 @@ export default defineConfig({
 registered → resolving → loading → activating → active → deactivating → stopped
 ```
 
+## Components
+
+A class can declare what it offers, instead of a module registering it by hand:
+
+```typescript
+import { component, activate, deactivate, inject } from '@eclipse-daanse/tsm'
+
+@component({ service: ['ui.component'], properties: { region: 'main' } })
+export class ClockView {
+  constructor(@inject('metrics', { optional: true }) private metrics?: Metrics) {}
+
+  @activate() start(): void { /* runs when the module activates */ }
+  @deactivate() stop(): void { /* runs when it stops */ }
+}
+```
+
+The loader registers the class under the declared service ids and runs its
+lifecycle — the module needs no `activate` export for it, and `provides` in the
+manifest becomes optional because the declaration is the registration.
+
+A component with an `@activate` method is created when its module activates (an
+*immediate* component in DS terms); without one it is created on first
+resolution (*delayed*). An `async` activate method is awaited.
+
+An imperative `activate` export still works and runs first, so it can prepare
+what a component gets injected.
+
 ## Decorators
 
 ```typescript

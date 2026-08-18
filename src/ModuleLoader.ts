@@ -4,6 +4,8 @@
  */
 
 import type {
+  ComponentOptions,
+  InjectableConstructor,
   ModuleManifest,
   ModuleState,
   ModuleLoaderOptions,
@@ -23,6 +25,11 @@ import { DependencyResolver } from './DependencyResolver.js'
 import { DefaultServiceRegistry } from './ServiceRegistry.js'
 import { ScopedServiceRegistry } from './ScopedServiceRegistry.js'
 import { collectsMany } from './cardinality.js'
+import {
+  getActivateMethod,
+  getComponentMetadata,
+  getDeactivateMethod
+} from './decorators.js'
 import { isTsmRuntimeAvailable, tsmRuntime } from './TsmRuntime.js'
 
 // Type for Module Federation containers
@@ -146,6 +153,14 @@ export class ModuleLoader {
    * pointless — the next reconcile would activate it right back.
    */
   private disabled = new Set<string>()
+  /**
+   * Per module: the component instances the loader created, so their
+   * `@deactivate` methods can run when the module stops.
+   */
+  private componentInstances = new Map<string, Array<{
+    instance: Record<string | symbol, unknown>
+    method: string | symbol
+  }>>()
   /** Module-scoped registry facades, so a teardown can withdraw what a module registered */
   private scopes = new Map<string, ScopedServiceRegistry>()
   /** Serializes reactions to registry events; they are async, the events are not */
@@ -615,6 +630,7 @@ export class ModuleLoader {
     this.boundRegistrations.clear()
     this.declarationMismatches.clear()
     this.disabled.clear()
+    this.componentInstances.clear()
   }
 
   /**
@@ -1055,6 +1071,8 @@ export class ModuleLoader {
       await loadedModule.lifecycle.activate(context)
     }
 
+    await this.startComponents(loadedModule)
+
     // Compare what the manifest promised against what was actually registered
     if (manifest.provides && manifest.provides.length > 0) {
       const undelivered: string[] = []
@@ -1089,6 +1107,117 @@ export class ModuleLoader {
   }
 
   /**
+   * Register and start the `@component()` classes a module exports.
+   *
+   * The declarative counterpart to registering services by hand in a module's
+   * `activate` export: what a component offers stands on the class, so manifest
+   * and code cannot drift apart.
+   *
+   * Both ways work side by side, and the imperative `activate` runs first: it may
+   * set up what a component needs injected, whereas the reverse — a component
+   * preparing something for `activate` — is what a declared service is for.
+   */
+  private async startComponents(loadedModule: LoadedModule): Promise<void> {
+    const components = this.findComponents(loadedModule)
+    if (components.length === 0) return
+
+    const scope = this.scopeFor(loadedModule.manifest.id)
+    const started: Array<{
+      instance: Record<string | symbol, unknown>
+      method: string | symbol
+    }> = []
+
+    for (const { ctor, options } of components) {
+      const [primary, ...aliases] = options.service ?? []
+
+      const registration = primary === undefined
+        ? undefined
+        : scope.bindClass(primary, ctor as InjectableConstructor<unknown>, {
+            implements: aliases,
+            properties: options.properties,
+            propertiesById: options.propertiesById,
+            ranking: options.ranking,
+            scope: options.scope
+          })
+
+      const activateMethod = getActivateMethod(ctor)
+      // A component with something to run is created now; one that only offers a
+      // service waits until somebody resolves it
+      const immediate = options.immediate ?? activateMethod !== undefined
+      if (!immediate) continue
+
+      // Resolve this registration rather than the ID: with several providers under
+      // one service ID, get() would hand back somebody else's component
+      const instance = registration
+        ? registration.resolve<Record<string | symbol, unknown>>()
+        : scope.construct<Record<string | symbol, unknown>>(
+            ctor as InjectableConstructor<Record<string | symbol, unknown>>
+          )
+      if (!instance) continue
+
+      if (activateMethod !== undefined) {
+        const method = instance[activateMethod]
+        if (typeof method === 'function') {
+          await (method as (context: ModuleContext) => unknown).call(
+            instance,
+            this.createContext(loadedModule)
+          )
+        }
+      }
+
+      const deactivateMethod = getDeactivateMethod(ctor)
+      if (deactivateMethod !== undefined) {
+        started.push({ instance, method: deactivateMethod })
+      }
+    }
+
+    if (started.length > 0) {
+      this.componentInstances.set(loadedModule.manifest.id, started)
+    }
+  }
+
+  /** The exported classes of a module that declare `@component()` */
+  private findComponents(loadedModule: LoadedModule): Array<{
+    ctor: InjectableConstructor<unknown>
+    options: ComponentOptions
+  }> {
+    const container = loadedModule.container
+    if (container === null || typeof container !== 'object') return []
+
+    const found: Array<{ ctor: InjectableConstructor<unknown>; options: ComponentOptions }> = []
+
+    for (const exported of Object.values(container as Record<string, unknown>)) {
+      if (typeof exported !== 'function') continue
+
+      const options = getComponentMetadata(exported)
+      if (options === undefined) continue
+
+      found.push({ ctor: exported as InjectableConstructor<unknown>, options })
+    }
+
+    return found
+  }
+
+  /** Run the `@deactivate` methods of a module's components, newest first */
+  private async stopComponents(moduleId: string): Promise<void> {
+    const started = this.componentInstances.get(moduleId)
+    if (!started) return
+    this.componentInstances.delete(moduleId)
+
+    for (const { instance, method } of [...started].reverse()) {
+      const handler = instance[method]
+      if (typeof handler !== 'function') continue
+
+      try {
+        await (handler as () => unknown).call(instance)
+      } catch (error) {
+        // A failing teardown must not stop the rest from being torn down
+        this.logger.error(`@deactivate of a component in ${moduleId} failed:`, error)
+      }
+    }
+  }
+
+  /**
    * Deactivate a module
    */
   private async deactivate(loadedModule: LoadedModule): Promise<void> {
@@ -1105,6 +1234,8 @@ export class ModuleLoader {
       const context = this.createContext(loadedModule)
       await loadedModule.lifecycle.deactivate(context)
     }
+
+    await this.stopComponents(loadedModule.manifest.id)
 
     // Withdraw the module's remaining services. A module that unregisters in
     // its own hook is unaffected; one that does not no longer leaves services
