@@ -123,6 +123,50 @@ class MyService {
 | `ServiceRegistry` | Dependency injection container |
 | `TsmRuntime` | Global shared library management (`__tsm__`) |
 
+### Subpath exports
+
+| Import | Description |
+|--------|-------------|
+| `@eclipse-daanse/tsm/vite` | Vite plugin: `tsm:` import transform, manifest validation |
+| `@eclipse-daanse/tsm/devtools` | Console commands for inspecting a running application |
+
+## DevTools
+
+```typescript
+import { installDevtools } from '@eclipse-daanse/tsm/devtools'
+
+installDevtools({ loader, registry, resolver, runtime })
+// in the browser console:
+//   tsm.help()
+//   tsm.modules()        every known module with its state
+//   tsm.unsatisfied()    what is waiting, and for what
+//   tsm.providers('ui.layout')   every registration, best first
+```
+
+`loader` is required, the rest is optional — a command whose collaborator is
+missing says so instead of failing. By default the commands are installed on
+`globalThis.tsm`; `target` and `name` change that, `target: null` installs
+nowhere and only returns the object.
+
+Output goes through a sink, so the commands are usable outside a browser:
+
+```typescript
+import { installDevtools, collectingOutput } from '@eclipse-daanse/tsm/devtools'
+
+const out = collectingOutput()
+installDevtools({ loader, target: null, output: out }).unsatisfied()
+console.log(out.text())
+```
+
+To ship them as a module instead of wiring them in the host, a three-line
+`activate` is enough:
+
+```typescript
+export function activate(context: ModuleContext) {
+  installDevtools({ loader: context.services.getRequired('tsm.loader') })
+}
+```
+
 ## Development
 
 ```bash
