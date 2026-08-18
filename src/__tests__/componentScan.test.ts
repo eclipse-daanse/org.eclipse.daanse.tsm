@@ -9,7 +9,13 @@ describe('extractComponents', () => {
     `
 
     expect(extractComponents(code)).toEqual([
-      { name: 'Widget', line: 2, services: [{ id: 'ui.component' }], immediate: false }
+      {
+        name: 'Widget',
+        line: 2,
+        services: [{ id: 'ui.component' }],
+        immediate: false,
+        exported: true
+      }
     ])
   })
 
@@ -112,7 +118,7 @@ describe('extractComponents', () => {
     `
 
     expect(extractComponents(code)).toEqual([
-      { name: 'Background', line: 2, services: [], immediate: true }
+      { name: 'Background', line: 2, services: [], immediate: true, exported: true }
     ])
   })
 
@@ -184,6 +190,31 @@ describe('extractComponents', () => {
     `
 
     expect(() => extractComponents(code)).toThrow(/array literal/)
+  })
+
+  it('should note whether the class is exported', () => {
+    const exported = `
+      @component({ service: ['a'] })
+      export class Exported {}
+    `
+    const hidden = `
+      @component({ service: ['b'] })
+      class Hidden {}
+    `
+
+    // The loader finds components in the module namespace, so this is decidable
+    // here and nowhere at runtime
+    expect(extractComponents(exported)[0].exported).toBe(true)
+    expect(extractComponents(hidden)[0].exported).toBe(false)
+  })
+
+  it('should note a default export as exported', () => {
+    const code = `
+      @component({ service: ['a'] })
+      export default class Widget {}
+    `
+
+    expect(extractComponents(code)[0].exported).toBe(true)
   })
 
   it('should report the line of the declaration', () => {

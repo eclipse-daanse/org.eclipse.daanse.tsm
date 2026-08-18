@@ -293,6 +293,9 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
   literals. A service ID may be a string literal, a `const` in the same file, or a `const` in a relatively
   imported module — otherwise the build fails naming file, line and reason instead of silently deriving
   nothing.
+- **A `@component()` class that is not exported is reported.** The loader finds components in the module's
+  namespace, so an unexported one is never registered — and nothing at runtime can say why, because the class is
+  not there to be found. This is decidable only from the source, which is where it is now checked.
 - Two components declaring one service ID differently are reported: `provides` holds one entry per ID, so the
   manifest cannot express both.
 

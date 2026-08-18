@@ -134,6 +134,11 @@ export function getPropertyInjectMetadata(target: MetadataTarget): PropertyInjec
  * The declaration lives on the class rather than beside it, which is what keeps
  * manifest and code from drifting apart.
  *
+ * The class has to be **exported**: the loader looks for components in the
+ * module's namespace, so one that is not exported is never registered, and
+ * nothing at runtime can say why. `tsmPlugin({ components: … })` reports it at
+ * build time.
+ *
  * Implies `@injectable()`, so constructor injection works without a second
  * decorator.
  */
