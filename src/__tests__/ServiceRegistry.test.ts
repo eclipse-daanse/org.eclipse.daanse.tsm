@@ -493,6 +493,52 @@ describe('DefaultServiceRegistry - registration ownership and alias cleanup', ()
     })
   })
 
+  describe('properties per interface', () => {
+    @injectable()
+    class Renderer {
+      render(): string { return 'ok' }
+    }
+
+    it('should give an alias its own properties', () => {
+      const registry = new DefaultServiceRegistry()
+
+      registry.bindClass('chart.renderer', Renderer, {
+        implements: ['ui.component'],
+        properties: { engine: 'canvas' },
+        propertiesById: { 'ui.component': { region: 'main', order: 3 } }
+      })
+
+      expect(registry.getServiceReferences('chart.renderer')[0].properties)
+        .toMatchObject({ engine: 'canvas' })
+      // The interface is what consumers filter on, so it carries its own
+      expect(registry.getServiceReferences('ui.component')[0].properties)
+        .toMatchObject({ region: 'main', order: 3 })
+    })
+
+    it('should fall back to the shared properties for an ID without its own', () => {
+      const registry = new DefaultServiceRegistry()
+
+      registry.bindClass('chart.renderer', Renderer, {
+        implements: ['ui.component'],
+        properties: { engine: 'canvas' }
+      })
+
+      expect(registry.getServiceReferences('ui.component')[0].properties)
+        .toMatchObject({ engine: 'canvas' })
+    })
+
+    it('should let a filter select the alias by its own properties', () => {
+      const registry = new DefaultServiceRegistry()
+      registry.bindClass('chart.renderer', Renderer, {
+        implements: ['ui.component'],
+        propertiesById: { 'ui.component': { region: 'main' } }
+      })
+
+      expect(registry.countProviders('ui.component', '(region=main)')).toBe(1)
+      expect(registry.countProviders('ui.component', '(region=sidebar)')).toBe(0)
+    })
+  })
+
   describe('clear', () => {
     it('should also remove services that were only bound lazily', () => {
       const registry = new DefaultServiceRegistry()

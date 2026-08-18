@@ -286,6 +286,14 @@ export interface BindClassOptions {
    * The class will be resolvable under both its primary ID and all implements IDs.
    */
   implements?: string[]
+  /**
+   * Properties for a specific ID, used instead of `properties` for that one.
+   *
+   * A class registered under its own ID and offered as an interface usually
+   * carries different properties for each: the interface is what consumers
+   * select on. The module scope fills this in from the manifest's `provides`.
+   */
+  propertiesById?: Record<string, ServiceProperties>
 }
 
 /**

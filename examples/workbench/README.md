@@ -49,6 +49,42 @@ placed differently without touching its code. Properties declared in a manifest
 and properties passed at registration are merged per key, so a module can add
 what only it knows.
 
+**Decorators, where they earn their keep.** Five of the six views are plain
+objects — for a `mount()` function, a class buys nothing. `modules/metrics.ts` is
+the exception: it registers *classes* through `bindClass()`, and the registry
+constructs them with what they declare.
+
+```ts
+@injectable()
+@singleton()
+class WorkbenchMetrics implements Metrics {
+  constructor(@inject(WORKBENCH_ROOT) private readonly root: WorkbenchRoot) {}
+}
+
+@injectable()
+class MetricsView implements UiComponent {
+  constructor(@inject(METRICS_SERVICE) private readonly metrics: Metrics) {}
+}
+```
+
+```ts
+context.services.bindClass(METRICS_SERVICE, WorkbenchMetrics)
+context.services.bindClass('workbench.metrics-view', MetricsView, {
+  implements: [UI_COMPONENT]
+})
+```
+
+Two things are worth noting. `@inject` names the service id explicitly, so no
+type reflection is involved — `experimentalDecorators` suffices and esbuild's
+missing `emitDecoratorMetadata` does not matter, which is why this works under
+Vite without extra setup. And `bindClass` is lazy: nothing is constructed until
+the shell resolves the reference, which the test checks via
+`reference.instantiated`.
+
+The manifest declares properties for *both* ids — `workbench.metrics` and
+`ui.component` — because the interface is what the shell filters on, not the
+class.
+
 ## Try in the console
 
 ```js

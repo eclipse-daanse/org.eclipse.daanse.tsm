@@ -190,6 +190,24 @@ describe('ScopedServiceRegistry', () => {
     })
   })
 
+  describe('declared properties for an interface', () => {
+    it('should apply what the manifest declares for each ID', () => {
+      const shared = new DefaultServiceRegistry()
+      const scope = new ScopedServiceRegistry('chart-module', shared, new Map(), new Map([
+        ['chart.renderer', { engine: 'canvas' }],
+        ['ui.component', { region: 'main', order: 3 }]
+      ]))
+
+      scope.bindClass('chart.renderer', Renderer, { implements: ['ui.component'] })
+
+      expect(shared.getServiceReferences('chart.renderer')[0].properties)
+        .toMatchObject({ engine: 'canvas' })
+      // Without this, a manifest could not describe the interface at all
+      expect(shared.getServiceReferences('ui.component')[0].properties)
+        .toMatchObject({ region: 'main', order: 3 })
+    })
+  })
+
   describe('whenAvailable', () => {
     it('should delegate waiting to the shared registry', async () => {
       const { shared, scope } = setup()
