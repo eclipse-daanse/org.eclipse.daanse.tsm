@@ -7,6 +7,9 @@ import type {
   ServiceRegistry as IServiceRegistry,
   InjectableConstructor,
   BindClassOptions,
+  ServiceCardinality,
+  ServiceReference,
+  ServiceRegistration,
   ServiceRegistryEvent,
   ServiceRegistryListener
 } from './types.js'
@@ -35,12 +38,33 @@ interface ServiceBinding {
   scope: 'singleton' | 'transient'
   /** Module that provided this service */
   providedBy?: string
+  /** Higher wins when several registrations share an ID */
+  ranking: number
+  /** Registration order, used as tie-break and as identity */
+  seq: number
   /** Dependencies for automatic resolution (set by bindClass) */
   deps?: DependencyInfo[]
   /** Property dependencies for injection after construction (set by bindClass) */
   propertyDeps?: PropertyInjectMetadata[]
   /** Alias target — if set, this binding delegates to another ID */
   aliasOf?: string
+}
+
+/**
+ * Whether a requirement needs at least one provider to be satisfied.
+ *
+ * `optional` is the older spelling of cardinality '0..1'; either form makes the
+ * requirement non-blocking. The n-variants need one provider like 1..1 does —
+ * cardinality says how many are consumed, not how many are required.
+ */
+function requiresAtLeastOne(requirement: {
+  optional?: boolean
+  cardinality?: ServiceCardinality
+}): boolean {
+  if (requirement.cardinality) {
+    return requirement.cardinality.startsWith('1..')
+  }
+  return requirement.optional !== true
 }
 
 /**
@@ -56,26 +80,154 @@ export class DefaultServiceRegistry implements IServiceRegistry {
   private aliasesOf = new Map<string, Set<string>>()
   /** Reverse index: service ID -> binding IDs that inject it (from bindClass) */
   private injectedInto = new Map<string, Set<string>>()
+  /**
+   * Registrations for an ID that are currently outranked by the visible one.
+   *
+   * Readers still see a single service per ID, but a second provider is kept
+   * instead of dropped: when the visible one goes, the best of these takes
+   * over rather than the ID falling silent.
+   */
+  private shadowed = new Map<string, ServiceBinding[]>()
+  private nextSeq = 1
+
+  /**
+   * Install a registration and decide whether it becomes the visible one.
+   *
+   * A registration from the same provider replaces its own earlier one, so
+   * registering twice under one ID does not accumulate.
+   */
+  private addRegistration(id: string, binding: ServiceBinding): ServiceRegistration {
+    const previouslyKnown = this.bindings.has(id)
+    const visible = this.bindings.get(id)
+
+    // Drop this provider's earlier registration, wherever it sits
+    this.removeShadowed(id, candidate => candidate.providedBy === binding.providedBy)
+    const replacesVisible = visible !== undefined && visible.providedBy === binding.providedBy
+
+    if (!visible || replacesVisible || this.outranks(binding, visible)) {
+      if (visible && !replacesVisible) {
+        this.pushShadowed(id, visible)
+      }
+      if (replacesVisible) {
+        this.dropAliasesOf(id)
+        this.dropInjectionEdges(id)
+      }
+      this.setVisible(id, binding)
+      this.notify({
+        type: previouslyKnown ? 'updated' : 'registered',
+        serviceId: id,
+        service: binding.instance
+      })
+    } else {
+      // Outranked: kept as a stand-in, no change for readers
+      this.pushShadowed(id, binding)
+    }
+
+    return this.createHandle(id, binding)
+  }
+
+  private outranks(candidate: ServiceBinding, incumbent: ServiceBinding): boolean {
+    if (candidate.ranking !== incumbent.ranking) {
+      return candidate.ranking > incumbent.ranking
+    }
+    // Equal ranking: the later registration wins, as it did before ranking existed
+    return candidate.seq > incumbent.seq
+  }
+
+  private setVisible(id: string, binding: ServiceBinding): void {
+    this.invalidateInjectors(id, new Set())
+    this.bindings.set(id, binding)
+    if (binding.instance !== undefined) {
+      this.services.set(id, binding.instance)
+    } else {
+      this.services.delete(id)
+    }
+  }
+
+  private pushShadowed(id: string, binding: ServiceBinding): void {
+    const bench = this.shadowed.get(id)
+    if (bench) {
+      bench.push(binding)
+    } else {
+      this.shadowed.set(id, [binding])
+    }
+  }
+
+  private removeShadowed(id: string, matches: (binding: ServiceBinding) => boolean): boolean {
+    const bench = this.shadowed.get(id)
+    if (!bench) return false
+
+    const kept = bench.filter(binding => !matches(binding))
+    if (kept.length === bench.length) return false
+
+    if (kept.length === 0) {
+      this.shadowed.delete(id)
+    } else {
+      this.shadowed.set(id, kept)
+    }
+    return true
+  }
+
+  /** All registrations for an ID, best first */
+  private registrationsOf(id: string): ServiceBinding[] {
+    const visible = this.bindings.get(id)
+    const bench = [...(this.shadowed.get(id) ?? [])].sort((a, b) =>
+      a.ranking !== b.ranking ? b.ranking - a.ranking : b.seq - a.seq
+    )
+    return visible ? [visible, ...bench] : bench
+  }
+
+  private createHandle(id: string, binding: ServiceBinding): ServiceRegistration {
+    return {
+      serviceId: id,
+      providedBy: binding.providedBy,
+      ranking: binding.ranking,
+      unregister: () => this.unregisterRegistration(id, binding.seq)
+    }
+  }
+
+  /**
+   * Withdraw one specific registration. When it was the visible one, the best
+   * remaining registration takes over instead of the ID falling silent.
+   */
+  private unregisterRegistration(id: string, seq: number): boolean {
+    const visible = this.bindings.get(id)
+
+    if (visible?.seq !== seq) {
+      return this.removeShadowed(id, binding => binding.seq === seq)
+    }
+
+    const successor = this.registrationsOf(id).find(binding => binding.seq !== seq)
+    if (!successor) {
+      return this.unregister(id)
+    }
+
+    this.removeShadowed(id, binding => binding.seq === successor.seq)
+    this.dropAliasesOf(id)
+    this.dropInjectionEdges(id)
+    this.setVisible(id, successor)
+    this.notify({
+      type: 'updated',
+      serviceId: id,
+      service: successor.instance
+    })
+    return true
+  }
 
   /**
    * Register a service instance directly
    */
-  register<T>(id: string, service: T, options: { providedBy?: string } = {}): void {
-    const existed = this.services.has(id) || this.bindings.has(id)
-    this.dropAliasesOf(id)
-    this.invalidateInjectors(id, new Set())
-    this.services.set(id, service)
-    // Also create a binding for consistency
-    this.bindings.set(id, {
+  register<T>(
+    id: string,
+    service: T,
+    options: { providedBy?: string; ranking?: number } = {}
+  ): ServiceRegistration {
+    return this.addRegistration(id, {
       instance: service,
       scope: 'singleton',
-      providedBy: options.providedBy
-    })
-
-    this.notify({
-      type: existed ? 'updated' : 'registered',
-      serviceId: id,
-      service
+      providedBy: options.providedBy,
+      ranking: options.ranking ?? 0,
+      seq: this.nextSeq++
     })
   }
 
@@ -85,21 +237,14 @@ export class DefaultServiceRegistry implements IServiceRegistry {
   bind<T>(
     id: string,
     factory: () => T,
-    options: { scope?: 'singleton' | 'transient'; providedBy?: string } = {}
-  ): void {
-    const existed = this.bindings.has(id)
-    this.dropAliasesOf(id)
-    this.invalidateInjectors(id, new Set())
-    this.bindings.set(id, {
+    options: { scope?: 'singleton' | 'transient'; providedBy?: string; ranking?: number } = {}
+  ): ServiceRegistration {
+    return this.addRegistration(id, {
       factory,
       scope: options.scope ?? 'singleton',
-      providedBy: options.providedBy
-    })
-
-    this.notify({
-      type: existed ? 'updated' : 'registered',
-      serviceId: id,
-      service: undefined // Not instantiated yet
+      providedBy: options.providedBy,
+      ranking: options.ranking ?? 0,
+      seq: this.nextSeq++
     })
   }
 
@@ -116,7 +261,7 @@ export class DefaultServiceRegistry implements IServiceRegistry {
     id: string,
     ctor: InjectableConstructor<T>,
     options: BindClassOptions = {}
-  ): void {
+  ): ServiceRegistration {
     if (!isInjectable(ctor)) {
       throw new Error(
         `Class '${ctor.name}' is not decorated with @injectable(). ` +
@@ -129,9 +274,6 @@ export class DefaultServiceRegistry implements IServiceRegistry {
     const decoratorScope = getScopeMetadata(ctor)
     const scope = options.scope ?? decoratorScope ?? 'singleton'
 
-    const existed = this.bindings.has(id)
-    this.dropAliasesOf(id)
-    this.dropInjectionEdges(id)
     for (const dependency of [...metadata, ...propertyMetadata]) {
       let injectors = this.injectedInto.get(dependency.serviceId)
       if (!injectors) {
@@ -141,19 +283,14 @@ export class DefaultServiceRegistry implements IServiceRegistry {
       injectors.add(id)
     }
 
-    this.invalidateInjectors(id, new Set())
-    this.bindings.set(id, {
+    const registration = this.addRegistration(id, {
       factory: (...resolvedDeps: unknown[]) => new ctor(...resolvedDeps),
       scope,
       providedBy: options.providedBy,
+      ranking: options.ranking ?? 0,
+      seq: this.nextSeq++,
       deps: metadata.map(m => ({ serviceId: m.serviceId, optional: m.optional })),
       propertyDeps: propertyMetadata.length > 0 ? propertyMetadata : undefined
-    })
-
-    this.notify({
-      type: existed ? 'updated' : 'registered',
-      serviceId: id,
-      service: undefined
     })
 
     // Create alias bindings for implemented interfaces
@@ -166,25 +303,25 @@ export class DefaultServiceRegistry implements IServiceRegistry {
 
       for (const interfaceId of options.implements) {
         const previous = this.bindings.get(interfaceId)
-        const aliasExisted = previous !== undefined
         // Detach the ID from a primary it aliased before
         if (previous?.aliasOf && previous.aliasOf !== id) {
           this.aliasesOf.get(previous.aliasOf)?.delete(interfaceId)
         }
 
-        this.bindings.set(interfaceId, {
+        // An alias is a registration of its own, so two classes implementing the
+        // same interface rank against each other instead of overwriting
+        this.addRegistration(interfaceId, {
           scope,
-          aliasOf: id
+          aliasOf: id,
+          providedBy: options.providedBy,
+          ranking: options.ranking ?? 0,
+          seq: this.nextSeq++
         })
         aliases.add(interfaceId)
-
-        this.notify({
-          type: aliasExisted ? 'updated' : 'registered',
-          serviceId: interfaceId,
-          service: undefined
-        })
       }
     }
+
+    return registration
   }
 
   /**
@@ -199,69 +336,80 @@ export class DefaultServiceRegistry implements IServiceRegistry {
       return this.services.get(id) as T
     }
 
-    // Check bindings
     const binding = this.bindings.get(id)
     if (!binding) {
       return undefined
     }
 
-    // Follow alias
+    return this.instantiate<T>(id, binding, _resolving ?? new Set<string>())
+  }
+
+  /**
+   * Resolve one binding: follow an alias, reuse a singleton, or build via the
+   * factory with its dependencies injected.
+   *
+   * Split out of `get()` because an outranked registration has to be
+   * resolvable too, even though the ID answers with a different one.
+   */
+  private instantiate<T>(
+    id: string,
+    binding: ServiceBinding,
+    resolving: Set<string>
+  ): T | undefined {
     if (binding.aliasOf) {
-      return this.get<T>(binding.aliasOf, _resolving)
+      return this.get<T>(binding.aliasOf, resolving)
     }
 
-    // If singleton and already instantiated, return instance
     if (binding.scope === 'singleton' && binding.instance !== undefined) {
       return binding.instance as T
     }
 
-    // Create instance via factory
-    if (binding.factory) {
-      const resolving = _resolving ?? new Set<string>()
-
-      // Circular dependency detection
-      if (resolving.has(id)) {
-        const chain = [...resolving, id].join(' → ')
-        throw new Error(`Circular dependency detected: ${chain}`)
-      }
-      resolving.add(id)
-
-      // Resolve dependencies
-      const args = (binding.deps ?? []).map(dep => {
-        const resolved = this.get(dep.serviceId, resolving)
-        if (resolved === undefined && !dep.optional) {
-          throw new Error(
-            `Dependency '${dep.serviceId}' not found (required by '${id}')`
-          )
-        }
-        return resolved
-      })
-
-      const instance = binding.factory(...args) as T
-
-      // Resolve property injections
-      if (binding.propertyDeps) {
-        for (const prop of binding.propertyDeps) {
-          const resolved = this.get(prop.serviceId, resolving)
-          if (resolved === undefined && !prop.optional) {
-            throw new Error(
-              `Property dependency '${prop.serviceId}' not found (required by '${id}' on property '${String(prop.propertyKey)}')`
-            )
-          }
-          (instance as Record<string | symbol, unknown>)[prop.propertyKey] = resolved
-        }
-      }
-
-      // Store singleton instance for reuse
-      if (binding.scope === 'singleton') {
-        binding.instance = instance
-        this.services.set(id, instance)
-      }
-
-      return instance
+    if (!binding.factory) {
+      return undefined
     }
 
-    return undefined
+    // Circular dependency detection
+    if (resolving.has(id)) {
+      const chain = [...resolving, id].join(' → ')
+      throw new Error(`Circular dependency detected: ${chain}`)
+    }
+    resolving.add(id)
+
+    // Resolve dependencies
+    const args = (binding.deps ?? []).map(dep => {
+      const resolved = this.get(dep.serviceId, resolving)
+      if (resolved === undefined && !dep.optional) {
+        throw new Error(
+          `Dependency '${dep.serviceId}' not found (required by '${id}')`
+        )
+      }
+      return resolved
+    })
+
+    const instance = binding.factory(...args) as T
+
+    // Resolve property injections
+    if (binding.propertyDeps) {
+      for (const prop of binding.propertyDeps) {
+        const resolved = this.get(prop.serviceId, resolving)
+        if (resolved === undefined && !prop.optional) {
+          throw new Error(
+            `Property dependency '${prop.serviceId}' not found (required by '${id}' on property '${String(prop.propertyKey)}')`
+          )
+        }
+        (instance as Record<string | symbol, unknown>)[prop.propertyKey] = resolved
+      }
+    }
+
+    if (binding.scope === 'singleton') {
+      binding.instance = instance
+      // The ID cache belongs to the visible registration only
+      if (this.bindings.get(id) === binding) {
+        this.services.set(id, instance)
+      }
+    }
+
+    return instance
   }
 
   /**
@@ -297,7 +445,7 @@ export class DefaultServiceRegistry implements IServiceRegistry {
     seen.add(id)
 
     if (this.services.has(id)) {
-      return this.bindings.get(id) ?? { scope: 'singleton', instance: this.services.get(id) }
+      return this.bindings.get(id)
     }
 
     const binding = this.bindings.get(id)
@@ -320,13 +468,18 @@ export class DefaultServiceRegistry implements IServiceRegistry {
   /**
    * Check if all required services are available
    */
-  checkRequirements(requirements: Array<{ id: string; optional?: boolean }>): {
+  checkRequirements(
+    requirements: Array<{ id: string; optional?: boolean; cardinality?: ServiceCardinality }>
+  ): {
     satisfied: boolean
     missing: string[]
   } {
     const missing: string[] = []
     for (const req of requirements) {
-      if (!req.optional && !this.has(req.id)) {
+      // Cardinality decides how many providers are needed; the n-variants are
+      // satisfied by one, so only an empty ID is missing
+      const mandatory = requiresAtLeastOne(req)
+      if (mandatory && !this.has(req.id)) {
         missing.push(req.id)
       }
     }
@@ -334,6 +487,47 @@ export class DefaultServiceRegistry implements IServiceRegistry {
       satisfied: missing.length === 0,
       missing
     }
+  }
+
+  /**
+   * Every registration for an ID, best first, without instantiating any of them.
+   *
+   * Collecting must not build objects nobody asked for, which is why this
+   * returns references rather than services.
+   */
+  getServiceReferences(id: string): ServiceReference[] {
+    return this.registrationsOf(id).map(binding => ({
+      serviceId: id,
+      providedBy: binding.providedBy,
+      ranking: binding.ranking,
+      scope: binding.scope,
+      instantiated: binding.instance !== undefined,
+      key: `${id}#${binding.seq}`
+    }))
+  }
+
+  /**
+   * Resolve one reference from getServiceReferences().
+   *
+   * The visible registration resolves like `get()`; an outranked one is built
+   * from its own binding, so a collection can use every provider even though
+   * only one of them answers to the ID.
+   */
+  resolveReference<T>(reference: ServiceReference): T | undefined {
+    const seq = Number(reference.key.slice(reference.key.lastIndexOf('#') + 1))
+    const binding = this.registrationsOf(reference.serviceId)
+      .find(candidate => candidate.seq === seq)
+    if (!binding) return undefined
+
+    if (this.bindings.get(reference.serviceId)?.seq === seq) {
+      return this.get<T>(reference.serviceId)
+    }
+    return this.instantiate<T>(reference.serviceId, binding, new Set())
+  }
+
+  /** How many registrations an ID currently carries */
+  countProviders(id: string): number {
+    return this.registrationsOf(id).length
   }
 
   /**
@@ -348,10 +542,14 @@ export class DefaultServiceRegistry implements IServiceRegistry {
       return false
     }
 
-    // An alias only detaches itself from its target
-    if (binding?.aliasOf) {
-      this.aliasesOf.get(binding.aliasOf)?.delete(id)
+    // Every registration for the ID goes, stand-ins included — otherwise the ID
+    // would report as absent while providers are still on the bench
+    for (const registration of this.registrationsOf(id)) {
+      if (registration.aliasOf) {
+        this.aliasesOf.get(registration.aliasOf)?.delete(id)
+      }
     }
+    this.shadowed.delete(id)
 
     this.services.delete(id)
     this.bindings.delete(id)
@@ -422,15 +620,13 @@ export class DefaultServiceRegistry implements IServiceRegistry {
     this.aliasesOf.delete(primaryId)
 
     for (const aliasId of aliases) {
-      const alias = this.bindings.get(aliasId)
-      if (alias?.aliasOf !== primaryId) continue // reused for something else
-      this.bindings.delete(aliasId)
-      this.services.delete(aliasId)
-      this.notify({
-        type: 'unregistered',
-        serviceId: aliasId,
-        service: undefined
-      })
+      // Only this primary's own alias registration goes. Another implementation
+      // of the same interface stays and takes over if it was the stand-in.
+      const alias = this.registrationsOf(aliasId)
+        .find(registration => registration.aliasOf === primaryId)
+      if (!alias) continue
+
+      this.unregisterRegistration(aliasId, alias.seq)
     }
   }
 

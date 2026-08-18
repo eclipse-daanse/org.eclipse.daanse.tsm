@@ -507,3 +507,238 @@ describe('DefaultServiceRegistry - registration ownership and alias cleanup', ()
     })
   })
 })
+
+describe('DefaultServiceRegistry - ranking and several providers per ID', () => {
+  describe('visible service', () => {
+    it('should keep last-wins for equal ranking', () => {
+      const registry = new DefaultServiceRegistry()
+
+      registry.register('geo.service', { tag: 'first' }, { providedBy: 'a' })
+      registry.register('geo.service', { tag: 'second' }, { providedBy: 'b' })
+
+      expect(registry.get('geo.service')).toEqual({ tag: 'second' })
+    })
+
+    it('should let the higher ranking win regardless of order', () => {
+      const registry = new DefaultServiceRegistry()
+
+      registry.register('geo.service', { tag: 'strong' }, { providedBy: 'a', ranking: 10 })
+      registry.register('geo.service', { tag: 'weak' }, { providedBy: 'b' })
+
+      expect(registry.get('geo.service')).toEqual({ tag: 'strong' })
+    })
+
+    it('should replace a provider own earlier registration instead of stacking', () => {
+      const registry = new DefaultServiceRegistry()
+
+      registry.register('geo.service', { tag: 'old' }, { providedBy: 'a' })
+      registry.register('geo.service', { tag: 'new' }, { providedBy: 'a' })
+
+      expect(registry.countProviders('geo.service')).toBe(1)
+      expect(registry.get('geo.service')).toEqual({ tag: 'new' })
+    })
+
+    it('should report the visible registration in getBindingInfo', () => {
+      const registry = new DefaultServiceRegistry()
+      registry.register('geo.service', {}, { providedBy: 'weak' })
+      registry.register('geo.service', {}, { providedBy: 'strong', ranking: 5 })
+
+      expect(registry.getBindingInfo('geo.service')?.providedBy).toBe('strong')
+    })
+  })
+
+  describe('stand-in when the visible provider goes', () => {
+    it('should promote the next provider instead of falling silent', () => {
+      const registry = new DefaultServiceRegistry()
+      registry.register('geo.service', { tag: 'default' }, { providedBy: 'a' })
+      const override = registry.register(
+        'geo.service',
+        { tag: 'override' },
+        { providedBy: 'b', ranking: 10 }
+      )
+      expect(registry.get('geo.service')).toEqual({ tag: 'override' })
+
+      override.unregister()
+
+      expect(registry.has('geo.service')).toBe(true)
+      expect(registry.get('geo.service')).toEqual({ tag: 'default' })
+    })
+
+    it('should report promotion as an update, not a withdrawal', () => {
+      const registry = new DefaultServiceRegistry()
+      registry.register('geo.service', { tag: 'default' }, { providedBy: 'a' })
+      const override = registry.register('geo.service', { tag: 'override' }, { providedBy: 'b', ranking: 10 })
+
+      const events: Array<{ type: string; serviceId: string }> = []
+      registry.addListener({
+        onServiceEvent: event => { events.push({ type: event.type, serviceId: event.serviceId }) }
+      })
+
+      override.unregister()
+
+      expect(events).toEqual([{ type: 'updated', serviceId: 'geo.service' }])
+    })
+
+    it('should announce a withdrawal only when the last provider goes', () => {
+      const registry = new DefaultServiceRegistry()
+      const first = registry.register('geo.service', {}, { providedBy: 'a' })
+      const second = registry.register('geo.service', {}, { providedBy: 'b' })
+
+      const events: string[] = []
+      registry.addListener({ onServiceEvent: event => { events.push(event.type) } })
+
+      second.unregister()
+      first.unregister()
+
+      expect(events).toEqual(['updated', 'unregistered'])
+      expect(registry.has('geo.service')).toBe(false)
+    })
+
+    it('should stay silent for a registration that was never visible', () => {
+      const registry = new DefaultServiceRegistry()
+      registry.register('geo.service', {}, { providedBy: 'strong', ranking: 10 })
+      const weak = registry.register('geo.service', {}, { providedBy: 'weak' })
+
+      const events: string[] = []
+      registry.addListener({ onServiceEvent: event => { events.push(event.type) } })
+
+      expect(weak.unregister()).toBe(true)
+
+      expect(events).toEqual([])
+      expect(registry.countProviders('geo.service')).toBe(1)
+    })
+
+    it('should refuse to withdraw the same registration twice', () => {
+      const registry = new DefaultServiceRegistry()
+      const handle = registry.register('geo.service', {}, { providedBy: 'a' })
+
+      expect(handle.unregister()).toBe(true)
+      expect(handle.unregister()).toBe(false)
+    })
+
+    it('should remove every provider of an ID via unregister(id)', () => {
+      const registry = new DefaultServiceRegistry()
+      registry.register('geo.service', {}, { providedBy: 'a' })
+      registry.register('geo.service', {}, { providedBy: 'b' })
+
+      expect(registry.unregister('geo.service')).toBe(true)
+
+      expect(registry.has('geo.service')).toBe(false)
+      expect(registry.countProviders('geo.service')).toBe(0)
+    })
+  })
+
+  describe('collecting providers', () => {
+    it('should list every provider, best first, without instantiating', () => {
+      const registry = new DefaultServiceRegistry()
+      const built: string[] = []
+      registry.bind('widget', () => { built.push('weak'); return { tag: 'weak' } }, { providedBy: 'a' })
+      registry.bind('widget', () => { built.push('strong'); return { tag: 'strong' } }, { providedBy: 'b', ranking: 10 })
+
+      const references = registry.getServiceReferences('widget')
+
+      expect(references.map(reference => reference.providedBy)).toEqual(['b', 'a'])
+      expect(references.map(reference => reference.ranking)).toEqual([10, 0])
+      expect(built).toEqual([])
+      expect(references.every(reference => !reference.instantiated)).toBe(true)
+    })
+
+    it('should resolve each reference individually, including outranked ones', () => {
+      const registry = new DefaultServiceRegistry()
+      registry.bind('widget', () => ({ tag: 'weak' }), { providedBy: 'a' })
+      registry.bind('widget', () => ({ tag: 'strong' }), { providedBy: 'b', ranking: 10 })
+
+      const resolved = registry
+        .getServiceReferences('widget')
+        .map(reference => registry.resolveReference<{ tag: string }>(reference)?.tag)
+
+      expect(resolved).toEqual(['strong', 'weak'])
+    })
+
+    it('should reuse the singleton instance of an outranked provider', () => {
+      const registry = new DefaultServiceRegistry()
+      registry.bind('widget', () => ({ tag: 'weak' }), { providedBy: 'a' })
+      registry.register('widget', { tag: 'strong' }, { providedBy: 'b', ranking: 10 })
+
+      const outranked = registry.getServiceReferences('widget')
+        .find(reference => reference.providedBy === 'a')!
+      const first = registry.resolveReference('widget' === outranked.serviceId ? outranked : outranked)
+      const second = registry.resolveReference(outranked)
+
+      expect(second).toBe(first)
+    })
+
+    it('should return undefined for a reference that is gone', () => {
+      const registry = new DefaultServiceRegistry()
+      const handle = registry.register('widget', { tag: 'only' }, { providedBy: 'a' })
+      const [reference] = registry.getServiceReferences('widget')
+
+      handle.unregister()
+
+      expect(registry.resolveReference(reference)).toBeUndefined()
+    })
+
+    it('should report an empty list for an unknown ID', () => {
+      const registry = new DefaultServiceRegistry()
+
+      expect(registry.getServiceReferences('nothing')).toEqual([])
+      expect(registry.countProviders('nothing')).toBe(0)
+    })
+  })
+
+  describe('cardinality in checkRequirements', () => {
+    it('should treat 1..1 and 1..n as needing a provider', () => {
+      const registry = new DefaultServiceRegistry()
+
+      expect(registry.checkRequirements([{ id: 'a', cardinality: '1..1' }]).missing).toEqual(['a'])
+      expect(registry.checkRequirements([{ id: 'a', cardinality: '1..n' }]).missing).toEqual(['a'])
+    })
+
+    it('should treat 0..1 and 0..n as non-blocking', () => {
+      const registry = new DefaultServiceRegistry()
+
+      expect(registry.checkRequirements([{ id: 'a', cardinality: '0..1' }]).satisfied).toBe(true)
+      expect(registry.checkRequirements([{ id: 'a', cardinality: '0..n' }]).satisfied).toBe(true)
+    })
+
+    it('should be satisfied by a single provider for 1..n', () => {
+      const registry = new DefaultServiceRegistry()
+      registry.register('a', {})
+
+      expect(registry.checkRequirements([{ id: 'a', cardinality: '1..n' }]).satisfied).toBe(true)
+    })
+
+    it('should keep honouring optional as 0..1', () => {
+      const registry = new DefaultServiceRegistry()
+
+      expect(registry.checkRequirements([{ id: 'a', optional: true }]).satisfied).toBe(true)
+    })
+  })
+
+  describe('aliases with several implementations', () => {
+    @injectable()
+    class Grid { readonly kind = 'grid' }
+
+    @injectable()
+    class Flow { readonly kind = 'flow' }
+
+    it('should rank two implementations of one interface instead of overwriting', () => {
+      const registry = new DefaultServiceRegistry()
+      registry.bindClass('layout.grid', Grid, { implements: ['layout'], providedBy: 'a' })
+      registry.bindClass('layout.flow', Flow, { implements: ['layout'], providedBy: 'b', ranking: 5 })
+
+      expect(registry.countProviders('layout')).toBe(2)
+      expect(registry.get<Flow>('layout')?.kind).toBe('flow')
+    })
+
+    it('should fall back to the other implementation when the ranked one goes', () => {
+      const registry = new DefaultServiceRegistry()
+      registry.bindClass('layout.grid', Grid, { implements: ['layout'], providedBy: 'a' })
+      const flow = registry.bindClass('layout.flow', Flow, { implements: ['layout'], providedBy: 'b', ranking: 5 })
+
+      flow.unregister()
+
+      expect(registry.get<Grid>('layout')?.kind).toBe('grid')
+    })
+  })
+})

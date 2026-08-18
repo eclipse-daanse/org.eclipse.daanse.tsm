@@ -46,6 +46,15 @@ export interface ServiceDeclaration {
   /** Service identifier for DI container */
   id: string
 
+  /**
+   * Ranking for this service, used when several modules provide the same ID.
+   * The visible service is the highest ranked one; the others stay available
+   * and take over when it is withdrawn. Defaults to 0.
+   *
+   * A ranking passed at registration time wins over this declaration.
+   */
+  ranking?: number
+
   /** Human-readable description */
   description?: string
 
@@ -64,8 +73,16 @@ export interface ServiceRequirement {
   /** Service identifier */
   id: string
 
-  /** If true, module can work without this service */
+  /** If true, module can work without this service. Same as cardinality '0..1'. */
   optional?: boolean
+
+  /**
+   * How many providers this module needs. Defaults to '1..1', or '0..1' when
+   * `optional` is set. The n-variants are satisfied by one provider and are
+   * consumed through `getServiceReferences()`; the module is only torn down
+   * when the last provider is gone.
+   */
+  cardinality?: ServiceCardinality
 
   /**
    * What happens when the service is withdrawn while the module is active
@@ -234,6 +251,8 @@ export interface BindClassOptions {
   scope?: 'singleton' | 'transient'
   /** Module that provided this service */
   providedBy?: string
+  /** Higher wins when several registrations share an ID */
+  ranking?: number
   /**
    * Additional service IDs this class implements.
    * The class will be resolvable under both its primary ID and all implements IDs.
@@ -242,14 +261,66 @@ export interface BindClassOptions {
 }
 
 /**
+ * Handle for one registration, returned by register/bind/bindClass.
+ *
+ * Needed because an ID can carry several registrations: `unregister(id)` cannot
+ * express which one is meant, a handle can.
+ */
+export interface ServiceRegistration {
+  /** The service ID this registration serves */
+  readonly serviceId: string
+
+  /** Module that made the registration */
+  readonly providedBy?: string
+
+  /** Higher wins when several registrations share an ID */
+  readonly ranking: number
+
+  /** Withdraw exactly this registration. Returns false if it is already gone. */
+  unregister(): boolean
+}
+
+/**
+ * A registration seen from the outside, without resolving it.
+ *
+ * Collecting providers must not instantiate them — a factory may create an
+ * object nobody asked for. A reference carries what is needed to choose, and
+ * `resolveReference()` builds the one that was chosen.
+ */
+export interface ServiceReference {
+  readonly serviceId: string
+  readonly providedBy?: string
+  readonly ranking: number
+  readonly scope: 'singleton' | 'transient'
+
+  /** Whether a singleton instance for this registration already exists */
+  readonly instantiated: boolean
+
+  /** Opaque identity, used by resolveReference() */
+  readonly key: string
+}
+
+/**
+ * How many providers of a service a module needs
+ * - 0..1 / 1..1: a single provider (1..1 is the default)
+ * - 0..n / 1..n: every provider, collected via getServiceReferences()
+ */
+export type ServiceCardinality = '0..1' | '1..1' | '0..n' | '1..n'
+
+/**
  * Service registry interface
  */
 export interface ServiceRegistry {
   /**
    * Register a service instance directly
-   * @param options Provider info, so the registry knows which module owns the service
+   * @param options Provider info and ranking
+   * @returns A handle that withdraws exactly this registration
    */
-  register<T>(id: string, service: T, options?: { providedBy?: string }): void
+  register<T>(
+    id: string,
+    service: T,
+    options?: { providedBy?: string; ranking?: number }
+  ): ServiceRegistration
 
   /**
    * Bind a factory function for lazy instantiation
@@ -260,8 +331,8 @@ export interface ServiceRegistry {
   bind<T>(
     id: string,
     factory: () => T,
-    options?: { scope?: 'singleton' | 'transient'; providedBy?: string }
-  ): void
+    options?: { scope?: 'singleton' | 'transient'; providedBy?: string; ranking?: number }
+  ): ServiceRegistration
 
   /**
    * Bind a class with automatic constructor injection.
@@ -274,7 +345,7 @@ export interface ServiceRegistry {
     id: string,
     ctor: InjectableConstructor<T>,
     options?: BindClassOptions
-  ): void
+  ): ServiceRegistration
 
   /** Get a service (creates singleton on first access, resolves dependencies automatically) */
   get<T>(id: string): T | undefined
@@ -289,10 +360,24 @@ export interface ServiceRegistry {
   has(id: string): boolean
 
   /** Check if all required services are available */
-  checkRequirements(requirements: Array<{ id: string; optional?: boolean }>): {
+  checkRequirements(
+    requirements: Array<{ id: string; optional?: boolean; cardinality?: ServiceCardinality }>
+  ): {
     satisfied: boolean
     missing: string[]
   }
+
+  /**
+   * Every registration for an ID, best first, without instantiating any of them.
+   * The way to consume cardinality 0..n / 1..n.
+   */
+  getServiceReferences(id: string): ServiceReference[]
+
+  /** Resolve one reference from getServiceReferences() */
+  resolveReference<T>(reference: ServiceReference): T | undefined
+
+  /** How many registrations an ID currently carries */
+  countProviders(id: string): number
 
   /** Unregister a service */
   unregister(id: string): boolean

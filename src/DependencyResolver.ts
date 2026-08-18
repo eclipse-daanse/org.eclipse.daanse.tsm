@@ -177,18 +177,27 @@ export class DependencyResolver {
 
   /**
    * Which module provides which service, by service ID.
-   * First declaration wins, matching how the registry resolves a single provider.
+   *
+   * The highest declared ranking wins, matching how the registry picks the
+   * visible service; ties go to the first declaration. Only that one provider
+   * becomes a load-order edge: with several providers the set is filled at
+   * runtime, and an edge per provider would turn ordinary fan-in into
+   * artificial cycles.
    */
   private serviceProviders(modules: Iterable<ModuleManifest>): Map<string, string> {
-    const providers = new Map<string, string>()
+    const providers = new Map<string, { moduleId: string; ranking: number }>()
+
     for (const mod of modules) {
       for (const service of mod.provides ?? []) {
-        if (!providers.has(service.id)) {
-          providers.set(service.id, mod.id)
+        const ranking = service.ranking ?? 0
+        const incumbent = providers.get(service.id)
+        if (!incumbent || ranking > incumbent.ranking) {
+          providers.set(service.id, { moduleId: mod.id, ranking })
         }
       }
     }
-    return providers
+
+    return new Map([...providers].map(([serviceId, best]) => [serviceId, best.moduleId]))
   }
 
   /**
@@ -210,6 +219,10 @@ export class DependencyResolver {
 
     for (const requirement of mod.requiresService ?? []) {
       if (requirement.optional) continue
+      // A collection is assembled at runtime, so it implies no single predecessor
+      if (requirement.cardinality?.endsWith('..n')) continue
+      if (requirement.cardinality === '0..1') continue
+
       const providerId = providers.get(requirement.id)
       // A module providing what it requires needs no edge to itself
       if (providerId && providerId !== mod.id) {

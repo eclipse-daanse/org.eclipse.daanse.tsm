@@ -38,6 +38,37 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
 
 ### Added
 
+#### Several providers per service ID
+
+- **A second registration for an ID no longer displaces the first for good.** Registrations are ranked
+  (`ranking`, higher wins; equal ranking keeps the previous last-wins behaviour), and the ones that lose stay
+  available: when the visible provider is withdrawn, the best remaining one takes over and consumers see an
+  `updated` event rather than the ID falling silent. `unregistered` is reported only when the last provider is
+  gone. A provider registering twice under one ID still replaces its own entry instead of accumulating.
+- **`register()`, `bind()` and `bindClass()` return a `ServiceRegistration` handle** whose `unregister()`
+  withdraws exactly that registration. With several registrations per ID, `unregister(id)` cannot express
+  which one is meant; it stays and now means "every registration for this ID". Through the module scope it
+  means "all of mine" — otherwise deactivating a module would take other modules' providers along.
+- **Cardinality `0..n` / `1..n`**, consumed through `getServiceReferences(id)`, which lists every
+  registration best-first **without instantiating any of them**, plus `resolveReference()` to build a chosen
+  one and `countProviders(id)`. Collecting must not create objects nobody asked for, which is why it returns
+  references rather than services. `cardinality` defaults to `1..1`, or `0..1` when `optional` is set, so
+  `optional: true` keeps working as the older spelling of `0..1`.
+- **A module with an n-cardinality requirement is only torn down when the last provider is gone**, not on
+  every change to the set. This deviates from DS `static`+multiple, which rebuilds the component — for a UI
+  registry that would be unusable.
+- **`policy: 'dynamic'` reports set changes**, not just presence: a collector hears `onServiceBound` when a
+  further provider joins an already non-empty set and `onServiceUnbound` when one leaves. That is what lets a
+  palette pick up a widget from a module loaded at runtime without restarting.
+- **Two classes may implement the same interface.** An alias from `bindClass(..., { implements })` is a
+  registration of its own now, so two implementations rank against each other instead of overwriting; when the
+  ranked one goes, the other takes over.
+- `ServiceDeclaration.ranking` in the manifest sets the ranking for a declared service; a ranking passed at
+  registration time wins over it.
+- `DependencyResolver` picks the **highest-ranked** declared provider for a service edge (ties to the first
+  declaration), and creates **no** edge for an n-cardinality requirement: the set is filled at runtime, and an
+  edge per provider would turn ordinary fan-in into artificial cycles.
+
 #### Notification
 
 - **`policy: 'dynamic'` is implemented.** A module requiring a service dynamically stays active when the
@@ -127,11 +158,15 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
 - `ModuleEvent.type` has an additional value (`'service-withdrawn'`), which affects consumers that handle the
   union exhaustively in a `switch`.
 
+### Deliberately unchanged
+
+- **`unloadModule()` still refuses when active modules depend on the module** (returns `false`), rather than
+  cascading the way a service withdrawal does. Explicit unloading stays the stricter of the two.
+
 ### Known limitations
 
 - **Invalidation reaches `bindClass()` only.** What a hand-written `bind()` factory pulls from the registry is
   invisible to it, so such an instance keeps the old service; the same is true for a reference captured in
   module code. `policy: 'dynamic'` reports the change, dropping the reference stays the module's job.
-- The registry still holds at most one service per ID, and `getAll(pattern)` sees only instantiated services,
-  so cardinality `0..n` — the whiteboard pattern — is not expressible. Satisfaction rules are defined against
-  a single provider per ID and will be revisited when that changes.
+- `getAll(pattern)` is unchanged: it matches ID names with a wildcard and sees only instantiated services. It
+  predates real cardinality; `getServiceReferences(id)` is what to use for collecting providers.
