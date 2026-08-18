@@ -8,6 +8,7 @@ import type {
   InjectableConstructor,
   BindClassOptions,
   ServiceCardinality,
+  ServiceProperties,
   ServiceReference,
   ServiceRegistration,
   ServiceRegistryEvent,
@@ -17,7 +18,7 @@ import type {
 // Re-exported for backwards compatibility; the definitions live in types.ts
 export type { ServiceRegistryEvent, ServiceRegistryListener }
 import { getInjectMetadata, getPropertyInjectMetadata, isInjectable, getScopeMetadata, type PropertyInjectMetadata } from './decorators.js'
-import { createServiceFilter, type ServiceFilter, type ServiceProperties } from './serviceFilter.js'
+import { createServiceFilter, type ServiceFilter } from './serviceFilter.js'
 
 /**
  * Dependency metadata for a bound class
@@ -44,7 +45,7 @@ interface ServiceBinding {
   /** Registration order, used as tie-break and as identity */
   seq: number
   /** Properties a target filter selects on */
-  properties?: Record<string, string | number | boolean>
+  properties?: ServiceProperties
   /** Dependencies for automatic resolution (set by bindClass) */
   deps?: DependencyInfo[]
   /** Property dependencies for injection after construction (set by bindClass) */
@@ -242,7 +243,7 @@ export class DefaultServiceRegistry implements IServiceRegistry {
     options: {
       providedBy?: string
       ranking?: number
-      properties?: Record<string, string | number | boolean>
+      properties?: ServiceProperties
     } = {}
   ): ServiceRegistration {
     return this.addRegistration(id, {
@@ -265,7 +266,7 @@ export class DefaultServiceRegistry implements IServiceRegistry {
       scope?: 'singleton' | 'transient'
       providedBy?: string
       ranking?: number
-      properties?: Record<string, string | number | boolean>
+      properties?: ServiceProperties
     } = {}
   ): ServiceRegistration {
     return this.addRegistration(id, {
@@ -552,7 +553,7 @@ export class DefaultServiceRegistry implements IServiceRegistry {
         ranking: binding.ranking,
         scope: binding.scope,
         instantiated: binding.instance !== undefined,
-        properties: propertiesOf(binding) as Record<string, string | number | boolean>,
+        properties: propertiesOf(binding) as ServiceProperties,
         key: `${id}#${binding.seq}`
       }))
   }

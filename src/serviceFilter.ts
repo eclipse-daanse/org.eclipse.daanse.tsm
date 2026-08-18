@@ -12,15 +12,21 @@
  *   (kind=*)          — property is present
  *   (label=chart*)    — substring match
  *
- * Supported: `&` `|` `!`, `=`, `>=`, `<=`, presence and `*` wildcards.
- * Not supported: approximate match (`~=`), which has no defined semantics here.
+ * Supported: `&` `|` `!`, `=`, `>=`, `<=`, `~=`, presence and `*` wildcards.
+ *
+ * Semantics follow OSGi's `FilterImpl`:
+ * - attribute names match case-insensitively (`cn` and `CN` are the same attribute)
+ * - comparison is driven by the type of the *property value*, not by what the
+ *   filter value looks like, so a string property compares lexically even when
+ *   both sides happen to parse as numbers
+ * - a property holding an array matches when any element matches
+ * - `~=` removes whitespace and compares case-insensitively, the minimum the
+ *   OSGi spec allows
  */
 
-/** Values a service property may carry */
-export type ServicePropertyValue = string | number | boolean
+import type { ServiceProperties, ServicePropertyValue } from './types.js'
 
-/** Properties a registration is matched against */
-export type ServiceProperties = Record<string, ServicePropertyValue | undefined>
+export type { ServiceProperties, ServicePropertyValue }
 
 /** A parsed filter */
 export type ServiceFilter = (properties: ServiceProperties) => boolean
@@ -84,25 +90,41 @@ class FilterParser {
     const operator = this.readOperator()
     const { parts, wildcards } = this.readValue()
 
+    if (operator === '~=') {
+      const approximate = approximately(parts.join(''))
+      return properties => matches(
+        readProperty(properties, attribute),
+        actual => typeof actual === 'string' || typeof actual === 'number'
+          ? approximately(String(actual)) === approximate
+          : false
+      )
+    }
+
     if (operator === '=' && wildcards) {
       // (attr=*) asks whether the property is there at all
-      if (parts.length === 2 && parts.every(part => part.length === 0)) {
-        return properties => properties[attribute] !== undefined
+      if (parts.every(part => part.length === 0)) {
+        return properties => readProperty(properties, attribute) !== undefined
       }
 
       const pattern = substringPattern(parts)
-      return properties => {
-        const actual = properties[attribute]
-        return actual !== undefined && pattern.test(String(actual))
-      }
+      return properties => matches(
+        readProperty(properties, attribute),
+        actual => pattern.test(String(actual))
+      )
     }
 
     const value = parts.join('')
     if (operator === '=') {
-      return properties => equals(properties[attribute], value)
+      return properties => matches(
+        readProperty(properties, attribute),
+        actual => equals(actual, value)
+      )
     }
 
-    return properties => compare(properties[attribute], value, operator)
+    return properties => matches(
+      readProperty(properties, attribute),
+      actual => compare(actual, value, operator)
+    )
   }
 
   private readAttribute(): string {
@@ -119,7 +141,7 @@ class FilterParser {
     return attribute
   }
 
-  private readOperator(): '=' | '>=' | '<=' {
+  private readOperator(): FilterOperator {
     if (this.source.startsWith('>=', this.position)) {
       this.position += 2
       return '>='
@@ -133,9 +155,10 @@ class FilterParser {
       return '='
     }
     if (this.source.startsWith('~=', this.position)) {
-      throw this.error('approximate match (~=) is not supported')
+      this.position += 2
+      return '~='
     }
-    throw this.error('expected =, >= or <=')
+    throw this.error('expected =, >=, <= or ~=')
   }
 
   /**
@@ -203,28 +226,71 @@ function substringPattern(parts: string[]): RegExp {
   return new RegExp(`^${escaped}$`)
 }
 
-function equals(actual: ServicePropertyValue | undefined, expected: string): boolean {
+type FilterOperator = '=' | '>=' | '<=' | '~='
+
+/** A single, non-array property value */
+type ScalarValue = string | number | boolean
+
+/**
+ * Look a property up by name, ignoring case — `(CN=x)` and `(cn=x)` address the
+ * same attribute, as in OSGi.
+ */
+function readProperty(
+  properties: ServiceProperties,
+  attribute: string
+): ServicePropertyValue | undefined {
+  const direct = properties[attribute]
+  if (direct !== undefined) return direct
+
+  const wanted = attribute.toLowerCase()
+  for (const [key, value] of Object.entries(properties)) {
+    if (key.toLowerCase() === wanted) return value
+  }
+  return undefined
+}
+
+/**
+ * Apply a test to a property value. An array matches when any element does.
+ */
+function matches(
+  actual: ServicePropertyValue | undefined,
+  test: (value: ScalarValue) => boolean
+): boolean {
   if (actual === undefined) return false
-  if (typeof actual === 'boolean') return String(actual) === expected
-  if (typeof actual === 'number') return Number(expected) === actual
+  if (Array.isArray(actual)) return actual.some(element => test(element))
+  return test(actual as ScalarValue)
+}
+
+function equals(actual: ScalarValue, expected: string): boolean {
+  if (typeof actual === 'boolean') return String(actual) === expected.trim()
+  if (typeof actual === 'number') return Number(expected.trim()) === actual
   return actual === expected
 }
 
-function compare(
-  actual: ServicePropertyValue | undefined,
-  expected: string,
-  operator: '>=' | '<='
-): boolean {
-  if (actual === undefined) return false
+/**
+ * Ordering comparison. The type of the property value decides how to compare:
+ * a numeric property compares numerically, a string lexically. Deriving it from
+ * the filter text instead would make `(v>=10)` mean different things depending
+ * on what the provider happens to store.
+ */
+function compare(actual: ScalarValue, expected: string, operator: '>=' | '<='): boolean {
+  if (typeof actual === 'boolean') {
+    // Booleans have no ordering; OSGi compares them for equality only
+    return false
+  }
 
-  const actualNumber = typeof actual === 'number' ? actual : Number(actual)
-  const expectedNumber = Number(expected)
-  const numeric = !Number.isNaN(actualNumber) && !Number.isNaN(expectedNumber)
+  if (typeof actual === 'number') {
+    const expectedNumber = Number(expected.trim())
+    if (Number.isNaN(expectedNumber)) return false
+    return operator === '>=' ? actual >= expectedNumber : actual <= expectedNumber
+  }
 
-  const left = numeric ? actualNumber : String(actual)
-  const right = numeric ? expectedNumber : expected
+  return operator === '>=' ? actual >= expected : actual <= expected
+}
 
-  return operator === '>=' ? left >= right : left <= right
+/** Whitespace removed, lower-cased — the minimum `~=` the OSGi spec allows */
+function approximately(value: string): string {
+  return value.replace(/\s+/g, '').toLowerCase()
 }
 
 /**
