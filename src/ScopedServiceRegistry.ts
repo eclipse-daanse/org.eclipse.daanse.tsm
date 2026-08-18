@@ -114,6 +114,22 @@ export class ScopedServiceRegistry implements IObservableServiceRegistry {
     target.addListener(listener)
   }
 
+  /**
+   * Resolve once a service is available.
+   *
+   * A pending wait is not cancelled when the module is deactivated; keep the
+   * `timeoutMs` in mind if the service may never arrive.
+   */
+  whenAvailable<T>(id: string, options: { timeoutMs?: number } = {}): Promise<T> {
+    const target = this.target as Partial<IObservableServiceRegistry>
+    if (typeof target.whenAvailable !== 'function') {
+      return Promise.reject(new Error(
+        `Service registry does not support waiting, so module ${this.moduleId} cannot await ${id}`
+      ))
+    }
+    return target.whenAvailable<T>(id, options)
+  }
+
   removeListener(listener: ServiceRegistryListener): void {
     const target = this.target as Partial<IObservableServiceRegistry>
     this.ownListeners.delete(listener)

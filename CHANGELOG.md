@@ -46,6 +46,14 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
   are not reported as newly bound — `activate()` already sees those. Cardinality still decides activation: a
   mandatory dynamic requirement has to be there to start, its later disappearance does not tear the module
   down. A throwing hook is logged and the module keeps running, which is what the dynamic contract promises.
+- **`whenAvailable(id, { timeoutMs })`** resolves once a service is available, immediately if it already is.
+  It replaces polling `has()`/`get()` in an interval, which is what a consumer has to do today when it starts
+  before the service it needs. Available on the registry and on the module scope; a pending wait is not
+  cancelled when a module is deactivated, so pass `timeoutMs` when the service may never arrive.
+- **Singletons built with a service are rebuilt when that service changes.** A class bound through
+  `bindClass()` receives its dependencies once, at construction, so it would keep serving a replaced or
+  withdrawn service. Such instances are now discarded — transitively, so a consumer of a consumer is
+  refreshed too — and the next `get()` builds them again.
 - **`context.services` can be listened to.** It is typed as `ObservableServiceRegistry` now, so a
   registry-style service inside a module can react to services it never declared — the reactive counterpart
   to collecting providers by hand. The listener is removed when the module is deactivated, so a collection
@@ -121,11 +129,9 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
 
 ### Known limitations
 
-- **Cached injections are not invalidated.** A singleton that received a service through `@inject` keeps that
-  reference after the service is unregistered — `policy: 'dynamic'` notifies the module, but does not rebuild
-  anything for it. Dropping the reference is the module's job. Automatic invalidation is possible for
-  `bindClass()`, whose dependencies the registry knows, and impossible for `bind()` factories, whose
-  internals are opaque.
+- **Invalidation reaches `bindClass()` only.** What a hand-written `bind()` factory pulls from the registry is
+  invisible to it, so such an instance keeps the old service; the same is true for a reference captured in
+  module code. `policy: 'dynamic'` reports the change, dropping the reference stays the module's job.
 - The registry still holds at most one service per ID, and `getAll(pattern)` sees only instantiated services,
   so cardinality `0..n` — the whiteboard pattern — is not expressible. Satisfaction rules are defined against
   a single provider per ID and will be revisited when that changes.
