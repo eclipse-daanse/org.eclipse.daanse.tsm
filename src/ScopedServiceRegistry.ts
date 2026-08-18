@@ -126,9 +126,35 @@ export class ScopedServiceRegistry implements IObservableServiceRegistry {
     }))
   }
 
+  /**
+   * Remember a registration for the teardown, and keep the manifest's declared
+   * properties in play for later property changes.
+   *
+   * A component updating its properties from configuration passes what it and
+   * its configuration know; where the service belongs is still the manifest's
+   * business, exactly as at registration time.
+   */
   private track(registration: ServiceRegistration): ServiceRegistration {
-    this.ownRegistrations.push(registration)
-    return registration
+    const scoped: ServiceRegistration = {
+      ...registration,
+      unregister: () => registration.unregister(),
+      resolve: <T>() => registration.resolve<T>(),
+      setProperties: (properties, options = {}) => {
+        const byId: Record<string, ServiceProperties> = {}
+        for (const [serviceId, own] of Object.entries(options.propertiesById ?? {})) {
+          const merged = this.propertiesFor(serviceId, own)
+          if (merged) byId[serviceId] = merged
+        }
+
+        return registration.setProperties(
+          this.propertiesFor(registration.serviceId, properties) ?? properties,
+          { ...options, propertiesById: byId }
+        )
+      }
+    }
+
+    this.ownRegistrations.push(scoped)
+    return scoped
   }
 
   construct<T>(ctor: InjectableConstructor<T>): T {

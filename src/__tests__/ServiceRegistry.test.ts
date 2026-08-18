@@ -901,3 +901,192 @@ describe('DefaultServiceRegistry - target filters', () => {
     expect(built).toEqual([])
   })
 })
+
+describe('DefaultServiceRegistry - changing a live registration', () => {
+  @injectable()
+  class RasterTiles {
+    readonly kind = 'raster'
+  }
+
+  describe('setProperties', () => {
+    it('should change what a target filter selects, keeping the service object', () => {
+      const registry = new DefaultServiceRegistry()
+      const service = { name: 'tiles' }
+      const registration = registry.register('demo.tiles', service, {
+        properties: { kind: 'raster' }
+      })
+
+      registration.setProperties({ kind: 'vector' })
+
+      expect(registry.getServiceReferences('demo.tiles', '(kind=vector)')).toHaveLength(1)
+      expect(registry.getServiceReferences('demo.tiles', '(kind=raster)')).toHaveLength(0)
+      expect(registry.get('demo.tiles')).toBe(service)
+    })
+
+    it('should report the change as an update, not as a new service', () => {
+      const registry = new DefaultServiceRegistry()
+      const events: string[] = []
+      const registration = registry.register('demo.tiles', { name: 'tiles' })
+      registry.addListener({ onServiceEvent: event => events.push(event.type) })
+
+      registration.setProperties({ kind: 'vector' })
+
+      expect(events).toEqual(['updated'])
+    })
+
+    it('should replace the properties rather than merge into them', () => {
+      const registry = new DefaultServiceRegistry()
+      const registration = registry.register('demo.tiles', { name: 'tiles' }, {
+        properties: { kind: 'raster', experimental: true }
+      })
+
+      registration.setProperties({ kind: 'vector' })
+
+      const [reference] = registry.getServiceReferences('demo.tiles')
+      expect(reference.properties.kind).toBe('vector')
+      // A property the new configuration no longer carries has to disappear,
+      // otherwise a filter would keep selecting on a value nobody set
+      expect(reference.properties.experimental).toBeUndefined()
+    })
+
+    it('should give an individual ID its own properties', () => {
+      const registry = new DefaultServiceRegistry()
+      const registration = registry.bindClass('demo.raster', RasterTiles, {
+        implements: ['demo.tiles']
+      })
+
+      registration.setProperties({ kind: 'vector' }, {
+        propertiesById: { 'demo.tiles': { kind: 'vector', interface: 'tiles' } }
+      })
+
+      expect(registry.getServiceReferences('demo.tiles')[0].properties.interface)
+        .toBe('tiles')
+      expect(registry.getServiceReferences('demo.raster')[0].properties.interface)
+        .toBeUndefined()
+    })
+
+    it('should expose the same identity as the reference, so a registrant finds its own', () => {
+      const registry = new DefaultServiceRegistry()
+      registry.register('demo.tiles', { name: 'other' }, { providedBy: 'a', ranking: 5 })
+      const registration = registry.register('demo.tiles', { name: 'mine' }, { providedBy: 'b' })
+
+      const own = registry.getServiceReferences('demo.tiles')
+        .find(reference => reference.key === registration.key)
+
+      expect(own?.properties['service.providedBy']).toBe('b')
+    })
+
+    it('should update the alias registrations of the same class', () => {
+      const registry = new DefaultServiceRegistry()
+      const registration = registry.bindClass('demo.raster', RasterTiles, {
+        implements: ['demo.tiles'],
+        properties: { kind: 'raster' }
+      })
+
+      registration.setProperties({ kind: 'vector' })
+
+      expect(registry.getServiceReferences('demo.tiles', '(kind=vector)')).toHaveLength(1)
+    })
+
+    it('should answer false for a registration that is already gone', () => {
+      const registry = new DefaultServiceRegistry()
+      const registration = registry.register('demo.tiles', { name: 'tiles' })
+      registration.unregister()
+
+      expect(registration.setProperties({ kind: 'vector' })).toBe(false)
+    })
+
+    it('should hand the visible spot to a registration whose ranking grew', () => {
+      const registry = new DefaultServiceRegistry()
+      registry.register('demo.tiles', { name: 'first' }, { providedBy: 'a', ranking: 10 })
+      const second = registry.register('demo.tiles', { name: 'second' }, { providedBy: 'b' })
+      expect(registry.get<{ name: string }>('demo.tiles')?.name).toBe('first')
+
+      second.setProperties({}, { ranking: 20 })
+
+      expect(registry.get<{ name: string }>('demo.tiles')?.name).toBe('second')
+      expect(registry.getServiceReferences('demo.tiles').map(reference => reference.ranking))
+        .toEqual([20, 10])
+    })
+
+    it('should take the visible spot away from a registration whose ranking fell', () => {
+      const registry = new DefaultServiceRegistry()
+      const first = registry.register('demo.tiles', { name: 'first' }, {
+        providedBy: 'a',
+        ranking: 10
+      })
+      registry.register('demo.tiles', { name: 'second' }, { providedBy: 'b' })
+
+      first.setProperties({}, { ranking: -5 })
+
+      expect(registry.get<{ name: string }>('demo.tiles')?.name).toBe('second')
+    })
+  })
+
+  describe('instanceKey', () => {
+    it('should let one class register several times under one ID', () => {
+      const registry = new DefaultServiceRegistry()
+
+      registry.bindClass('demo.tiles', RasterTiles, {
+        providedBy: 'tiles',
+        instanceKey: 'demo.tile-source~osm',
+        properties: { name: 'osm' }
+      })
+      registry.bindClass('demo.tiles', RasterTiles, {
+        providedBy: 'tiles',
+        instanceKey: 'demo.tile-source~sat',
+        properties: { name: 'sat' }
+      })
+
+      expect(registry.getServiceReferences('demo.tiles')).toHaveLength(2)
+      expect(registry.getServiceReferences('demo.tiles', '(name=sat)')).toHaveLength(1)
+    })
+
+    it('should still replace a repeated registration that names no instance', () => {
+      const registry = new DefaultServiceRegistry()
+
+      registry.bindClass('demo.tiles', RasterTiles, { providedBy: 'tiles' })
+      registry.bindClass('demo.tiles', RasterTiles, { providedBy: 'tiles' })
+
+      expect(registry.getServiceReferences('demo.tiles')).toHaveLength(1)
+    })
+
+    it('should give each instance its own alias registration', () => {
+      const registry = new DefaultServiceRegistry()
+      const osm = registry.bindClass('demo.raster', RasterTiles, {
+        providedBy: 'tiles',
+        instanceKey: 'osm',
+        implements: ['demo.tiles'],
+        properties: { name: 'osm' }
+      })
+      registry.bindClass('demo.raster', RasterTiles, {
+        providedBy: 'tiles',
+        instanceKey: 'sat',
+        implements: ['demo.tiles'],
+        properties: { name: 'sat' }
+      })
+      expect(registry.getServiceReferences('demo.tiles')).toHaveLength(2)
+
+      osm.unregister()
+
+      // The other instance keeps answering to the interface
+      expect(registry.getServiceReferences('demo.tiles', '(name=sat)')).toHaveLength(1)
+      expect(registry.getServiceReferences('demo.tiles', '(name=osm)')).toHaveLength(0)
+      expect(registry.has('demo.tiles')).toBe(true)
+    })
+
+    it('should resolve each instance to its own object', () => {
+      const registry = new DefaultServiceRegistry()
+      const osm = registry.bindClass('demo.tiles', RasterTiles, {
+        providedBy: 'tiles',
+        instanceKey: 'osm'
+      })
+      const sat = registry.bindClass('demo.tiles', RasterTiles, {
+        providedBy: 'tiles',
+        instanceKey: 'sat'
+      })
+
+      expect(osm.resolve()).not.toBe(sat.resolve())
+    })
+  })
+})

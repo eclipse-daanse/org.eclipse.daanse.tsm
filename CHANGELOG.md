@@ -376,6 +376,42 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
 - **New subpath export `@eclipse-daanse/tsm/decorators`** — just the decorators and their metadata. A
   separately built module needs them at runtime, and importing the package root would pull the whole loader
   into every bundle.
+- **Configuration Admin, bound to components** (`ConfigurationAdmin`, `@component({ configurationPid, configurationPolicy })`,
+  `@modified()`): configuration by PID, with the lifecycle DS attaches to it. `configurationPolicy: 'require'` holds a
+  component back until its PID exists — while the module around it stays active, which is the separation OSGi draws
+  between the framework and SCR. A change calls `@modified()` if there is one and only updates the service properties
+  otherwise; without `@modified()` the component is rebuilt, as in DS. Configuration merges over the component's
+  declared properties and becomes the service properties, so a consumer's target filter selects on it; keys starting
+  with a dot stay private, and `service.ranking` from configuration re-orders providers without touching code. A PID
+  that names a *factory* PID instantiates the component once per configuration — not a separate feature, the same
+  mechanism, exactly as it follows from the PID in DS.
+- **New example `examples/config`** (`npm run example:config`): the same PID shown deciding three different things —
+  a component held back while its bundle stays active (and the consumer bundle parked behind it), two components on
+  one PID where only one has `@modified()` so their tick counts diverge on a single change, and a factory PID turning
+  one class into two providers. Values persist in `localStorage`, so a reload shows what `ready()` is for. Building it
+  found the instance-identity bug above.
+- **`ConfigurationStore`** is the one pluggable part, which is the seam the OSGi specification itself draws: it
+  requires that configuration survives a restart and leaves the medium open. `MemoryConfigurationStore` and
+  `LocalStorageConfigurationStore` are included; `loadAll()` awaits `ready()` so a component whose values are already
+  stored starts straight away instead of being parked and woken.
+- **`ServiceRegistration.setProperties()`** changes the properties of a live registration without withdrawing it —
+  OSGi's method of the same name, and what lets `@modified()` avoid a rebuild. A ranking passed with it re-decides
+  which registration for an ID is the visible one. Also `ServiceRegistration.key`, the identity a reference carries,
+  so a registrant can find its own among an ID's providers.
+- **`BindClassOptions.instanceKey`** lets one class hold several registrations under one ID, which is what a component
+  instantiated per factory configuration needs; without it the second registration replaces the first.
+- **Fixed:** a component that started *without* configuration and received some later was torn down and rebuilt
+  instead of being handed the new values, because instances were keyed by their PID — so "no PID yet" and "this PID"
+  looked like different instances rather than one whose values changed. Only a factory configuration makes the PID an
+  identity; for an ordinary PID there is one instance either way, as in DS. Found by the example, not by reasoning:
+  two components on one PID, and the one with `@modified()` was restarting too.
+- **Fixed:** withdrawing a *shadowed* registration left its alias registrations in place, so an interface kept
+  pointing at a registration that was gone. Only the visible branch cleaned them up.
+- **`getComponents()`** now reports what became of each declaration, mirroring DS' split between a component
+  *description* and its *configurations*: `configurationPid`, `configurationPolicy`, `hasModified`, and one entry per
+  instance with its state (`unsatisfied-configuration`, `satisfied`, `active`) and properties.
+- **Devtools:** `components(id?)` (DS' `scr:list`), plus `config(pid?)`, `configure(pid, values)` and
+  `unconfigure(pid)`, which settle the loader's queue before reporting.
 - **New example `examples/graph`** (`npm run example:graph`): the three layers — bundles, their components, the
   services between them — drawn as SVG from the running loader. Every box and edge comes from `getManifests()`,
   `getComponents()`, `getServiceReferences()` and `getServiceConsumers()`, so pressing a button changes the

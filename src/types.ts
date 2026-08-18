@@ -3,6 +3,9 @@
  * Type definitions
  */
 
+// Type-only, so the cycle with ConfigurationAdmin.ts exists on paper alone
+import type { ConfigurationAdmin } from './ConfigurationAdmin.js'
+
 /**
  * Module state in lifecycle
  */
@@ -301,6 +304,57 @@ export interface ComponentOptions {
    * DS' immediate/delayed distinction.
    */
   immediate?: boolean
+
+  /**
+   * Configuration PID this component reads, defaulting to the class name.
+   *
+   * Several PIDs are merged left to right, so a shared PID can carry the common
+   * values and a specific one override them — DS 1.3 does the same.
+   *
+   * When the PID names a *factory* PID, the component is instantiated once per
+   * configuration of that factory, each instance with its own properties.
+   */
+  configurationPid?: string | string[]
+
+  /**
+   * What configuration means for this component's lifecycle, as in DS:
+   * - optional (default): runs with configuration if there is any, without if not
+   * - require: does not run until its configuration exists
+   * - ignore: pays no attention to configuration at all
+   */
+  configurationPolicy?: ConfigurationPolicy
+}
+
+export type ConfigurationPolicy = 'optional' | 'require' | 'ignore'
+
+/**
+ * Context handed to a component's `@activate`, `@modified` and `@deactivate`
+ * methods.
+ *
+ * Extends the module context, so a component that only needs services and the
+ * logger can keep taking a `ModuleContext`. DS makes the same distinction
+ * between `BundleContext` and `ComponentContext`.
+ *
+ * @typeParam C Shape of the configuration, for a component that knows what it
+ *   expects: `@activate() start(context: ComponentContext<TileConfig>)`
+ */
+export interface ComponentContext<C extends object = ConfigurationProperties>
+  extends ModuleContext {
+  /**
+   * The configuration this instance runs with — an empty object when it has
+   * none, so reading a value never needs a null check first.
+   */
+  readonly configuration: Readonly<C>
+
+  /**
+   * The properties of the services this instance registered: what the component
+   * declared, with the configuration merged over it. What a consumer's target
+   * filter selects this instance by.
+   */
+  readonly properties: Readonly<ServiceProperties>
+
+  /** PID of the configuration behind this instance, if there is one */
+  readonly configurationPid?: string
 }
 
 /**
@@ -319,6 +373,40 @@ export interface ComponentInfo {
   immediate: boolean
   hasActivate: boolean
   hasDeactivate: boolean
+  /** Whether it can take changed configuration without being rebuilt */
+  hasModified: boolean
+  /** Configuration PIDs it reads, defaulting to the class name */
+  configurationPid: string[]
+  configurationPolicy: ConfigurationPolicy
+
+  /**
+   * What this declaration currently amounts to at runtime.
+   *
+   * Usually one entry; none while the component requires configuration that does
+   * not exist; several when its PID is a factory PID. DS draws the same line
+   * between a component *description* and its *configurations*.
+   */
+  configurations: ComponentConfigurationInfo[]
+}
+
+/**
+ * One runtime instance of a component declaration.
+ *
+ * States as in DS, minus the ones tsm settles at module level: a missing service
+ * parks the whole module, so `unsatisfied-configuration` is the only kind of
+ * unsatisfiedness a single component can be in.
+ */
+export interface ComponentConfigurationInfo {
+  /** PID of the configuration behind it, absent when it runs unconfigured */
+  pid?: string
+  /**
+   * - unsatisfied-configuration: required configuration is missing, nothing registered
+   * - satisfied: registered, not instantiated yet (a delayed component)
+   * - active: an instance exists
+   */
+  state: 'unsatisfied-configuration' | 'satisfied' | 'active'
+  /** The merged properties its registrations carry */
+  properties: Readonly<ServiceProperties>
 }
 
 /**
@@ -346,6 +434,16 @@ export interface BindClassOptions {
    * select on. The module scope fills this in from the manifest's `provides`.
    */
   propertiesById?: Record<string, ServiceProperties>
+
+  /**
+   * Distinguishes several registrations of the same class in the same module.
+   *
+   * Without it a class registering twice under one ID replaces its own earlier
+   * registration — which is what should happen for a repeated registration, and
+   * not what should happen when one component class is instantiated once per
+   * factory configuration. The loader passes the configuration's PID here.
+   */
+  instanceKey?: string
 }
 
 /**
@@ -362,6 +460,16 @@ export type ServicePropertyValue =
 
 /** Properties a registration publishes, matched by a target filter */
 export type ServiceProperties = Record<string, ServicePropertyValue>
+
+/**
+ * Configuration values, as Configuration Admin holds them per PID.
+ *
+ * The same type as service properties on purpose: a component's configuration is
+ * merged into the properties of the services it registers, so a configuration
+ * value has to be something a target filter can match. That is also why OSGi
+ * restricts configuration to these types.
+ */
+export type ConfigurationProperties = ServiceProperties
 
 /**
  * Handle for one registration, returned by register/bind/bindClass.
@@ -381,6 +489,33 @@ export interface ServiceRegistration {
 
   /** Withdraw exactly this registration. Returns false if it is already gone. */
   unregister(): boolean
+
+  /**
+   * Identity of this registration, the same value {@link ServiceReference.key}
+   * carries — so a registrant can find its own reference among an ID's providers.
+   */
+  readonly key: string
+
+  /**
+   * Replace the properties a target filter selects this registration by, without
+   * withdrawing it: the service object stays, consumers keep their reference.
+   *
+   * OSGi's `ServiceRegistration.setProperties`, and what lets a component react
+   * to changed configuration in a `@modified()` method instead of being rebuilt.
+   * A ranking passed here re-decides which registration for the ID is the
+   * visible one. Alias registrations from `implements` are updated as well, since
+   * a component publishes one set of properties across its services —
+   * `propertiesById` gives an individual ID its own set.
+   *
+   * The properties replace the previous ones rather than merging into them: a
+   * value that configuration no longer carries has to disappear.
+   *
+   * Returns false when the registration is already gone.
+   */
+  setProperties(
+    properties: ServiceProperties,
+    options?: { ranking?: number; propertiesById?: Record<string, ServiceProperties> }
+  ): boolean
 
   /**
    * Resolve exactly this registration, not whatever currently answers to the ID.
@@ -644,6 +779,16 @@ export interface ModuleLoaderOptions {
 
   /** Custom logger */
   logger?: ModuleLogger
+
+  /**
+   * Configuration Admin the loader reads component configuration from.
+   *
+   * Without one, `configurationPolicy: 'require'` can never be met and those
+   * components stay unsatisfied; everything else behaves as if no configuration
+   * existed. The admin is also registered as a service under
+   * `tsm.configuration.admin`, so a module can configure another one.
+   */
+  configurationAdmin?: ConfigurationAdmin
 }
 
 /**

@@ -18,12 +18,19 @@ import type { ModuleLoader } from '../ModuleLoader.js'
 import type { PluginRegistry } from '../PluginRegistry.js'
 import type { TsmRuntime } from '../TsmRuntime.js'
 import type {
+  ComponentInfo,
+  ConfigurationProperties,
   LoadedModule,
   ModuleManifest,
   ModuleState,
   PluginRepository,
   ServiceReference
 } from '../types.js'
+import {
+  CONFIGURATION_ADMIN_SERVICE_ID,
+  type Configuration,
+  type ConfigurationAdmin
+} from '../ConfigurationAdmin.js'
 
 import { consoleOutput, css, type DevtoolsOutput } from './output.js'
 
@@ -90,6 +97,16 @@ export interface TsmDevtools {
   providers(serviceId: string, target?: string): ServiceReference[]
   /** Which modules asked for a service, and how */
   consumers(serviceId: string): void
+
+  /** The `@component()` classes of the loaded modules, as DS shows with scr:list */
+  components(moduleId?: string): ComponentInfo[]
+
+  /** Configurations that have values, or the values of one PID */
+  config(pid?: string): void
+  /** Set a PID's values, which starts, updates or rebuilds its components */
+  configure(pid: string, values: ConfigurationProperties): Promise<void>
+  /** Delete a PID's configuration */
+  unconfigure(pid: string): Promise<void>
   /** Shared libraries the host registered */
   shared(): void
 
@@ -155,6 +172,35 @@ export function installDevtools(options: DevtoolsOptions): TsmDevtools {
       return undefined
     }
     return registry
+  }
+
+  /**
+   * The Configuration Admin the loader works with.
+   *
+   * Taken from the registry rather than from an option: the loader publishes it
+   * there, and one it does not know is one whose values would change nothing.
+   */
+  function configurationAdmin(): ConfigurationAdmin | undefined {
+    const admin = services.get<ConfigurationAdmin>(CONFIGURATION_ADMIN_SERVICE_ID)
+    if (!admin) {
+      out.error(
+        'No Configuration Admin — pass one to the ModuleLoader as configurationAdmin'
+      )
+      return undefined
+    }
+    return admin
+  }
+
+  /** Which components read a configuration, so a listing says who cares */
+  function componentsUsing(configuration: Configuration): string[] {
+    return loader.getComponents()
+      .filter(declaration =>
+        declaration.configurationPolicy !== 'ignore' &&
+        (declaration.configurationPid.includes(configuration.pid) ||
+          (configuration.factoryPid !== undefined &&
+            declaration.configurationPid.includes(configuration.factoryPid)))
+      )
+      .map(declaration => `${declaration.moduleId}/${declaration.className}`)
   }
 
   function findManifest(moduleId: string): ModuleManifest | undefined {
@@ -389,6 +435,100 @@ export function installDevtools(options: DevtoolsOptions): TsmDevtools {
       }
     },
 
+    components(moduleId) {
+      const declarations = loader.getComponents(moduleId)
+      if (declarations.length === 0) {
+        out.log(`%cNo components${moduleId ? ` in ${moduleId}` : ''}`, css('muted'))
+        return declarations
+      }
+
+      out.log(`%cComponents${moduleId ? ` of ${moduleId}` : ''}`, css('heading'))
+      for (const declaration of declarations) {
+        const traits = [
+          declaration.immediate ? 'immediate' : 'delayed',
+          declaration.services.length > 0
+            ? declaration.services.join(', ')
+            : 'no service',
+          declaration.configurationPolicy !== 'optional'
+            ? `config ${declaration.configurationPolicy}`
+            : undefined,
+          declaration.hasModified ? 'modified' : undefined
+        ].filter(Boolean).join(' · ')
+
+        out.log(
+          `  %c${declaration.className}%c in ${declaration.moduleId} — ${traits}`,
+          css('name'),
+          css('muted')
+        )
+
+        for (const instance of declaration.configurations) {
+          const pid = instance.pid ?? declaration.configurationPid.join(', ')
+          out.log(
+            `    %c${instance.state}%c ${pid}`,
+            css(instance.state === 'unsatisfied-configuration' ? 'warn' : 'ok'),
+            css('muted')
+          )
+        }
+      }
+      return declarations
+    },
+
+    config(pid) {
+      const admin = configurationAdmin()
+      if (!admin) return
+
+      if (pid !== undefined) {
+        const configuration = admin.findConfiguration(pid)
+        if (!configuration) {
+          out.log(`%cNo configuration for ${pid}`, css('muted'))
+          return
+        }
+        out.inspect(pid, configuration.getProperties())
+        return
+      }
+
+      const configurations = admin.listConfigurations()
+      if (configurations.length === 0) {
+        out.log('%cNo configuration', css('muted'))
+        return
+      }
+
+      out.log('%cConfigurations', css('heading'))
+      for (const configuration of configurations) {
+        const consumers = componentsUsing(configuration)
+        out.log(
+          `  %c${configuration.pid}%c ${consumers.length > 0 ? consumers.join(', ') : 'nobody reads it'}`,
+          css('name'),
+          css('muted')
+        )
+      }
+    },
+
+    async configure(pid, values) {
+      const admin = configurationAdmin()
+      if (!admin) return
+
+      await admin.getConfiguration(pid).update(values)
+      // The components react in the loader's queue, so wait before reporting
+      await loader.settle()
+      out.log(`%cConfigured ${pid}`, css('ok'))
+    },
+
+    async unconfigure(pid) {
+      const admin = configurationAdmin()
+      if (!admin) return
+
+      const configuration = admin.findConfiguration(pid)
+      if (!configuration) {
+        out.log(`%cNo configuration for ${pid}`, css('muted'))
+        return
+      }
+
+      await configuration.delete()
+      await loader.settle()
+      out.log(`%cDeleted configuration ${pid}`, css('ok'))
+    },
+
     shared() {
       if (!runtime) {
         out.error('shared() needs the TSM runtime — pass it to installDevtools()')
@@ -579,6 +719,12 @@ export function installDevtools(options: DevtoolsOptions): TsmDevtools {
           'providers(id, flt?)  every registration, best first',
           'consumers(id)        which modules asked for it',
           'shared()             shared libraries of the host'
+        ]],
+        ['Components', [
+          'components(id?)      declared components and their state',
+          'config(pid?)         configurations, or the values of one',
+          'configure(pid, v)    set values and let the components react',
+          'unconfigure(pid)     delete a configuration'
         ]],
         ['Repositories', [
           'discover()           fetch manifests from repositories',

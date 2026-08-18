@@ -314,15 +314,23 @@ describe('declarative components', () => {
       expect(loader.getComponents('listed')).toEqual([
         {
           moduleId: 'listed', className: 'GeoService', services: ['geo.service'],
-          immediate: true, hasActivate: true, hasDeactivate: true
+          immediate: true, hasActivate: true, hasDeactivate: true, hasModified: false,
+          // The class name is the default PID, as the component name is in DS
+          configurationPid: ['GeoService'], configurationPolicy: 'optional',
+          configurations: [{ pid: undefined, state: 'active', properties: {} }]
         },
         {
           moduleId: 'listed', className: 'Widget', services: ['ui.component', 'ui.widget'],
-          immediate: false, hasActivate: false, hasDeactivate: false
+          immediate: false, hasActivate: false, hasDeactivate: false, hasModified: false,
+          configurationPid: ['Widget'], configurationPolicy: 'optional',
+          // Registered, but nobody resolved it, so no instance exists
+          configurations: [{ pid: undefined, state: 'satisfied', properties: {} }]
         },
         {
           moduleId: 'listed', className: 'Background', services: [],
-          immediate: true, hasActivate: true, hasDeactivate: false
+          immediate: true, hasActivate: true, hasDeactivate: false, hasModified: false,
+          configurationPid: ['Background'], configurationPolicy: 'optional',
+          configurations: [{ pid: undefined, state: 'active', properties: {} }]
         }
       ])
     })

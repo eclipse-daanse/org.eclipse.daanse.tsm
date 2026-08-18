@@ -258,22 +258,45 @@ class ModuleLoader {
 
   // Loading
   loadAll(): Promise<void>
-  loadModule(manifest: ModuleManifest): Promise<LoadedModule>
+  loadModule(
+    manifest: ModuleManifest,
+    options?: { awaitCascade?: boolean }
+  ): Promise<LoadedModule>
 
   // Unloading
   unloadModule(moduleId: string): Promise<boolean>
   reloadModule(moduleId: string): Promise<void>  // requires hotReload: true
+
+  // On/off, a dimension of its own: a disabled module is not broken and not
+  // waiting, it is switched off
+  disableModule(moduleId: string): Promise<boolean>
+  enableModule(moduleId: string): Promise<boolean>
+  isDisabled(moduleId: string): boolean
+  getDisabledModules(): string[]
 
   // Queries
   isLoaded(moduleId: string): boolean
   getModule(moduleId: string): LoadedModule | undefined
   getModuleExports<T>(moduleId: string): T | undefined
   getLoadedModuleIds(): string[]
+  getManifests(): ModuleManifest[]
   getServiceRegistry(): ServiceRegistry
+
+  // Diagnosis
+  getUnsatisfiedModules(): Array<{ moduleId: string; waitingFor: string[] }>
+  getDeclarationMismatches(): Array<{ moduleId: string; serviceIds: string[] }>
+  getServiceConsumers(serviceId: string): Array<{ moduleId: string; state: ModuleState; requirement: ServiceRequirement }>
+  getComponents(moduleId?: string): ComponentInfo[]
+
+  // Reactions to service and configuration events run in a queue; this waits
+  // for it, including what a reaction caused. Never call it from a hook.
+  settle(): Promise<void>
 
   // Events
   addEventListener(listener: ModuleEventListener): void
   removeEventListener(listener: ModuleEventListener): void
+
+  dispose(): void
 }
 ```
 
@@ -669,7 +692,7 @@ context.services.register('editor.extensions', {
 ### 9.2 Wichtig (v0.3.0)
 
 - [ ] **Extension Points**: Formales System für Plugin-Erweiterungen
-- [ ] **Config-System**: Module sollen Konfiguration deklarieren können
+- [x] **Config-System**: Konfiguration pro Component über PIDs (§11.3)
 - [ ] **Lazy Loading**: Module erst laden wenn benötigt
 - [ ] **Preloading**: Wichtige Module im Hintergrund vorladen
 
@@ -788,6 +811,13 @@ interface ModuleLoaderOptions {
 
   /** Custom Logger */
   logger?: ModuleLogger
+
+  /**
+   * Woher Component-Konfiguration kommt (§11.3). Ohne ihn bleiben Components
+   * mit `configurationPolicy: 'require'` unerfüllt; der Admin wird zusätzlich
+   * als Service `tsm.configuration.admin` veröffentlicht.
+   */
+  configurationAdmin?: ConfigurationAdmin
 }
 ```
 
@@ -809,71 +839,180 @@ interface PluginRegistryOptions {
 }
 ```
 
-### 11.3 Modul-Konfiguration
+### 11.3 Konfiguration
 
-TSM bringt **keinen** Configuration Admin mit. Der Grund ist nicht Aufwand, sondern
-Zuständigkeit: In OSGi ist Config Admin eine eigene Spezifikation, die die SCR lediglich
-*konsumiert* — und der überwiegende Teil davon ist Persistenz und Deployment. Wo
-Konfigurationswerte herkommen (Backend, `localStorage`, Build-Artefakt), ist eine
-Entscheidung der Anwendung, nicht des Modulsystems.
-
-Was Config Admin an **Lebenszyklus-Semantik** beiträgt, ist mit den vorhandenen Mitteln
-bereits ausdrückbar: Konfiguration wird als Service pro PID registriert.
+Konfiguration hängt an der **Component**, nicht am Modul — wie in OSGi, wo
+Configuration Admin (Compendium 104) die Werte verwaltet und DS (112) den
+Lebenszyklus daran hängt. Beide Rollen sind auch hier getrennt: der
+`ConfigurationAdmin` weiß nichts von Components, die Kopplung läuft über PIDs.
 
 ```typescript
-// config-module - liefert die Konfiguration als Service
-export async function activate(context: ModuleContext) {
-  const settings = await fetch('/api/settings').then(response => response.json())
+import { ConfigurationAdmin, LocalStorageConfigurationStore, ModuleLoader } from '@eclipse-daanse/tsm'
 
-  for (const [pid, values] of Object.entries(settings)) {
-    context.services.register(`config/${pid}`, values)
+const configuration = new ConfigurationAdmin({
+  store: new LocalStorageConfigurationStore()
+})
+const loader = new ModuleLoader({ configurationAdmin: configuration })
+```
+
+Ohne `configurationAdmin` verhält sich alles wie ohne Konfiguration: Components
+mit `configurationPolicy: 'require'` bleiben unerfüllt, alle anderen laufen.
+
+#### Deklaration
+
+```typescript
+@component({
+  service: ['demo.tiles'],
+  configurationPid: 'demo.tiles',      // Default: der Klassenname
+  configurationPolicy: 'require'       // Default: 'optional'
+})
+export class RasterTiles {
+  private url = ''
+
+  @activate()
+  start(context: ComponentContext<TileConfig>): void {
+    this.url = context.configuration.tileUrl
+  }
+
+  @modified()
+  update(context: ComponentContext<TileConfig>): void {
+    this.url = context.configuration.tileUrl   // ohne Neuaufbau
   }
 }
 ```
 
-```json
-// map-module/manifest.json - wartet, bis seine Konfiguration da ist
-{
-  "id": "map-module",
-  "requiresService": [
-    { "id": "config/map-module", "policy": "dynamic" }
-  ]
-}
-```
+| `configurationPolicy` | Bedeutung |
+| --- | --- |
+| `optional` (Default) | läuft mit Konfiguration, wenn es eine gibt, sonst ohne |
+| `require` | wird nicht registriert, bis die PID existiert |
+| `ignore` | liest keine Konfiguration und reagiert nicht auf Änderungen |
+
+Mehrere PIDs (`configurationPid: ['demo.shared', 'demo.tiles']`) werden von links
+nach rechts gemergt, wie in DS 1.3: eine gemeinsame PID trägt die Grundwerte, eine
+spezifische überschreibt sie.
+
+#### Was eine Änderung auslöst
+
+Drei Fälle, in der Reihenfolge, in der DS sie unterscheidet:
+
+1. **Component nie erzeugt** (delayed, niemand hat sie aufgelöst) — nur die
+   Service-Properties werden aktualisiert. Kein Neuaufbau, weil es nichts
+   aufzubauen gibt.
+2. **`@modified()` vorhanden** — die Methode wird gerufen, die Instanz bleibt,
+   die Service-Properties werden über `ServiceRegistration.setProperties`
+   aktualisiert. Consumer behalten ihre Referenz.
+3. **kein `@modified()`** — `@deactivate`, Abmeldung, Neuaufbau mit den neuen
+   Werten. Das ist der Grund, `@modified()` zu schreiben: wenn ein Neuaufbau
+   etwas kostet, das die Component nicht billig wiederherstellt.
+
+Eine erneute Zustellung, die keinen Wert ändert, tut nichts.
+
+#### Properties
+
+Die Konfiguration wird über die Component-Properties gemergt und **wird** zu den
+Service-Properties — Konfiguration gewinnt, sie ist das spätere Wort zur selben
+Frage:
 
 ```typescript
-// map-module - liest die Konfiguration und reagiert auf Änderungen
-export async function activate(context: ModuleContext) {
-  const config = context.services.getRequired<MapSettings>('config/map-module')
-  initialiseMap(config.tileUrl)
-}
-
-export function onServiceBound(context: ModuleContext, serviceId: string) {
-  if (serviceId === 'config/map-module') applyConfiguration(context)
-}
+@component({ service: ['demo.tiles'], properties: { kind: 'raster' } })
+// Konfiguration { kind: 'vector' }  =>  Consumer mit Filter (kind=vector) trifft zu
 ```
 
-Damit ergibt sich die Semantik der Configuration-Admin-Integration von DS aus
-Bordmitteln:
+Zwei Sonderfälle, beide wie in OSGi:
 
-| OSGi Declarative Services | TSM |
-| --- | --- |
-| `configurationPolicy = require` | Pflicht-`requiresService` auf die Config-ID; das Modul wird geparkt, bis sie existiert |
-| `configurationPolicy = optional` | `optional: true` bzw. `cardinality: "0..1"` |
-| `configurationPolicy = ignore` | kein Requirement deklarieren |
-| kein `modified` → deactivate/activate | `policyOption: "greedy"` — eine erneute Registrierung derselben ID ist eine neue Registrierung, der Loader erkennt den Wechsel und baut das Modul neu auf |
-| `modified`-Methode | `policy: "dynamic"` mit `onServiceBound` |
-| Factory-Konfigurationen (mehrere Instanzen einer Vorlage) | mehrere Provider derselben ID mit unterschiedlichen `properties`, konsumiert über `cardinality: "0..n"` und Target-Filter |
-| Config-PID | Service-ID, konventionell `config/<modul-id>` |
+- Schlüssel mit führendem Punkt (`.token`) bleiben privat: die Component sieht
+  sie in `context.configuration`, die Service-Properties nicht.
+- `service.ranking` aus der Konfiguration überschreibt das im Code deklarierte
+  Ranking — damit lässt sich die Reihenfolge zweier Provider ohne Code-Änderung
+  umstellen.
 
-**Bekannte Grenze:** Ein Target-Filter im Manifest ist statisch — DS erlaubt es, ihn per
-Konfiguration (`<referenz>.target`) zu überschreiben. Auf Code-Ebene ist das kein
-Problem, `getServiceReferences(id, target)` nimmt jeden zur Laufzeit gebildeten Filter;
-nur die *deklarative* Erfüllungsbedingung liegt fest. Ein Override-Mechanismus wird
-ergänzt, wenn ein konkreter Fall dafür existiert.
+Deshalb sind Konfigurationswerte auf `string`, `number`, `boolean` und Arrays
+davon beschränkt: sie müssen filterbar und persistierbar sein.
 
-**Metatype** (Schema-Beschreibung für generierte Admin-Oberflächen) hat in TSM kein
-Gegenstück und ist Sache der Anwendung.
+#### Factory-Konfigurationen
+
+Zeigt die PID auf eine **Factory-PID**, wird die Component einmal *pro
+Konfiguration* instanziiert — jede mit eigenen Properties und eigener
+Service-Registrierung. Das ist kein zusätzliches Feature, sondern dieselbe
+Mechanik: in DS folgt es ebenfalls allein aus der PID.
+
+```typescript
+configuration.getFactoryConfiguration('demo.tile-source', 'osm').update({ name: 'osm', url: '…' })
+configuration.getFactoryConfiguration('demo.tile-source', 'sat').update({ name: 'sat', url: '…' })
+// => zwei Instanzen unter 'demo.tiles', unterscheidbar per (name=sat),
+//    konsumierbar über cardinality '0..n'
+```
+
+Die PID einer benannten Factory-Konfiguration ist `factoryPid~name` wie in CM 1.6;
+`createFactoryConfiguration(factoryPid)` erzeugt einen Namen selbst.
+
+#### Persistenz
+
+`ConfigurationStore` ist die einzige austauschbare Stelle — genau der Schnitt der
+OSGi-Spezifikation, die Persistenz *verlangt* und das Medium offenlässt. Mit
+dabei sind `MemoryConfigurationStore` und `LocalStorageConfigurationStore` (ein
+Eintrag pro PID, damit zwei Tabs sich nicht überschreiben); ein Store gegen ein
+Backend sind drei Methoden.
+
+`loadAll()` wartet auf `ConfigurationAdmin.ready()`, damit eine Component, deren
+Werte schon im Store liegen, nicht erst geparkt und dann geweckt wird.
+
+#### Zustellung ist asynchron
+
+`update()` kehrt zurück, sobald die Werte gespeichert und das Event abgesetzt ist
+— nicht, wenn alle Components reagiert haben; auch das wie in OSGi. Die Reaktion
+läuft in der Reconciliation-Queue des Loaders, also wartet `await loader.settle()`
+darauf.
+
+#### Sichtbarkeit
+
+`loader.getComponents()` zeigt die Deklaration *und* ihre Ausprägungen — DS'
+Unterscheidung zwischen Component *Description* und Component *Configuration*:
+
+```typescript
+loader.getComponents('tiles')
+// [{ className: 'RasterTiles', configurationPid: ['demo.tiles'],
+//    configurationPolicy: 'require', hasModified: true,
+//    configurations: [{ pid: 'demo.tiles', state: 'active', properties: {…} }] }]
+```
+
+Zustände einer Ausprägung: `unsatisfied-configuration`, `satisfied` (registriert,
+noch nicht erzeugt), `active`. Feiner unterscheidet DS zusätzlich
+`UNSATISFIED_REFERENCE` — dafür gibt es hier kein Gegenstück, weil ein fehlender
+**Service** das ganze Modul parkt (§3) und nicht die einzelne Component.
+
+In der Konsole: `tsm.components()`, `tsm.config()`, `tsm.configure(pid, values)`,
+`tsm.unconfigure(pid)`.
+
+#### Der Admin als Service
+
+Der Loader registriert den übergebenen Admin unter `tsm.configuration.admin`, wie
+OSGi ihn als Service veröffentlicht. Ein Modul kann Konfiguration also lesen und
+schreiben, ohne einen privaten Kanal zum Host:
+
+```typescript
+const configuration = context.services.get<ConfigurationAdmin>('tsm.configuration.admin')
+await configuration?.getConfiguration('demo.tiles').update({ tileUrl: url })
+```
+
+#### Grenzen
+
+- **Kein Target-Filter-Override.** DS erlaubt es, `<referenz>.target`,
+  `<referenz>.cardinality` und `minimum.cardinality` per Konfiguration zu
+  überschreiben. Hier stehen Requirements im Manifest und gelten für das **Modul**,
+  während Konfiguration an der **Component** hängt — ein Override hätte also keinen
+  eindeutigen Adressaten. Auf Code-Ebene ist es keine Einschränkung:
+  `getServiceReferences(id, target)` nimmt jeden zur Laufzeit gebildeten Filter.
+- **Kein Metatype.** Schema, Typen und Labels für generierte
+  Konfigurations-Oberflächen sind in OSGi eine eigene Spezifikation (105) und hier
+  Sache der Anwendung. `ComponentContext<C>` gibt der Konfiguration einen Typ im
+  Code, aber keine Beschreibung zur Laufzeit.
+- **Kein Bundle-Location-Binding und keine Permissions.** In OSGi verhindert die
+  Bindung einer Configuration an eine Bundle-Location, dass ein fremdes Bundle
+  fremde Konfiguration bekommt. Im Browser gibt es keine Sicherheitsgrenze
+  zwischen Modulen, gegen die das schützen würde.
+- **Kein `ConfigurationPlugin`.** Werte werden zugestellt, wie sie gespeichert
+  sind; Variablenersetzung gehört in den Store.
 
 ---
 

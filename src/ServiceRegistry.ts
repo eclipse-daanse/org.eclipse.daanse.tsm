@@ -53,6 +53,12 @@ interface ServiceBinding {
    * same ID are two providers, not one replacing the other.
    */
   origin?: unknown
+  /**
+   * Tells apart several registrations of one origin in one module — one
+   * component class instantiated per factory configuration. Part of the
+   * registration's identity, alongside provider and origin.
+   */
+  instanceKey?: string
   /** Dependencies for automatic resolution (set by bindClass) */
   deps?: DependencyInfo[]
   /** Property dependencies for injection after construction (set by bindClass) */
@@ -81,6 +87,16 @@ function propertiesOf(binding: ServiceBinding): ServiceProperties {
     properties['service.providedBy'] = binding.providedBy
   }
   return properties
+}
+
+/**
+ * The identity a reference and its registration handle share.
+ *
+ * One function rather than two literals, so the two can never drift: a
+ * registrant finds its own reference by comparing them.
+ */
+function referenceKey(id: string, binding: ServiceBinding): string {
+  return `${id}#${binding.seq}`
 }
 
 /**
@@ -119,7 +135,9 @@ export class DefaultServiceRegistry implements IServiceRegistry {
     const visible = this.bindings.get(id)
 
     const sameSource = (candidate: ServiceBinding): boolean =>
-      candidate.providedBy === binding.providedBy && candidate.origin === binding.origin
+      candidate.providedBy === binding.providedBy &&
+      candidate.origin === binding.origin &&
+      candidate.instanceKey === binding.instanceKey
 
     // Drop this source's earlier registration, wherever it sits
     this.removeShadowed(id, sameSource)
@@ -130,7 +148,7 @@ export class DefaultServiceRegistry implements IServiceRegistry {
         this.pushShadowed(id, visible)
       }
       if (replacesVisible) {
-        this.dropAliasesOf(id)
+        this.dropAliasesOf(id, visible.seq)
         this.dropInjectionEdges(id)
       }
       this.setVisible(id, binding)
@@ -203,7 +221,10 @@ export class DefaultServiceRegistry implements IServiceRegistry {
       serviceId: id,
       providedBy: binding.providedBy,
       ranking: binding.ranking,
+      key: referenceKey(id, binding),
       unregister: () => this.unregisterRegistration(id, binding.seq),
+      setProperties: (properties: ServiceProperties, options = {}) =>
+        this.updateProperties(id, binding, properties, options),
       resolve: <T>() => {
         // Gone already: nothing to resolve
         if (!this.registrationsOf(id).some(candidate => candidate.seq === binding.seq)) {
@@ -215,6 +236,74 @@ export class DefaultServiceRegistry implements IServiceRegistry {
   }
 
   /**
+   * Replace the properties of one registration, and of the alias registrations
+   * that belong to it.
+   *
+   * The properties declared for an individual ID are kept underneath: the
+   * manifest describes where a service belongs, the new properties — in practice
+   * a component's configuration — win over that per key.
+   */
+  private updateProperties(
+    id: string,
+    binding: ServiceBinding,
+    properties: ServiceProperties,
+    options: { ranking?: number; propertiesById?: Record<string, ServiceProperties> }
+  ): boolean {
+    const live = this.registrationsOf(id).find(candidate => candidate.seq === binding.seq)
+    if (!live) return false
+
+    const { ranking, propertiesById } = options
+
+    const apply = (target: ServiceBinding, serviceId: string): void => {
+      target.properties = { ...(propertiesById?.[serviceId] ?? properties) }
+      if (ranking !== undefined) {
+        target.ranking = ranking
+      }
+    }
+
+    apply(live, id)
+
+    for (const aliasId of this.aliasesOf.get(id) ?? []) {
+      const alias = this.registrationsOf(aliasId)
+        .find(candidate => candidate.aliasSeq === binding.seq)
+      if (alias) {
+        apply(alias, aliasId)
+        if (ranking !== undefined) this.reevaluateVisibility(aliasId)
+      }
+    }
+
+    if (ranking !== undefined) {
+      this.reevaluateVisibility(id)
+    }
+
+    // A property change is not a new service; consumers keep the object they
+    // hold, which is the point of not going through unregister/register
+    this.notify({ type: 'updated', serviceId: id, service: live.instance })
+    return true
+  }
+
+  /**
+   * Decide again which registration for an ID is the visible one.
+   *
+   * Only needed after a ranking changed underneath: registration order alone
+   * cannot have moved anything, so nothing else disturbs the bench.
+   */
+  private reevaluateVisibility(id: string): void {
+    const all = this.registrationsOf(id)
+    if (all.length < 2) return
+
+    const best = all.reduce((winner, candidate) =>
+      this.outranks(candidate, winner) ? candidate : winner
+    )
+    const visible = this.bindings.get(id)
+    if (visible === best) return
+
+    this.removeShadowed(id, candidate => candidate.seq === best.seq)
+    if (visible) this.pushShadowed(id, visible)
+    this.setVisible(id, best)
+  }
+
+  /**
    * Withdraw one specific registration. When it was the visible one, the best
    * remaining registration takes over instead of the ID falling silent.
    */
@@ -222,7 +311,11 @@ export class DefaultServiceRegistry implements IServiceRegistry {
     const visible = this.bindings.get(id)
 
     if (visible?.seq !== seq) {
-      return this.removeShadowed(id, binding => binding.seq === seq)
+      const removed = this.removeShadowed(id, binding => binding.seq === seq)
+      // A stand-in has its own alias registrations, and those would survive it:
+      // the interface would keep pointing at a registration that is gone
+      if (removed) this.dropAliasesOf(id, seq)
+      return removed
     }
 
     const successor = this.registrationsOf(id).find(binding => binding.seq !== seq)
@@ -231,7 +324,7 @@ export class DefaultServiceRegistry implements IServiceRegistry {
     }
 
     this.removeShadowed(id, binding => binding.seq === successor.seq)
-    this.dropAliasesOf(id)
+    this.dropAliasesOf(id, seq)
     this.dropInjectionEdges(id)
     this.setVisible(id, successor)
     this.notify({
@@ -333,6 +426,7 @@ export class DefaultServiceRegistry implements IServiceRegistry {
       ranking: options.ranking ?? 0,
       seq: primarySeq,
       properties: options.propertiesById?.[id] ?? options.properties,
+      instanceKey: options.instanceKey,
       deps: metadata.map(m => ({ serviceId: m.serviceId, optional: m.optional })),
       propertyDeps: propertyMetadata.length > 0 ? propertyMetadata : undefined
     })
@@ -362,6 +456,7 @@ export class DefaultServiceRegistry implements IServiceRegistry {
           providedBy: options.providedBy,
           ranking: options.ranking ?? 0,
           seq: this.nextSeq++,
+          instanceKey: options.instanceKey,
           // The interface is what consumers filter on, so it may carry its own
           properties: options.propertiesById?.[interfaceId] ?? options.properties
         })
@@ -620,7 +715,7 @@ export class DefaultServiceRegistry implements IServiceRegistry {
         scope: binding.scope,
         instantiated: binding.instance !== undefined,
         properties: propertiesOf(binding) as ServiceProperties,
-        key: `${id}#${binding.seq}`
+        key: referenceKey(id, binding)
       }))
   }
 
@@ -756,19 +851,51 @@ export class DefaultServiceRegistry implements IServiceRegistry {
   /**
    * Remove every alias binding that delegates to the given primary ID
    */
-  private dropAliasesOf(primaryId: string): void {
+  /**
+   * Remove the alias registrations a primary registration created.
+   *
+   * @param primarySeq Restricts it to the aliases of that one registration.
+   *   Needed once a class can be registered more than once under an ID — one
+   *   instance per factory configuration — where dropping the first alias found
+   *   would take another instance's interface with it. Without it, every alias
+   *   of the ID goes, which is what withdrawing the ID itself means.
+   */
+  private dropAliasesOf(primaryId: string, primarySeq?: number): void {
     const aliases = this.aliasesOf.get(primaryId)
     if (!aliases) return
-    this.aliasesOf.delete(primaryId)
+
+    const remaining = new Set<string>()
 
     for (const aliasId of aliases) {
-      // Only this primary's own alias registration goes. Another implementation
+      // Only this primary's own alias registrations go. Another implementation
       // of the same interface stays and takes over if it was the stand-in.
-      const alias = this.registrationsOf(aliasId)
-        .find(registration => registration.aliasOf === primaryId)
-      if (!alias) continue
+      const own = this.registrationsOf(aliasId).filter(registration =>
+        registration.aliasOf === primaryId &&
+        (primarySeq === undefined || registration.aliasSeq === primarySeq)
+      )
+      if (own.length === 0) {
+        // Somebody else's registration under this interface, or none left
+        if (primarySeq !== undefined) remaining.add(aliasId)
+        continue
+      }
 
-      this.unregisterRegistration(aliasId, alias.seq)
+      for (const alias of own) {
+        this.unregisterRegistration(aliasId, alias.seq)
+      }
+
+      // Another configuration of the same class may still answer to it
+      if (
+        primarySeq !== undefined &&
+        this.registrationsOf(aliasId).some(registration => registration.aliasOf === primaryId)
+      ) {
+        remaining.add(aliasId)
+      }
+    }
+
+    if (remaining.size > 0) {
+      this.aliasesOf.set(primaryId, remaining)
+    } else {
+      this.aliasesOf.delete(primaryId)
     }
   }
 
