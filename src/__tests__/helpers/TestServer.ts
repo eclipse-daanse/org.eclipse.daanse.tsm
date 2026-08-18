@@ -132,7 +132,7 @@ export class TestServer {
 
       res.writeHead(200, { 'Content-Type': contentType })
       res.end(content)
-    } catch (error) {
+    } catch {
       res.writeHead(500)
       res.end('Internal Server Error')
     }

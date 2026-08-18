@@ -201,8 +201,9 @@ export interface ModuleContext {
 /**
  * Constructor type for injectable classes
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export interface InjectableConstructor<T = unknown> {
+  // any[] on purpose: a constructor with typed parameters has to stay assignable
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   new (...args: any[]): T
 }
 

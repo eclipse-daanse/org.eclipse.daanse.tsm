@@ -134,22 +134,34 @@ describe('ModuleLoader', () => {
   })
 
   describe('lifecycle integration', () => {
-    it('should handle modules with lifecycle hooks', async () => {
-      const loader = new ModuleLoader()
-      const activateFn = vi.fn()
-      const deactivateFn = vi.fn()
+    it('should call the lifecycle hooks of a module', async () => {
+      const globalRef = globalThis as { window?: Record<string, unknown> }
+      const savedWindow = globalRef.window
+      globalRef.window = {}
 
-      const lifecycle: ModuleLifecycle = {
-        activate: activateFn,
-        deactivate: deactivateFn
+      try {
+        const loader = new ModuleLoader()
+        const activateFn = vi.fn()
+        const deactivateFn = vi.fn()
+        const lifecycle: ModuleLifecycle = {
+          activate: activateFn,
+          deactivate: deactivateFn
+        }
+
+        // loadEntry() takes the container from window instead of importing
+        globalRef.window['lifecycle-module'] = lifecycle as unknown as Record<string, unknown>
+        const manifest = createManifest('lifecycle-module')
+        loader.register([manifest])
+
+        await loader.loadModule(manifest)
+        await loader.settle()
+        expect(activateFn).toHaveBeenCalledTimes(1)
+
+        await loader.unloadModule('lifecycle-module')
+        expect(deactivateFn).toHaveBeenCalledTimes(1)
+      } finally {
+        globalRef.window = savedWindow
       }
-
-      // This would require mocking the import mechanism
-      // For now, just verify the loader accepts options
-      expect(() => new ModuleLoader({
-        continueOnError: true,
-        hotReload: true
-      })).not.toThrow()
     })
   })
 

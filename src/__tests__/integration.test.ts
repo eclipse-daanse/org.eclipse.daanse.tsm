@@ -10,7 +10,7 @@ import { TestServer, createTestServer } from './helpers/TestServer'
 import { PluginRegistry } from '../PluginRegistry'
 import { ModuleLoader } from '../ModuleLoader'
 import { DependencyResolver } from '../DependencyResolver'
-import type { RegistryEventListener, ModuleEventListener } from '../types'
+import type { RegistryEventListener } from '../types'
 
 // Mock window for Node.js environment
 declare const global: typeof globalThis & { window?: Record<string, unknown> }
