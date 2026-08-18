@@ -29,6 +29,15 @@ export interface DeclaredComponent {
   services: DeclaredService[]
   /** Whether an `@activate` method makes it an immediate component */
   immediate: boolean
+
+  /**
+   * Whether the class is exported.
+   *
+   * The loader finds components in the module's namespace, so one that is not
+   * exported is never registered — and nothing at runtime can report that,
+   * because the class is simply not there to be found.
+   */
+  exported: boolean
 }
 
 /**
@@ -68,12 +77,18 @@ export function extractComponents(
         name: declaration.name?.text ?? '(anonymous)',
         line,
         services: readServices(options, source, constants, resolveImport, line),
-        immediate: hasActivateMethod(declaration) || options.get('immediate') !== undefined
+        immediate: hasActivateMethod(declaration) || options.get('immediate') !== undefined,
+        exported: isExported(declaration)
       })
     }
   }
 
   return found
+}
+
+function isExported(declaration: ts.ClassDeclaration): boolean {
+  const flags = ts.getCombinedModifierFlags(declaration)
+  return (flags & ts.ModifierFlags.Export) !== 0
 }
 
 function classDeclarations(statement: ts.Statement): ts.ClassDeclaration[] {

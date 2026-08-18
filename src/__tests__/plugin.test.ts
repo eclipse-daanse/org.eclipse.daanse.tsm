@@ -381,6 +381,19 @@ describe('tsmPlugin manifest validation', () => {
       }
     })
 
+    it('should report a component that is not exported', async () => {
+      const result = await runWithFiles(
+        { manifest: { id: 'widget' }, components: 'validate' },
+        [{
+          id: '/src/Hidden.ts',
+          code: "@component({ service: ['ui.component'] })\nclass Hidden {}"
+        }]
+      )
+
+      expect(result.errors[0]).toContain('/src/Hidden.ts:1')
+      expect(result.errors[0]).toContain('not exported')
+    })
+
     it('should report a declaration it cannot read', async () => {
       const result = await runWithFiles(
         { manifest: { id: 'widget' }, components: 'validate' },

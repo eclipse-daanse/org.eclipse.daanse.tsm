@@ -277,6 +277,16 @@ export function tsmPlugin(options: TsmPluginOptions = {}): Plugin {
           for (const found of extractComponents(code, specifier =>
             readImportedSource(specifier, id)
           )) {
+            if (!found.exported) {
+              // The loader looks for components in the module's namespace, so an
+              // unexported one is silently never registered
+              const message =
+                `tsm: '${id}:${found.line}' component ${found.name} is not exported, ` +
+                `so the loader cannot find it`
+              if (strict) this.error(message)
+              else this.warn(message)
+            }
+
             for (const service of found.services) {
               const known = declaredServices.get(service.id)
               if (known && JSON.stringify(known) !== JSON.stringify(service)) {

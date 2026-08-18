@@ -116,6 +116,10 @@ export class ClockView {
 }
 ```
 
+The class must be `export`ed — the loader looks for components in the module's
+namespace, so one that is not exported is never registered and nothing at runtime
+can report why; `tsmPlugin({ components: 'validate' })` catches it at build time.
+
 The loader registers the class under the declared service ids and runs its
 lifecycle — the module needs no `activate` export for it, and `provides` in the
 manifest becomes optional because the declaration is the registration.
