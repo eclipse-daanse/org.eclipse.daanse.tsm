@@ -94,9 +94,15 @@ export function transient(): ClassDecorator {
 }
 
 /**
+ * What the metadata readers accept: a class, or any object carrying metadata.
+ * Reflect.getOwnMetadata needs nothing more specific.
+ */
+type MetadataTarget = object
+
+/**
  * Reads the inject metadata from a class, sorted by parameter index.
  */
-export function getInjectMetadata(target: Function): InjectMetadata[] {
+export function getInjectMetadata(target: MetadataTarget): InjectMetadata[] {
   const metadata: InjectMetadata[] = Reflect.getOwnMetadata(INJECT_KEY, target) ?? []
   return metadata.sort((a, b) => a.index - b.index)
 }
@@ -104,14 +110,14 @@ export function getInjectMetadata(target: Function): InjectMetadata[] {
 /**
  * Reads the property inject metadata from a class.
  */
-export function getPropertyInjectMetadata(target: Function): PropertyInjectMetadata[] {
+export function getPropertyInjectMetadata(target: MetadataTarget): PropertyInjectMetadata[] {
   return Reflect.getOwnMetadata(INJECT_PROPERTY_KEY, target) ?? []
 }
 
 /**
  * Checks if a class is decorated with @injectable().
  */
-export function isInjectable(target: Function): boolean {
+export function isInjectable(target: MetadataTarget): boolean {
   return Reflect.getOwnMetadata(INJECTABLE_KEY, target) === true
 }
 
@@ -119,6 +125,6 @@ export function isInjectable(target: Function): boolean {
  * Reads the scope metadata from a class (set by @singleton() or @transient()).
  * Returns undefined if no scope decorator was used.
  */
-export function getScopeMetadata(target: Function): 'singleton' | 'transient' | undefined {
+export function getScopeMetadata(target: MetadataTarget): 'singleton' | 'transient' | undefined {
   return Reflect.getOwnMetadata(SCOPE_KEY, target)
 }
