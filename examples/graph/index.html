@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TSM: Bundles, Components, Services</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Bundles, Components, Services</h1>
+      <p>
+        The three layers, drawn from the running loader. Load and unload bundles and
+        watch what changes — nothing here is a picture of an idea, it is the state
+        of the system.
+      </p>
+      <div class="controls">
+        <button id="btn-vector">Load vector tiles (ranked higher)</button>
+        <button id="btn-traffic">Load traffic (optional dependency)</button>
+        <button id="btn-disable-nav">Disable navigation</button>
+      </div>
+    </header>
+
+    <div class="legend">
+      <span><i class="swatch bundle"></i> Bundle</span>
+      <span><i class="swatch component"></i> Component</span>
+      <span><i class="swatch service"></i> Service</span>
+      <span><i class="line provides"></i> provides</span>
+      <span><i class="line requires"></i> requires</span>
+      <span><i class="swatch shadowed"></i> standing by</span>
+    </div>
+
+    <div id="graph"></div>
+
+    <section class="detail">
+      <h2>What the loader reports</h2>
+      <pre id="report"></pre>
+    </section>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -376,6 +376,15 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
 - **New subpath export `@eclipse-daanse/tsm/decorators`** — just the decorators and their metadata. A
   separately built module needs them at runtime, and importing the package root would pull the whole loader
   into every bundle.
+- **New example `examples/graph`** (`npm run example:graph`): the three layers — bundles, their components, the
+  services between them — drawn as SVG from the running loader. Every box and edge comes from `getManifests()`,
+  `getComponents()`, `getServiceReferences()` and `getServiceConsumers()`, so pressing a button changes the
+  picture: a higher-ranked provider turns the previous one's edge grey (standing by), disabling a provider makes
+  its consumer wait, and a bundle whose service nobody offers stays parked with no components at all — its
+  classes are loaded but were never registered.
+- **`ModuleLoader.getComponents(moduleId?)`** lists the `@component()` classes of the loaded modules with what
+  each declared: services, immediate or delayed, which lifecycle methods it has. A service reference names the
+  module that provided it, never the class, so this was the missing view — DS offers it as `scr:list`.
 - **New example `examples/workbench`** (`npm run example:workbench`): UI components that come and go while the
   shell keeps running. It distinguishes two mechanisms a workbench needs — a *region* collects every
   contribution (`0..n`, ordered by an `order` property), while a *slot* has several modules competing for one

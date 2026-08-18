@@ -290,6 +290,83 @@ describe('declarative components', () => {
     })
   })
 
+  describe('listing components', () => {
+    it('should report what each component declared', async () => {
+      @component({ service: ['geo.service'] })
+      class GeoService {
+        @activate() start(): void {}
+        @deactivate() stop(): void {}
+      }
+
+      @component({ service: ['ui.component', 'ui.widget'] })
+      class Widget {}
+
+      @component()
+      class Background {
+        @activate() start(): void {}
+      }
+
+      const loader = new ModuleLoader()
+      globalRef.window!.listed = { GeoService, Widget, Background }
+
+      await loader.loadModule(manifest('listed'))
+
+      expect(loader.getComponents('listed')).toEqual([
+        {
+          moduleId: 'listed', className: 'GeoService', services: ['geo.service'],
+          immediate: true, hasActivate: true, hasDeactivate: true
+        },
+        {
+          moduleId: 'listed', className: 'Widget', services: ['ui.component', 'ui.widget'],
+          immediate: false, hasActivate: false, hasDeactivate: false
+        },
+        {
+          moduleId: 'listed', className: 'Background', services: [],
+          immediate: true, hasActivate: true, hasDeactivate: false
+        }
+      ])
+    })
+
+    it('should list the components of every module', async () => {
+      @component({ service: ['a.service'] })
+      class A {}
+
+      @component({ service: ['b.service'] })
+      class B {}
+
+      const loader = new ModuleLoader()
+      globalRef.window!.first = { A }
+      globalRef.window!.second = { B }
+
+      await loader.loadModule(manifest('first'))
+      await loader.loadModule(manifest('second'))
+
+      expect(loader.getComponents().map(entry => `${entry.moduleId}/${entry.className}`))
+        .toEqual(['first/A', 'second/B'])
+    })
+
+    it('should forget the components of an unloaded module', async () => {
+      @component({ service: ['gone.service'] })
+      class Gone {}
+
+      const loader = new ModuleLoader()
+      globalRef.window!.temporary = { Gone }
+      await loader.loadModule(manifest('temporary'))
+
+      await loader.unloadModule('temporary')
+
+      expect(loader.getComponents()).toEqual([])
+    })
+
+    it('should return nothing for a module without components', async () => {
+      const loader = new ModuleLoader()
+      globalRef.window!.plainmod = { activate: vi.fn() }
+      await loader.loadModule(manifest('plainmod'))
+
+      expect(loader.getComponents('plainmod')).toEqual([])
+    })
+  })
+
   describe('teardown', () => {
     it('should call deactivate when the module is unloaded', async () => {
       const stopped = vi.fn()
