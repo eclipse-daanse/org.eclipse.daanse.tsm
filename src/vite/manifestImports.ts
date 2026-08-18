@@ -65,6 +65,11 @@ export function collectTsmImports(code: string): TsmImportRef[] {
 /** The parts of a manifest this validation needs */
 export interface ValidatableManifest {
   id?: string
+  provides?: Array<{
+    id: string
+    ranking?: number
+    properties?: Record<string, string | number | boolean>
+  }>
   dependencies?: Array<string | { id: string }>
   optionalDependencies?: Array<string | { id: string }>
   sharedDependencies?: Array<{ id: string }>

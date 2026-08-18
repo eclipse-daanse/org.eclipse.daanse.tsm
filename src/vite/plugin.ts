@@ -19,7 +19,9 @@
  *   import { Button } from 'tsm:my-app/ui'
  */
 
+import { readFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
+import { dirname, resolve as resolvePath } from 'node:path'
 import type { Plugin } from 'vite'
 import {
   collectTsmImports,
@@ -28,6 +30,11 @@ import {
   isDeclared,
   type ValidatableManifest
 } from './manifestImports.js'
+import {
+  ComponentScanError,
+  extractComponents,
+  type DeclaredService
+} from './componentScan.js'
 
 const TSM_PREFIX = 'tsm:'
 
@@ -47,6 +54,27 @@ export interface TsmPluginOptions {
    * to nothing and the module fails to activate.
    */
   manifest?: string | ValidatableManifest
+
+  /**
+   * What to do with the `@component()` declarations in the sources.
+   *
+   * - `'validate'`: compare them against the manifest's `provides` and report
+   *   what is missing or stale
+   * - `'derive'`: emit a manifest whose `provides` is generated from them, so
+   *   the declaration exists in one place only
+   * - `false` (default): ignore them
+   *
+   * The loader reads the declarations at runtime anyway; this is for everything
+   * that has to know them *before* a module is imported — load order,
+   * satisfaction, and whether a set of modules is self-sufficient. In OSGi bnd
+   * generates the descriptors for the same reason.
+   *
+   * Requires `manifest`.
+   */
+  components?: 'validate' | 'derive' | false
+
+  /** File name for the emitted manifest with `components: 'derive'` */
+  derivedManifestName?: string
 
   /**
    * Whether an import of an undeclared module fails the build.
@@ -186,11 +214,20 @@ export function transformTsmImports(code: string, sharedModules: string[] = []):
  * TSM Vite Plugin for development and production builds
  */
 export function tsmPlugin(options: TsmPluginOptions = {}): Plugin {
-  const { useRenderChunk = true, sharedModules = [], manifest, strict = true } = options
+  const {
+    useRenderChunk = true,
+    sharedModules = [],
+    manifest,
+    strict = true,
+    components = false,
+    derivedManifestName = 'manifest.json'
+  } = options
 
   let validatable: ValidatableManifest | undefined
   /** Module IDs actually imported, collected across files for the unused check */
   const importedModuleIds = new Set<string>()
+  /** Services declared by `@component()`, collected across files */
+  const declaredServices = new Map<string, DeclaredService>()
 
   return {
     name: 'tsm-plugin',
@@ -198,6 +235,7 @@ export function tsmPlugin(options: TsmPluginOptions = {}): Plugin {
 
     async buildStart() {
       importedModuleIds.clear()
+      declaredServices.clear()
       validatable = undefined
 
       if (manifest === undefined) return
@@ -234,6 +272,33 @@ export function tsmPlugin(options: TsmPluginOptions = {}): Plugin {
       if (!id.match(/\.(ts|js|tsx|jsx|vue)$/)) return null
       if (id.includes('node_modules')) return null
 
+      if (components !== false) {
+        try {
+          for (const found of extractComponents(code, specifier =>
+            readImportedSource(specifier, id)
+          )) {
+            for (const service of found.services) {
+              const known = declaredServices.get(service.id)
+              if (known && JSON.stringify(known) !== JSON.stringify(service)) {
+                // `provides` holds one entry per ID, so two components offering
+                // the same ID differently cannot both be expressed there
+                this.warn(
+                  `tsm: '${service.id}' is declared differently by more than one ` +
+                  `component; the manifest can only carry one of them`
+                )
+                continue
+              }
+              declaredServices.set(service.id, service)
+            }
+          }
+        } catch (error) {
+          if (error instanceof ComponentScanError) {
+            this.error(`tsm: '${id}:${error.line}' ${error.message}`)
+          }
+          throw error
+        }
+      }
+
       if (validatable) {
         const declared = declaredIds(validatable)
 
@@ -266,6 +331,28 @@ export function tsmPlugin(options: TsmPluginOptions = {}): Plugin {
     // A declaration nothing imports keeps the resolver loading a module for no
     // reason — worth reporting, but not worth failing a build over
     buildEnd() {
+      if (components === 'validate' && validatable) {
+        const scanned = new Set(declaredServices.keys())
+        const inManifest = new Set((validatable.provides ?? []).map(service => service.id))
+
+        const missing = [...scanned].filter(id => !inManifest.has(id))
+        const stale = [...inManifest].filter(id => !scanned.has(id))
+
+        if (missing.length > 0) {
+          const message =
+            `tsm: component(s) declare service(s) the manifest does not list: ` +
+            `${missing.join(', ')}. Add them to provides, or use components: 'derive'.`
+          if (strict) this.error(message)
+          else this.warn(message)
+        }
+        if (stale.length > 0) {
+          // Not an error: a module may still register these imperatively
+          this.warn(
+            `tsm: manifest lists service(s) no component declares: ${stale.join(', ')}`
+          )
+        }
+      }
+
       if (!validatable) return
 
       const unused = requiredDependencyIds(validatable).filter(
@@ -277,6 +364,23 @@ export function tsmPlugin(options: TsmPluginOptions = {}): Plugin {
           `tsm: manifest declares dependencies that nothing imports: ${unused.join(', ')}`
         )
       }
+    },
+
+    // The generated manifest belongs to the build output, like a descriptor
+    generateBundle() {
+      if (components !== 'derive' || !validatable) return
+
+      const provides = [...declaredServices.values()].map(service => ({
+        id: service.id,
+        ...(service.ranking === undefined ? {} : { ranking: service.ranking }),
+        ...(service.properties === undefined ? {} : { properties: service.properties })
+      }))
+
+      this.emitFile({
+        type: 'asset',
+        fileName: derivedManifestName,
+        source: `${JSON.stringify({ ...validatable, provides }, null, 2)}\n`
+      })
     },
 
     // For production: transform final output
@@ -295,6 +399,24 @@ export function tsmPlugin(options: TsmPluginOptions = {}): Plugin {
  * @param cssUrl - URL to the CSS file
  * @returns JavaScript code that injects the CSS
  */
+/**
+ * Read a module referenced by a relative import, so a service id held in a
+ * constant there can be resolved. Synchronous because the scan is.
+ */
+function readImportedSource(specifier: string, importerId: string): string | undefined {
+  if (!specifier.startsWith('.')) return undefined
+
+  const base = resolvePath(dirname(importerId), specifier)
+  for (const candidate of [base, base.replace(/\.js$/, '.ts'), `${base}.ts`]) {
+    try {
+      return readFileSync(candidate, 'utf-8')
+    } catch {
+      // Try the next spelling; TypeScript sources are imported with .js
+    }
+  }
+  return undefined
+}
+
 export function generateCssLoader(cssUrl: string): string {
   return `(function(){` +
     `var l=document.createElement('link');` +

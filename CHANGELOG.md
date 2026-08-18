@@ -271,6 +271,23 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
 - `ModuleEvent.type` has an additional value (`'service-withdrawn'`), which affects consumers that handle the
   union exhaustively in a `switch`.
 
+#### Component declarations at build time
+
+- **`tsmPlugin({ components: 'validate' | 'derive' })`** reads the `@component()` declarations out of the
+  sources. `validate` compares them with the manifest's `provides` and reports what is missing or stale;
+  `derive` emits a manifest whose `provides` is generated from them, so the declaration exists in exactly one
+  place.
+
+  The loader reads the declarations at runtime anyway. This is for everything that has to know them *before* a
+  module is imported: load order, satisfaction, and whether a set of modules is self-sufficient. In OSGi bnd
+  generates descriptors for the same reason — a resolver cannot load a bundle to find out what it offers.
+- The scan uses the TypeScript AST rather than patterns, because `@component({ … })` carries nested object
+  literals. A service ID may be a string literal, a `const` in the same file, or a `const` in a relatively
+  imported module — otherwise the build fails naming file, line and reason instead of silently deriving
+  nothing.
+- Two components declaring one service ID differently are reported: `provides` holds one entry per ID, so the
+  manifest cannot express both.
+
 #### Build-time manifest validation ([#17](https://github.com/eclipse-daanse/org.eclipse.daanse.tms/issues/17))
 
 - **`tsmPlugin({ manifest, strict })`** checks every `tsm:` import against the manifest while transforming.

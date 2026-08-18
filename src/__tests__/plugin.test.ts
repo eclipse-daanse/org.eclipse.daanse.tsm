@@ -257,6 +257,162 @@ describe('tsmPlugin manifest validation', () => {
     expect(ctx.errors).toEqual([])
   })
 
+  describe('component declarations', () => {
+    const componentSource = `
+      import { UI_COMPONENT } from './contracts.js'
+
+      @component({ service: [UI_COMPONENT], properties: { region: 'main' }, ranking: 5 })
+      export class Widget {
+        @activate() start() {}
+      }
+    `
+
+    async function runWithFiles(
+      options: Parameters<typeof tsmPlugin>[0],
+      files: Array<{ id: string; code: string }>
+    ) {
+      const plugin = tsmPlugin(options)
+      const errors: string[] = []
+      const warnings: string[] = []
+      const emitted: Array<{ fileName: string; source: string }> = []
+
+      const ctx = {
+        error(message: string): never { errors.push(message); throw new Error(message) },
+        warn(message: string) { warnings.push(message) },
+        emitFile(file: { fileName: string; source: string }) { emitted.push(file) }
+      }
+
+      type Hook = (this: typeof ctx, ...args: unknown[]) => unknown
+
+      for (const hook of ['buildStart'] as const) {
+        try { await (plugin[hook] as Hook).call(ctx) } catch { /* recorded */ }
+      }
+      for (const file of files) {
+        try { await (plugin.transform as Hook).call(ctx, file.code, file.id) } catch { /* recorded */ }
+      }
+      for (const hook of ['buildEnd', 'generateBundle'] as const) {
+        try { await (plugin[hook] as Hook).call(ctx) } catch { /* recorded */ }
+      }
+
+      return { errors, warnings, emitted }
+    }
+
+    it('should do nothing unless asked to', async () => {
+      const directory = await mkdtemp(join(tmpdir(), 'tsm-scan-'))
+      try {
+        const result = await runWithFiles(
+          { manifest: { id: 'widget' } },
+          [{ id: join(directory, 'Widget.ts'), code: componentSource }]
+        )
+        expect(result.errors).toEqual([])
+        expect(result.emitted).toEqual([])
+      } finally {
+        await rm(directory, { recursive: true, force: true })
+      }
+    })
+
+    it('should fail validation when the manifest omits a declared service', async () => {
+      const directory = await mkdtemp(join(tmpdir(), 'tsm-scan-'))
+      await writeFile(join(directory, 'contracts.ts'), `export const UI_COMPONENT = 'ui.component'`)
+
+      try {
+        const result = await runWithFiles(
+          { manifest: { id: 'widget' }, components: 'validate' },
+          [{ id: join(directory, 'Widget.ts'), code: componentSource }]
+        )
+
+        expect(result.errors).toHaveLength(1)
+        expect(result.errors[0]).toContain('ui.component')
+        expect(result.errors[0]).toContain("components: 'derive'")
+      } finally {
+        await rm(directory, { recursive: true, force: true })
+      }
+    })
+
+    it('should pass validation when the manifest lists it', async () => {
+      const directory = await mkdtemp(join(tmpdir(), 'tsm-scan-'))
+      await writeFile(join(directory, 'contracts.ts'), `export const UI_COMPONENT = 'ui.component'`)
+
+      try {
+        const result = await runWithFiles(
+          {
+            manifest: { id: 'widget', provides: [{ id: 'ui.component' }] },
+            components: 'validate'
+          },
+          [{ id: join(directory, 'Widget.ts'), code: componentSource }]
+        )
+
+        expect(result.errors).toEqual([])
+      } finally {
+        await rm(directory, { recursive: true, force: true })
+      }
+    })
+
+    it('should warn about a manifest entry no component declares', async () => {
+      const result = await runWithFiles(
+        {
+          manifest: { id: 'widget', provides: [{ id: 'gone.service' }] },
+          components: 'validate'
+        },
+        [{ id: '/src/Plain.ts', code: 'export class Plain {}' }]
+      )
+
+      expect(result.warnings.some(warning => warning.includes('gone.service'))).toBe(true)
+    })
+
+    it('should emit a manifest with the derived provides', async () => {
+      const directory = await mkdtemp(join(tmpdir(), 'tsm-scan-'))
+      await writeFile(join(directory, 'contracts.ts'), `export const UI_COMPONENT = 'ui.component'`)
+
+      try {
+        const result = await runWithFiles(
+          { manifest: { id: 'widget' }, components: 'derive' },
+          [{ id: join(directory, 'Widget.ts'), code: componentSource }]
+        )
+
+        expect(result.emitted).toHaveLength(1)
+        expect(result.emitted[0].fileName).toBe('manifest.json')
+        expect(JSON.parse(result.emitted[0].source)).toEqual({
+          id: 'widget',
+          provides: [{ id: 'ui.component', ranking: 5, properties: { region: 'main' } }]
+        })
+      } finally {
+        await rm(directory, { recursive: true, force: true })
+      }
+    })
+
+    it('should report a declaration it cannot read', async () => {
+      const result = await runWithFiles(
+        { manifest: { id: 'widget' }, components: 'validate' },
+        [{
+          id: '/src/Widget.ts',
+          code: '@component({ service: [SOME.ID] })\nexport class Widget {}'
+        }]
+      )
+
+      expect(result.errors[0]).toContain('/src/Widget.ts:1')
+      expect(result.errors[0]).toContain('cannot be read at build time')
+    })
+
+    it('should warn when two components declare one ID differently', async () => {
+      const result = await runWithFiles(
+        { manifest: { id: 'widget' }, components: 'derive' },
+        [{
+          id: '/src/Two.ts',
+          code: `
+            @component({ service: ['ui.component'], properties: { region: 'main' } })
+            export class First {}
+
+            @component({ service: ['ui.component'], properties: { region: 'sidebar' } })
+            export class Second {}
+          `
+        }]
+      )
+
+      expect(result.warnings.some(warning => warning.includes('more than one'))).toBe(true)
+    })
+  })
+
   it('should read a manifest given as a path', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'tsm-plugin-'))
     const path = join(directory, 'manifest.json')
