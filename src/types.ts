@@ -47,6 +47,12 @@ export interface ServiceDeclaration {
   id: string
 
   /**
+   * Properties this service is published with, so a consumer can select it
+   * through a target filter. Applied to a registration that passes none itself.
+   */
+  properties?: Record<string, string | number | boolean>
+
+  /**
    * Ranking for this service, used when several modules provide the same ID.
    * The visible service is the highest ranked one; the others stay available
    * and take over when it is withdrawn. Defaults to 0.
@@ -83,6 +89,26 @@ export interface ServiceRequirement {
    * when the last provider is gone.
    */
   cardinality?: ServiceCardinality
+
+  /**
+   * LDAP-style filter the provider's properties have to match, in OSGi syntax:
+   * `(kind=chart)`, `(&(kind=chart)(service.ranking>=10))`, `(!(experimental=true))`.
+   *
+   * Narrows what satisfies this requirement and what `getServiceReferences()`
+   * returns for it. An invalid filter is rejected rather than silently matching
+   * nothing.
+   */
+  target?: string
+
+  /**
+   * What to do when a better-ranked provider appears while the module is active
+   * - reluctant (default): stay with the provider already in use
+   * - greedy: switch to the better one — a static requirement rebuilds the
+   *   module, a dynamic one is reported as unbound and bound again
+   *
+   * Only meaningful once providers carry different rankings.
+   */
+  policyOption?: 'reluctant' | 'greedy'
 
   /**
    * What happens when the service is withdrawn while the module is active
@@ -253,6 +279,8 @@ export interface BindClassOptions {
   providedBy?: string
   /** Higher wins when several registrations share an ID */
   ranking?: number
+  /** Properties a consumer's target filter can select on */
+  properties?: Record<string, string | number | boolean>
   /**
    * Additional service IDs this class implements.
    * The class will be resolvable under both its primary ID and all implements IDs.
@@ -293,6 +321,12 @@ export interface ServiceReference {
   readonly ranking: number
   readonly scope: 'singleton' | 'transient'
 
+  /**
+   * Properties this registration was made with, plus `service.ranking` and
+   * `service.providedBy`. What a target filter is matched against.
+   */
+  readonly properties: Readonly<Record<string, string | number | boolean>>
+
   /** Whether a singleton instance for this registration already exists */
   readonly instantiated: boolean
 
@@ -319,7 +353,11 @@ export interface ServiceRegistry {
   register<T>(
     id: string,
     service: T,
-    options?: { providedBy?: string; ranking?: number }
+    options?: {
+      providedBy?: string
+      ranking?: number
+      properties?: Record<string, string | number | boolean>
+    }
   ): ServiceRegistration
 
   /**
@@ -331,7 +369,12 @@ export interface ServiceRegistry {
   bind<T>(
     id: string,
     factory: () => T,
-    options?: { scope?: 'singleton' | 'transient'; providedBy?: string; ranking?: number }
+    options?: {
+      scope?: 'singleton' | 'transient'
+      providedBy?: string
+      ranking?: number
+      properties?: Record<string, string | number | boolean>
+    }
   ): ServiceRegistration
 
   /**
@@ -353,7 +396,15 @@ export interface ServiceRegistry {
   /** Get a required service - throws if not available */
   getRequired<T>(id: string): T
 
-  /** Get all services matching a pattern */
+  /**
+   * Get all instantiated services whose ID matches a wildcard pattern.
+   *
+   * @deprecated Predates real cardinality. It matches ID *names* rather than
+   * registrations, and sees only services that have already been instantiated,
+   * so a lazily bound provider is invisible until someone resolves it. Use
+   * `getServiceReferences(id, target?)` to collect providers, with properties
+   * instead of naming conventions.
+   */
   getAll<T>(idPattern: string): T[]
 
   /** Check if service exists */
@@ -361,7 +412,12 @@ export interface ServiceRegistry {
 
   /** Check if all required services are available */
   checkRequirements(
-    requirements: Array<{ id: string; optional?: boolean; cardinality?: ServiceCardinality }>
+    requirements: Array<{
+      id: string
+      optional?: boolean
+      cardinality?: ServiceCardinality
+      target?: string
+    }>
   ): {
     satisfied: boolean
     missing: string[]
@@ -370,14 +426,22 @@ export interface ServiceRegistry {
   /**
    * Every registration for an ID, best first, without instantiating any of them.
    * The way to consume cardinality 0..n / 1..n.
+   *
+   * @param target Optional LDAP-style filter on the registrations' properties
    */
-  getServiceReferences(id: string): ServiceReference[]
+  getServiceReferences(id: string, target?: string): ServiceReference[]
 
   /** Resolve one reference from getServiceReferences() */
   resolveReference<T>(reference: ServiceReference): T | undefined
 
-  /** How many registrations an ID currently carries */
-  countProviders(id: string): number
+  /** How many registrations an ID carries, optionally matching a target filter */
+  countProviders(id: string, target?: string): number
+
+  /**
+   * The best service for an ID whose properties match the filter.
+   * `get(id)` ignores filters — this is the filtered counterpart.
+   */
+  getMatching<T>(id: string, target: string): T | undefined
 
   /** Unregister a service */
   unregister(id: string): boolean
@@ -494,12 +558,17 @@ export interface ModuleEvent {
         /** A service listed in requiresService was withdrawn while the module was active */
         'service-withdrawn' |
         /** Module is loaded but waiting for required services */
-        'unsatisfied'
+        'unsatisfied' |
+        /** Module declared services in `provides` that it did not register */
+        'declaration-mismatch'
   moduleId: string
   manifest?: ModuleManifest
   error?: Error
 
-  /** Service IDs this event refers to (set for 'service-withdrawn' and 'unsatisfied') */
+  /**
+   * Service IDs this event refers to (set for 'service-withdrawn',
+   * 'unsatisfied' and 'declaration-mismatch')
+   */
   serviceIds?: string[]
 
   timestamp: Date

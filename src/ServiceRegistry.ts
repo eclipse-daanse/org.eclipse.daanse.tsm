@@ -17,6 +17,7 @@ import type {
 // Re-exported for backwards compatibility; the definitions live in types.ts
 export type { ServiceRegistryEvent, ServiceRegistryListener }
 import { getInjectMetadata, getPropertyInjectMetadata, isInjectable, getScopeMetadata, type PropertyInjectMetadata } from './decorators.js'
+import { createServiceFilter, type ServiceFilter, type ServiceProperties } from './serviceFilter.js'
 
 /**
  * Dependency metadata for a bound class
@@ -42,6 +43,8 @@ interface ServiceBinding {
   ranking: number
   /** Registration order, used as tie-break and as identity */
   seq: number
+  /** Properties a target filter selects on */
+  properties?: Record<string, string | number | boolean>
   /** Dependencies for automatic resolution (set by bindClass) */
   deps?: DependencyInfo[]
   /** Property dependencies for injection after construction (set by bindClass) */
@@ -68,6 +71,20 @@ function requiresAtLeastOne(requirement: {
 }
 
 /**
+ * Properties a filter is matched against: what the registration declared, plus
+ * the two the registry knows itself. Named as in OSGi, so a filter written for
+ * a Java @Reference reads the same here.
+ */
+function propertiesOf(binding: ServiceBinding): ServiceProperties {
+  const properties: ServiceProperties = { ...binding.properties }
+  properties['service.ranking'] = binding.ranking
+  if (binding.providedBy !== undefined) {
+    properties['service.providedBy'] = binding.providedBy
+  }
+  return properties
+}
+
+/**
  * Default service registry implementation
  * Supports singleton and transient scopes with factory functions
  * and decorator-based constructor injection
@@ -89,6 +106,8 @@ export class DefaultServiceRegistry implements IServiceRegistry {
    */
   private shadowed = new Map<string, ServiceBinding[]>()
   private nextSeq = 1
+  /** Parsed target filters, so a repeated lookup does not re-parse */
+  private filterCache = new Map<string, ServiceFilter>()
 
   /**
    * Install a registration and decide whether it becomes the visible one.
@@ -220,14 +239,19 @@ export class DefaultServiceRegistry implements IServiceRegistry {
   register<T>(
     id: string,
     service: T,
-    options: { providedBy?: string; ranking?: number } = {}
+    options: {
+      providedBy?: string
+      ranking?: number
+      properties?: Record<string, string | number | boolean>
+    } = {}
   ): ServiceRegistration {
     return this.addRegistration(id, {
       instance: service,
       scope: 'singleton',
       providedBy: options.providedBy,
       ranking: options.ranking ?? 0,
-      seq: this.nextSeq++
+      seq: this.nextSeq++,
+      properties: options.properties
     })
   }
 
@@ -237,14 +261,20 @@ export class DefaultServiceRegistry implements IServiceRegistry {
   bind<T>(
     id: string,
     factory: () => T,
-    options: { scope?: 'singleton' | 'transient'; providedBy?: string; ranking?: number } = {}
+    options: {
+      scope?: 'singleton' | 'transient'
+      providedBy?: string
+      ranking?: number
+      properties?: Record<string, string | number | boolean>
+    } = {}
   ): ServiceRegistration {
     return this.addRegistration(id, {
       factory,
       scope: options.scope ?? 'singleton',
       providedBy: options.providedBy,
       ranking: options.ranking ?? 0,
-      seq: this.nextSeq++
+      seq: this.nextSeq++,
+      properties: options.properties
     })
   }
 
@@ -289,6 +319,7 @@ export class DefaultServiceRegistry implements IServiceRegistry {
       providedBy: options.providedBy,
       ranking: options.ranking ?? 0,
       seq: this.nextSeq++,
+      properties: options.properties,
       deps: metadata.map(m => ({ serviceId: m.serviceId, optional: m.optional })),
       propertyDeps: propertyMetadata.length > 0 ? propertyMetadata : undefined
     })
@@ -315,7 +346,8 @@ export class DefaultServiceRegistry implements IServiceRegistry {
           aliasOf: id,
           providedBy: options.providedBy,
           ranking: options.ranking ?? 0,
-          seq: this.nextSeq++
+          seq: this.nextSeq++,
+          properties: options.properties
         })
         aliases.add(interfaceId)
       }
@@ -413,8 +445,10 @@ export class DefaultServiceRegistry implements IServiceRegistry {
   }
 
   /**
-   * Get all services matching a pattern
-   * Pattern can use * as wildcard
+   * Get all instantiated services whose ID matches a wildcard pattern.
+   *
+   * @deprecated Matches ID names rather than registrations, and only sees what
+   * has already been instantiated. Use `getServiceReferences(id, target?)`.
    */
   getAll<T>(idPattern: string): T[] {
     const regex = new RegExp('^' + idPattern.replace(/\*/g, '.*') + '$')
@@ -469,7 +503,12 @@ export class DefaultServiceRegistry implements IServiceRegistry {
    * Check if all required services are available
    */
   checkRequirements(
-    requirements: Array<{ id: string; optional?: boolean; cardinality?: ServiceCardinality }>
+    requirements: Array<{
+      id: string
+      optional?: boolean
+      cardinality?: ServiceCardinality
+      target?: string
+    }>
   ): {
     satisfied: boolean
     missing: string[]
@@ -478,8 +517,15 @@ export class DefaultServiceRegistry implements IServiceRegistry {
     for (const req of requirements) {
       // Cardinality decides how many providers are needed; the n-variants are
       // satisfied by one, so only an empty ID is missing
-      const mandatory = requiresAtLeastOne(req)
-      if (mandatory && !this.has(req.id)) {
+      if (!requiresAtLeastOne(req)) continue
+
+      // A target filter narrows what counts: an unfiltered provider does not
+      // satisfy a requirement that asked for a specific one
+      const available = req.target !== undefined
+        ? this.countProviders(req.id, req.target) > 0
+        : this.has(req.id)
+
+      if (!available) {
         missing.push(req.id)
       }
     }
@@ -495,15 +541,44 @@ export class DefaultServiceRegistry implements IServiceRegistry {
    * Collecting must not build objects nobody asked for, which is why this
    * returns references rather than services.
    */
-  getServiceReferences(id: string): ServiceReference[] {
-    return this.registrationsOf(id).map(binding => ({
-      serviceId: id,
-      providedBy: binding.providedBy,
-      ranking: binding.ranking,
-      scope: binding.scope,
-      instantiated: binding.instance !== undefined,
-      key: `${id}#${binding.seq}`
-    }))
+  getServiceReferences(id: string, target?: string): ServiceReference[] {
+    const filter = target !== undefined ? this.filterFor(target) : undefined
+
+    return this.registrationsOf(id)
+      .filter(binding => !filter || filter(propertiesOf(binding)))
+      .map(binding => ({
+        serviceId: id,
+        providedBy: binding.providedBy,
+        ranking: binding.ranking,
+        scope: binding.scope,
+        instantiated: binding.instance !== undefined,
+        properties: propertiesOf(binding) as Record<string, string | number | boolean>,
+        key: `${id}#${binding.seq}`
+      }))
+  }
+
+  /**
+   * The best service for an ID whose properties match the filter.
+   *
+   * `get(id)` answers with the highest-ranked registration regardless of
+   * properties; a consumer that declared a target needs this one.
+   */
+  getMatching<T>(id: string, target: string): T | undefined {
+    const [reference] = this.getServiceReferences(id, target)
+    return reference ? this.resolveReference<T>(reference) : undefined
+  }
+
+  /**
+   * Parse a filter once and remember it. An invalid filter throws here rather
+   * than quietly matching nothing.
+   */
+  private filterFor(target: string): ServiceFilter {
+    const cached = this.filterCache.get(target)
+    if (cached) return cached
+
+    const filter = createServiceFilter(target)
+    this.filterCache.set(target, filter)
+    return filter
   }
 
   /**
@@ -525,9 +600,9 @@ export class DefaultServiceRegistry implements IServiceRegistry {
     return this.instantiate<T>(reference.serviceId, binding, new Set())
   }
 
-  /** How many registrations an ID currently carries */
-  countProviders(id: string): number {
-    return this.registrationsOf(id).length
+  /** How many registrations an ID carries, optionally matching a target filter */
+  countProviders(id: string, target?: string): number {
+    return this.getServiceReferences(id, target).length
   }
 
   /**

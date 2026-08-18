@@ -9,6 +9,12 @@ export { PluginRegistry } from './PluginRegistry.js'
 export { DependencyResolver } from './DependencyResolver.js'
 export { DefaultServiceRegistry } from './ServiceRegistry.js'
 export { ScopedServiceRegistry } from './ScopedServiceRegistry.js'
+export {
+  createServiceFilter,
+  type ServiceFilter,
+  type ServiceProperties,
+  type ServicePropertyValue
+} from './serviceFilter.js'
 
 // Decorators
 export { injectable, inject, singleton, transient } from './decorators.js'

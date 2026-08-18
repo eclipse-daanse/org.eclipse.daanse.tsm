@@ -38,34 +38,53 @@ export class ScopedServiceRegistry implements IObservableServiceRegistry {
   constructor(
     private readonly moduleId: string,
     private readonly target: IServiceRegistry,
-    private readonly declaredRankings: Map<string, number> = new Map()
+  private readonly declaredRankings: Map<string, number> = new Map(),
+    private readonly declaredProperties: Map<string, Record<string, string | number | boolean>> = new Map()
   ) {}
 
   private rankingFor(id: string, given?: number): number | undefined {
     return given ?? this.declaredRankings.get(id)
   }
 
+  private propertiesFor(
+    id: string,
+    given?: Record<string, string | number | boolean>
+  ): Record<string, string | number | boolean> | undefined {
+    return given ?? this.declaredProperties.get(id)
+  }
+
   register<T>(
     id: string,
     service: T,
-    options: { providedBy?: string; ranking?: number } = {}
+    options: {
+      providedBy?: string
+      ranking?: number
+      properties?: Record<string, string | number | boolean>
+    } = {}
   ): ServiceRegistration {
     return this.track(this.target.register(id, service, {
       ...options,
       providedBy: options.providedBy ?? this.moduleId,
-      ranking: this.rankingFor(id, options.ranking)
+      ranking: this.rankingFor(id, options.ranking),
+      properties: this.propertiesFor(id, options.properties)
     }))
   }
 
   bind<T>(
     id: string,
     factory: () => T,
-    options: { scope?: 'singleton' | 'transient'; providedBy?: string; ranking?: number } = {}
+    options: {
+      scope?: 'singleton' | 'transient'
+      providedBy?: string
+      ranking?: number
+      properties?: Record<string, string | number | boolean>
+    } = {}
   ): ServiceRegistration {
     return this.track(this.target.bind(id, factory, {
       ...options,
       providedBy: options.providedBy ?? this.moduleId,
-      ranking: this.rankingFor(id, options.ranking)
+      ranking: this.rankingFor(id, options.ranking),
+      properties: this.propertiesFor(id, options.properties)
     }))
   }
 
@@ -79,7 +98,8 @@ export class ScopedServiceRegistry implements IObservableServiceRegistry {
     return this.track(this.target.bindClass(id, ctor, {
       ...options,
       providedBy: options.providedBy ?? this.moduleId,
-      ranking: this.rankingFor(id, options.ranking)
+      ranking: this.rankingFor(id, options.ranking),
+      properties: this.propertiesFor(id, options.properties)
     }))
   }
 
@@ -105,7 +125,12 @@ export class ScopedServiceRegistry implements IObservableServiceRegistry {
   }
 
   checkRequirements(
-    requirements: Array<{ id: string; optional?: boolean; cardinality?: ServiceCardinality }>
+    requirements: Array<{
+      id: string
+      optional?: boolean
+      cardinality?: ServiceCardinality
+      target?: string
+    }>
   ): {
     satisfied: boolean
     missing: string[]
@@ -113,16 +138,20 @@ export class ScopedServiceRegistry implements IObservableServiceRegistry {
     return this.target.checkRequirements(requirements)
   }
 
-  getServiceReferences(id: string): ServiceReference[] {
-    return this.target.getServiceReferences(id)
+  getServiceReferences(id: string, target?: string): ServiceReference[] {
+    return this.target.getServiceReferences(id, target)
   }
 
   resolveReference<T>(reference: ServiceReference): T | undefined {
     return this.target.resolveReference<T>(reference)
   }
 
-  countProviders(id: string): number {
-    return this.target.countProviders(id)
+  countProviders(id: string, target?: string): number {
+    return this.target.countProviders(id, target)
+  }
+
+  getMatching<T>(id: string, target: string): T | undefined {
+    return this.target.getMatching<T>(id, target)
   }
 
   /**

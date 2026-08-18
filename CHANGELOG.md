@@ -69,6 +69,25 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
   declaration), and creates **no** edge for an n-cardinality requirement: the set is filled at runtime, and an
   edge per provider would turn ordinary fan-in into artificial cycles.
 
+#### Selecting a provider
+
+- **`policyOption: 'reluctant' | 'greedy'`** on a requirement. A running module stays with the provider it has
+  even after a better-ranked one appears (`reluctant`, the default); `greedy` switches — a static requirement
+  rebuilds the module, a dynamic one is reported as unbound and bound again. The distinction only became
+  meaningful with ranking; before, there was no "better".
+- **Target filters.** `requiresService[].target` takes an LDAP-style filter in OSGi syntax — `(kind=chart)`,
+  `(&(kind=chart)(service.ranking>=10))`, `(!(experimental=true))`, `(label=chart*)`, `(kind=*)` — so a filter
+  written for a Java `@Reference` reads the same here. Supported: `&` `|` `!`, `=`, `>=`, `<=`, presence and
+  `*` wildcards; `~=` is rejected rather than guessed at. An invalid filter throws, naming the position,
+  instead of silently matching nothing.
+- **Service properties.** `register`/`bind`/`bindClass` take `properties`, and `ServiceDeclaration.properties`
+  declares them in the manifest (a registration passing its own wins). `service.ranking` and
+  `service.providedBy` are added by the registry, so they are filterable too. A filter narrows what satisfies
+  a requirement, what `getServiceReferences(id, target)` returns, and what `countProviders(id, target)` counts
+  — all without instantiating anything. `getMatching(id, target)` is the filtered counterpart to `get(id)`,
+  which stays unfiltered.
+- `createServiceFilter(expression)` is exported for use outside the registry.
+
 #### Notification
 
 - **`policy: 'dynamic'` is implemented.** A module requiring a service dynamically stays active when the
@@ -158,6 +177,16 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
 - `ModuleEvent.type` has an additional value (`'service-withdrawn'`), which affects consumers that handle the
   union exhaustively in a `switch`.
 
+#### Diagnostics
+
+- **`getDeclarationMismatches()`** lists services a module declared in `provides` but never registered, and a
+  `declaration-mismatch` module event reports the same on activation. This is not cosmetic: the resolver
+  derives load-order edges from `provides`, so a declaration nothing backs orders modules after a provider
+  that never delivers. `loadAll()` logs a summary, and the list is meant to be asserted in CI.
+- `getAll(pattern)` is **deprecated**. It matches ID *names* with a wildcard and sees only services already
+  instantiated, so a lazily bound provider is invisible until someone resolves it. Collect providers with
+  `getServiceReferences(id, target?)` and select on properties instead of naming conventions.
+
 ### Deliberately unchanged
 
 - **`unloadModule()` still refuses when active modules depend on the module** (returns `false`), rather than
@@ -168,5 +197,3 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
 - **Invalidation reaches `bindClass()` only.** What a hand-written `bind()` factory pulls from the registry is
   invisible to it, so such an instance keeps the old service; the same is true for a reference captured in
   module code. `policy: 'dynamic'` reports the change, dropping the reference stays the module's job.
-- `getAll(pattern)` is unchanged: it matches ID names with a wildcard and sees only instantiated services. It
-  predates real cardinality; `getServiceReferences(id)` is what to use for collecting providers.

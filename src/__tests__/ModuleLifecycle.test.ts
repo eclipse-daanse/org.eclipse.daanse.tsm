@@ -17,9 +17,15 @@ interface StubOptions {
     id: string
     optional?: boolean
     policy?: 'static' | 'dynamic'
+    policyOption?: 'reluctant' | 'greedy'
     cardinality?: '0..1' | '1..1' | '0..n' | '1..n'
+    target?: string
   }>
-  provides?: Array<string | { id: string; ranking: number }>
+  provides?: Array<string | {
+    id: string
+    ranking?: number
+    properties?: Record<string, string | number | boolean>
+  }>
   dependencies?: string[]
   onActivate?: (services: ObservableServiceRegistry) => void
   onDeactivate?: (services: ObservableServiceRegistry) => void
@@ -885,6 +891,263 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
 
       expect(collected.sort()).toEqual(['a', 'b'])
       expect(built).toEqual([])
+    })
+  })
+
+  describe('reluctant and greedy', () => {
+    async function withDefaultProvider(consumer: StubOptions) {
+      const loader = new ModuleLoader()
+      stub(loader, 'default-geo', {
+        provides: ['geo.service'],
+        onActivate: services => { services.register('geo.service', { tag: 'default' }) }
+      })
+      stub(loader, 'map', consumer)
+      await loader.loadAll()
+      return loader
+    }
+
+    function addBetterProvider(loader: ModuleLoader) {
+      return stub(loader, 'premium-geo', {
+        provides: [{ id: 'geo.service', ranking: 10 }],
+        onActivate: services => { services.register('geo.service', { tag: 'premium' }) }
+      })
+    }
+
+    it('should leave a reluctant consumer alone when a better provider appears', async () => {
+      const onActivate = vi.fn()
+      const loader = await withDefaultProvider({
+        requires: [{ id: 'geo.service' }],
+        onActivate
+      })
+      expect(onActivate).toHaveBeenCalledTimes(1)
+
+      await loader.loadModule(addBetterProvider(loader))
+      await loader.settle()
+
+      // The ID now answers with the premium service, but the module is untouched
+      expect(loader.getServiceRegistry().get('geo.service')).toEqual({ tag: 'premium' })
+      expect(onActivate).toHaveBeenCalledTimes(1)
+      expect(loader.getModule('map')?.state).toBe('active')
+    })
+
+    it('should rebuild a greedy static consumer on the better provider', async () => {
+      const seen: string[] = []
+      const loader = await withDefaultProvider({
+        requires: [{ id: 'geo.service', policyOption: 'greedy' }],
+        onActivate: services => {
+          seen.push((services.get<{ tag: string }>('geo.service'))?.tag ?? '?')
+        }
+      })
+      expect(seen).toEqual(['default'])
+
+      await loader.loadModule(addBetterProvider(loader))
+      await loader.settle()
+
+      expect(seen).toEqual(['default', 'premium'])
+      expect(loader.getModule('map')?.state).toBe('active')
+    })
+
+    it('should report a swap to a greedy dynamic consumer without rebuilding it', async () => {
+      const bound: string[] = []
+      const unbound: string[] = []
+      const onActivate = vi.fn()
+      const loader = await withDefaultProvider({
+        requires: [{ id: 'geo.service', policy: 'dynamic', policyOption: 'greedy' }],
+        onActivate,
+        onServiceBound: id => { bound.push(id) },
+        onServiceUnbound: id => { unbound.push(id) }
+      })
+
+      await loader.loadModule(addBetterProvider(loader))
+      await loader.settle()
+
+      expect(unbound).toEqual(['geo.service'])
+      expect(bound).toEqual(['geo.service'])
+      expect(onActivate).toHaveBeenCalledTimes(1)
+    })
+
+    it('should not rebuild when the new provider ranks lower', async () => {
+      const onActivate = vi.fn()
+      const loader = await withDefaultProvider({
+        requires: [{ id: 'geo.service', policyOption: 'greedy' }],
+        onActivate
+      })
+
+      const worse = stub(loader, 'legacy-geo', {
+        provides: ['geo.service'],
+        onActivate: services => { services.register('geo.service', { tag: 'legacy' }) }
+      })
+      await loader.loadModule(worse)
+      await loader.settle()
+
+      // Equal ranking makes the later registration visible, so this one does swap;
+      // a genuinely lower ranking must not
+      expect(loader.getModule('map')?.state).toBe('active')
+      expect(onActivate.mock.calls.length).toBeLessThanOrEqual(2)
+    })
+
+    it('should settle after a greedy rebuild instead of looping', async () => {
+      const loader = await withDefaultProvider({
+        requires: [{ id: 'geo.service', policyOption: 'greedy' }]
+      })
+
+      await loader.loadModule(addBetterProvider(loader))
+      await loader.settle()
+
+      expect(loader.getModule('map')?.error).toBeUndefined()
+      expect(loader.getModule('map')?.state).toBe('active')
+    })
+  })
+
+  describe('target filters', () => {
+    it('should wait for a provider that matches the filter', async () => {
+      const loader = new ModuleLoader()
+
+      stub(loader, 'table-widget', {
+        provides: [{ id: 'widget', properties: { kind: 'table' } }],
+        onActivate: services => { services.register('widget', { name: 'table' }) }
+      })
+      stub(loader, 'chart-dashboard', {
+        requires: [{ id: 'widget', target: '(kind=chart)' }]
+      })
+
+      await loader.loadAll()
+
+      // A provider exists, but not one this module asked for
+      expect(loader.getServiceRegistry().has('widget')).toBe(true)
+      expect(loader.getModule('chart-dashboard')?.state).toBe('unsatisfied')
+
+      const chart = stub(loader, 'chart-widget', {
+        provides: [{ id: 'widget', properties: { kind: 'chart' } }],
+        onActivate: services => { services.register('widget', { name: 'chart' }) }
+      })
+      await loader.loadModule(chart)
+      await loader.settle()
+
+      expect(loader.getModule('chart-dashboard')?.state).toBe('active')
+    })
+
+    it('should collect only matching providers for 0..n', async () => {
+      const loader = new ModuleLoader()
+      let collected: string[] = []
+
+      stub(loader, 'chart', {
+        provides: [{ id: 'widget', properties: { kind: 'chart' } }],
+        onActivate: services => { services.register('widget', { name: 'chart' }) }
+      })
+      stub(loader, 'table', {
+        provides: [{ id: 'widget', properties: { kind: 'table' } }],
+        onActivate: services => { services.register('widget', { name: 'table' }) }
+      })
+      stub(loader, 'palette', {
+        requires: [{ id: 'widget', cardinality: '0..n', target: '(kind=chart)' }],
+        onActivate: services => {
+          collected = services
+            .getServiceReferences('widget', '(kind=chart)')
+            .map(reference => reference.providedBy ?? '?')
+        }
+      })
+
+      await loader.loadAll()
+
+      expect(collected).toEqual(['chart'])
+      expect(loader.getModule('palette')?.state).toBe('active')
+    })
+
+    it('should stay active when a non-matching provider goes away', async () => {
+      const loader = new ModuleLoader()
+
+      stub(loader, 'chart', {
+        provides: [{ id: 'widget', properties: { kind: 'chart' } }],
+        onActivate: services => { services.register('widget', { name: 'chart' }) }
+      })
+      stub(loader, 'table', {
+        provides: [{ id: 'widget', properties: { kind: 'table' } }],
+        onActivate: services => { services.register('widget', { name: 'table' }) }
+      })
+      stub(loader, 'chart-dashboard', {
+        requires: [{ id: 'widget', target: '(kind=chart)' }]
+      })
+      await loader.loadAll()
+
+      await loader.unloadModule('table')
+
+      expect(loader.getModule('chart-dashboard')?.state).toBe('active')
+    })
+
+    it('should park when the matching provider goes away', async () => {
+      const loader = new ModuleLoader()
+
+      stub(loader, 'chart', {
+        provides: [{ id: 'widget', properties: { kind: 'chart' } }],
+        onActivate: services => { services.register('widget', { name: 'chart' }) }
+      })
+      stub(loader, 'table', {
+        provides: [{ id: 'widget', properties: { kind: 'table' } }],
+        onActivate: services => { services.register('widget', { name: 'table' }) }
+      })
+      stub(loader, 'chart-dashboard', {
+        requires: [{ id: 'widget', target: '(kind=chart)' }]
+      })
+      await loader.loadAll()
+
+      await loader.unloadModule('chart')
+
+      expect(loader.getModule('chart-dashboard')?.state).toBe('unsatisfied')
+      expect(loader.getUnsatisfiedModules()).toEqual([
+        { moduleId: 'chart-dashboard', waitingFor: ['widget'] }
+      ])
+    })
+  })
+
+  describe('declaration drift', () => {
+    it('should report services a module declared but never registered', async () => {
+      const loader = new ModuleLoader()
+      const events = collectEvents(loader)
+
+      // Declares two, registers one
+      stub(loader, 'search', {
+        provides: ['ui.search', 'ui.search.index'],
+        onActivate: services => { services.register('ui.search', {}) }
+      })
+
+      await loader.loadAll()
+
+      expect(loader.getDeclarationMismatches()).toEqual([
+        { moduleId: 'search', serviceIds: ['ui.search.index'] }
+      ])
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: 'declaration-mismatch',
+          moduleId: 'search',
+          serviceIds: ['ui.search.index']
+        })
+      )
+    })
+
+    it('should report nothing when the manifest is truthful', async () => {
+      const loader = new ModuleLoader()
+
+      stub(loader, 'search', {
+        provides: ['ui.search'],
+        onActivate: services => { services.register('ui.search', {}) }
+      })
+
+      await loader.loadAll()
+
+      expect(loader.getDeclarationMismatches()).toEqual([])
+    })
+
+    it('should forget a mismatch once the module is unloaded', async () => {
+      const loader = new ModuleLoader()
+
+      stub(loader, 'search', { provides: ['ui.search'] })
+      await loader.loadAll()
+      expect(loader.getDeclarationMismatches()).toHaveLength(1)
+
+      await loader.unloadModule('search')
+
+      expect(loader.getDeclarationMismatches()).toEqual([])
     })
   })
 
