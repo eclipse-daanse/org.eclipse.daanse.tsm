@@ -174,6 +174,7 @@ export function activate(context: ModuleContext) {
 | Path | Shows |
 |------|-------|
 | [`examples/whiteboard`](examples/whiteboard) | Satisfaction, `0..n` collection, ranking, dynamic requirements, devtools — no framework, no build step (`npm run example:whiteboard`) |
+| [`examples/workbench`](examples/workbench) | UI components coming and going: regions that collect, slots that compete, `unmount` cleanup, a shell that survives it all (`npm run example:workbench`) |
 | [`examples/shared-libraries`](examples/shared-libraries) | Host-provided Vue and PrimeVue via `__tsm__`, with separate plugin builds |
 
 ## Development

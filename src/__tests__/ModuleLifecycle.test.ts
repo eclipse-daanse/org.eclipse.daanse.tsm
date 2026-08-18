@@ -1233,6 +1233,41 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
   })
 
+  describe('loading a manifest that was never registered', () => {
+    it('should make it known to the loader', async () => {
+      const loader = new ModuleLoader()
+      const manifest: ModuleManifest = {
+        id: 'ad-hoc', name: 'ad-hoc', version: '1.0.0',
+        entry: 'http://localhost/ad-hoc/remoteEntry.js', exports: {}
+      }
+      globalRef.window!['ad-hoc'] = { activate: vi.fn() }
+
+      await loader.loadModule(manifest)
+
+      // Otherwise the module runs while getManifests() denies it exists
+      expect(loader.getManifests().map(entry => entry.id)).toEqual(['ad-hoc'])
+    })
+
+    it('should apply properties and ranking declared in that manifest', async () => {
+      const loader = new ModuleLoader()
+      const registry = loader.getServiceRegistry()
+      const manifest: ModuleManifest = {
+        id: 'ad-hoc', name: 'ad-hoc', version: '1.0.0',
+        entry: 'http://localhost/ad-hoc/remoteEntry.js', exports: {},
+        provides: [{ id: 'ui.component', ranking: 7, properties: { region: 'main' } }]
+      }
+      globalRef.window!['ad-hoc'] = {
+        activate: (context: ModuleContext) => { context.services.register('ui.component', {}) }
+      }
+
+      await loader.loadModule(manifest)
+
+      const [reference] = registry.getServiceReferences('ui.component')
+      expect(reference.ranking).toBe(7)
+      expect(reference.properties.region).toBe('main')
+    })
+  })
+
   describe('disable and enable', () => {
     it('should stop a module and keep it stopped', async () => {
       const loader = new ModuleLoader()
