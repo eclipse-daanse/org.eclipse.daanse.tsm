@@ -8,7 +8,7 @@ import type {
   ServiceRegistry as IServiceRegistry,
   InjectableConstructor,
   BindClassOptions,
-  ServiceCardinality,
+  ServiceQuery,
   ServiceProperties,
   ServiceReference,
   ServiceRegistration,
@@ -125,14 +125,7 @@ export class ScopedServiceRegistry implements IObservableServiceRegistry {
     return this.target.has(id)
   }
 
-  checkRequirements(
-    requirements: Array<{
-      id: string
-      optional?: boolean
-      cardinality?: ServiceCardinality
-      target?: string
-    }>
-  ): {
+  checkRequirements(requirements: ServiceQuery[]): {
     satisfied: boolean
     missing: string[]
   } {

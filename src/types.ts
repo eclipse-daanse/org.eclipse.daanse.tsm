@@ -350,6 +350,19 @@ export interface ServiceReference {
 }
 
 /**
+ * What the registry needs to know about a requirement in order to answer whether
+ * it is met. A `ServiceRequirement` from a manifest satisfies this; the extra
+ * fields there (policy, policyOption) are the loader's business, not the
+ * registry's.
+ */
+export interface ServiceQuery {
+  id: string
+  optional?: boolean
+  cardinality?: ServiceCardinality
+  target?: string
+}
+
+/**
  * How many providers of a service a module needs
  * - 0..1 / 1..1: a single provider (1..1 is the default)
  * - 0..n / 1..n: every provider, collected via getServiceReferences()
@@ -426,14 +439,7 @@ export interface ServiceRegistry {
   has(id: string): boolean
 
   /** Check if all required services are available */
-  checkRequirements(
-    requirements: Array<{
-      id: string
-      optional?: boolean
-      cardinality?: ServiceCardinality
-      target?: string
-    }>
-  ): {
+  checkRequirements(requirements: ServiceQuery[]): {
     satisfied: boolean
     missing: string[]
   }
