@@ -38,6 +38,34 @@ interface ModuleFederationContainer {
 }
 
 /**
+ * Whether a global value can plausibly be a module container: a Module
+ * Federation remote, or an ES module namespace with lifecycle hooks or exports.
+ *
+ * Needed because `window[moduleId]` is not a namespace of its own — an element
+ * with a matching `id` lands there too.
+ */
+function isModuleContainer(value: unknown): boolean {
+  if (value === null || (typeof value !== 'object' && typeof value !== 'function')) {
+    return false
+  }
+
+  // A DOM node is never a container, however promising its shape
+  if (typeof (value as { nodeType?: unknown }).nodeType === 'number') {
+    return false
+  }
+
+  const candidate = value as Record<string, unknown>
+  if (typeof candidate.get === 'function' && typeof candidate.init === 'function') {
+    return true
+  }
+
+  return typeof candidate.activate === 'function'
+    || typeof candidate.deactivate === 'function'
+    || candidate.default !== undefined
+    || Object.keys(candidate).length > 0
+}
+
+/**
  * Default options
  */
 /** How often a module may activate and park within one cascade before giving up */
@@ -934,22 +962,35 @@ export class ModuleLoader {
    */
   private async loadEntry(moduleId: string, entryUrl: string): Promise<unknown> {
     // Check if already loaded (for MF remotes)
-    if (window[moduleId]) {
-      return window[moduleId]
+    const existing = window[moduleId]
+    if (existing !== undefined && isModuleContainer(existing)) {
+      return existing
+    }
+
+    // Something else sits under this name — a DOM element with a matching id, or
+    // a built-in property. The browser exposes every id as a global, so this is
+    // reachable by accident, and treating it as a container would activate a
+    // module that never ran.
+    const nameTaken = existing !== undefined
+    if (nameTaken) {
+      this.logger.warn(
+        `Global name '${moduleId}' is taken by something that is not a module container ` +
+        `(an element id?). The module is imported, but Module Federation lookups by ` +
+        `this name will not work — consider renaming the module or the element.`
+      )
     }
 
     try {
       // Dynamic import
       const module = await import(/* @vite-ignore */ entryUrl)
+      const container = module.default ?? module
 
-      // Store in window for MF compatibility
-      if (module.default) {
-        window[moduleId] = module.default
-        return module.default
+      // Store in window for MF compatibility, unless that would overwrite
+      // whatever already holds the name
+      if (!nameTaken) {
+        window[moduleId] = container as ModuleFederationContainer
       }
-
-      window[moduleId] = module
-      return module
+      return container
 
     } catch (error) {
       throw new Error(`Failed to load module entry: ${entryUrl} - ${error}`)

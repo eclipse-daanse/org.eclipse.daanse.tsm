@@ -169,6 +169,13 @@ export function activate(context: ModuleContext) {
 }
 ```
 
+## Examples
+
+| Path | Shows |
+|------|-------|
+| [`examples/whiteboard`](examples/whiteboard) | Satisfaction, `0..n` collection, ranking, dynamic requirements, devtools — no framework, no build step (`npm run example:whiteboard`) |
+| [`examples/shared-libraries`](examples/shared-libraries) | Host-provided Vue and PrimeVue via `__tsm__`, with separate plugin builds |
+
 ## Development
 
 ```bash

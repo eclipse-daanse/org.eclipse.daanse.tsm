@@ -6,7 +6,7 @@ export default tseslint.config(
   },
   ...tseslint.configs.recommended,
   {
-    files: ['src/**/*.ts'],
+    files: ['src/**/*.ts', 'examples/**/*.ts'],
     languageOptions: {
       parserOptions: {
         ecmaVersion: 2022,

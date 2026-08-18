@@ -125,6 +125,26 @@ describe('installDevtools', () => {
     })
   })
 
+  describe('shell aliases', () => {
+    it('should map lb to modules and ls to services', async () => {
+      const loader = new ModuleLoader()
+      stub(loader, 'alpha', {
+        provides: ['geo.service'],
+        onActivate: services => { services.register('geo.service', {}) }
+      })
+      await loader.loadAll()
+      const tools = devtools(loader)
+
+      tools.lb()
+      expect(out.text()).toContain('Modules')
+      expect(out.text()).toContain('alpha')
+
+      tools.ls()
+      expect(out.text()).toContain('Services')
+      expect(out.text()).toContain('geo.service')
+    })
+  })
+
   describe('manifest and state', () => {
     it('should return and show a manifest', () => {
       const loader = new ModuleLoader()

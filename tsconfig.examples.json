@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "types": ["node"]
+  },
+  "include": ["examples/whiteboard/**/*.ts", "src/**/*.ts"],
+  "exclude": ["node_modules", "dist", "**/__tests__/**"]
+}

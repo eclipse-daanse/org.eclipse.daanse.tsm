@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TSM Whiteboard Example</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <!--
+      Element ids are kept distinct from module ids on purpose: a browser exposes
+      every id as a global, and TSM stores module containers on the window for
+      Module Federation. `id="palette"` next to a module called `palette` would
+      collide (the loader warns about it).
+    -->
+    <header>
+      <h1>TSM Whiteboard</h1>
+      <p>
+        Modules find each other through services. Open the console and type
+        <code>tsm.help()</code>.
+      </p>
+    </header>
+
+    <main>
+      <section>
+        <h2>Palette</h2>
+        <p class="hint">
+          Collected via <code>cardinality: "0..n"</code> — a widget that arrives later
+          just shows up.
+        </p>
+        <ul id="palette-list"><li class="empty">nothing yet</li></ul>
+      </section>
+
+      <section>
+        <h2>Greeting</h2>
+        <p class="hint">
+          Two providers, one ID. The higher <code>ranking</code> wins; disable it and the
+          other one takes over.
+        </p>
+        <output id="greeting-text">—</output>
+      </section>
+
+      <section>
+        <h2>Controls</h2>
+        <div class="controls">
+          <button id="load-late">Load the late widget</button>
+          <button id="toggle-premium">Disable premium greeting</button>
+          <button id="unload-table">Unload the table widget</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>Modules</h2>
+        <table id="module-table"></table>
+      </section>
+    </main>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
