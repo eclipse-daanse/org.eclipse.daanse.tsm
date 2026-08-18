@@ -37,6 +37,9 @@ export type {
   ServiceDeclaration,
   ServiceRequirement,
   ServiceRegistry,
+  ObservableServiceRegistry,
+  ServiceRegistryEvent,
+  ServiceRegistryListener,
   InjectableConstructor,
   BindClassOptions,
 

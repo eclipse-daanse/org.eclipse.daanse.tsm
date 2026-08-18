@@ -215,8 +215,11 @@ export interface BindClassOptions {
  * Service registry interface
  */
 export interface ServiceRegistry {
-  /** Register a service instance directly */
-  register<T>(id: string, service: T): void
+  /**
+   * Register a service instance directly
+   * @param options Provider info, so the registry knows which module owns the service
+   */
+  register<T>(id: string, service: T, options?: { providedBy?: string }): void
 
   /**
    * Bind a factory function for lazy instantiation
@@ -269,6 +272,33 @@ export interface ServiceRegistry {
 
   /** Get all registered service IDs */
   getServiceIds(): string[]
+}
+
+/**
+ * Service registry event
+ */
+export interface ServiceRegistryEvent {
+  type: 'registered' | 'updated' | 'unregistered'
+  serviceId: string
+  service: unknown
+}
+
+/**
+ * Service registry listener
+ */
+export interface ServiceRegistryListener {
+  onServiceEvent(event: ServiceRegistryEvent): void
+}
+
+/**
+ * A service registry that reports registrations and withdrawals.
+ *
+ * Kept separate from `ServiceRegistry` so a custom registry implementation
+ * stays valid without it; consumers detect support at runtime.
+ */
+export interface ObservableServiceRegistry extends ServiceRegistry {
+  addListener(listener: ServiceRegistryListener): void
+  removeListener(listener: ServiceRegistryListener): void
 }
 
 /**
@@ -332,10 +362,16 @@ export interface ModuleLoaderOptions {
  */
 export interface ModuleEvent {
   type: 'registering' | 'loading' | 'loaded' | 'activating' | 'activated' |
-        'deactivating' | 'deactivated' | 'error' | 'unloaded'
+        'deactivating' | 'deactivated' | 'error' | 'unloaded' |
+        /** A service listed in requiresService was withdrawn while the module was active */
+        'service-withdrawn'
   moduleId: string
   manifest?: ModuleManifest
   error?: Error
+
+  /** Service IDs this event refers to (set for 'service-withdrawn') */
+  serviceIds?: string[]
+
   timestamp: Date
 }
 

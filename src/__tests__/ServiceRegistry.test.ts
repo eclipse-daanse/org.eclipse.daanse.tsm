@@ -1,5 +1,7 @@
+import 'reflect-metadata'
 import { describe, it, expect, vi } from 'vitest'
 import { DefaultServiceRegistry, type ServiceRegistryListener } from '../ServiceRegistry'
+import { injectable } from '../decorators'
 
 describe('DefaultServiceRegistry', () => {
   describe('register and get', () => {
@@ -244,6 +246,145 @@ describe('DefaultServiceRegistry', () => {
       expect(() => registry.register('test.service', {})).not.toThrow()
       // Good listener should still be called
       expect(goodListener.onServiceEvent).toHaveBeenCalled()
+    })
+  })
+})
+describe('DefaultServiceRegistry - registration ownership and alias cleanup', () => {
+  @injectable()
+  class GeoService {
+    locate(): string { return 'here' }
+  }
+
+  describe('register with providedBy', () => {
+    it('should record which module provided the service', () => {
+      const registry = new DefaultServiceRegistry()
+
+      registry.register('geo.service', { locate: () => 'here' }, { providedBy: 'geo-module' })
+
+      expect(registry.getBindingInfo('geo.service')).toEqual({
+        scope: 'singleton',
+        providedBy: 'geo-module'
+      })
+    })
+
+    it('should keep working without provider info', () => {
+      const registry = new DefaultServiceRegistry()
+
+      registry.register('geo.service', { locate: () => 'here' })
+
+      expect(registry.get('geo.service')).toBeDefined()
+      expect(registry.getBindingInfo('geo.service')?.providedBy).toBeUndefined()
+    })
+  })
+
+  describe('unregister with aliases', () => {
+    it('should remove aliases when the primary service is unregistered', () => {
+      const registry = new DefaultServiceRegistry()
+      registry.bindClass('geo.impl', GeoService, { implements: ['geo.api'] })
+
+      expect(registry.has('geo.api')).toBe(true)
+      expect(registry.get('geo.api')).toBeInstanceOf(GeoService)
+
+      registry.unregister('geo.impl')
+
+      expect(registry.has('geo.api')).toBe(false)
+      expect(registry.get('geo.api')).toBeUndefined()
+    })
+
+    it('should report an unregistered alias as missing in checkRequirements', () => {
+      const registry = new DefaultServiceRegistry()
+      registry.bindClass('geo.impl', GeoService, { implements: ['geo.api'] })
+
+      registry.unregister('geo.impl')
+
+      expect(registry.checkRequirements([{ id: 'geo.api' }])).toEqual({
+        satisfied: false,
+        missing: ['geo.api']
+      })
+    })
+
+    it('should notify listeners for each removed alias', () => {
+      const registry = new DefaultServiceRegistry()
+      registry.bindClass('geo.impl', GeoService, { implements: ['geo.api', 'geo.legacy'] })
+
+      const events: Array<{ type: string; serviceId: string }> = []
+      const listener: ServiceRegistryListener = {
+        onServiceEvent: event => { events.push({ type: event.type, serviceId: event.serviceId }) }
+      }
+      registry.addListener(listener)
+
+      registry.unregister('geo.impl')
+
+      expect(events).toEqual([
+        { type: 'unregistered', serviceId: 'geo.impl' },
+        { type: 'unregistered', serviceId: 'geo.api' },
+        { type: 'unregistered', serviceId: 'geo.legacy' }
+      ])
+    })
+
+    it('should keep the primary service when only an alias is unregistered', () => {
+      const registry = new DefaultServiceRegistry()
+      registry.bindClass('geo.impl', GeoService, { implements: ['geo.api'] })
+
+      expect(registry.unregister('geo.api')).toBe(true)
+
+      expect(registry.has('geo.api')).toBe(false)
+      expect(registry.get('geo.impl')).toBeInstanceOf(GeoService)
+    })
+
+    it('should not resurrect a removed alias when the primary is unregistered later', () => {
+      const registry = new DefaultServiceRegistry()
+      registry.bindClass('geo.impl', GeoService, { implements: ['geo.api'] })
+      registry.unregister('geo.api')
+
+      expect(() => registry.unregister('geo.impl')).not.toThrow()
+      expect(registry.has('geo.api')).toBe(false)
+    })
+
+    it('should drop stale aliases when the primary is rebound with different interfaces', () => {
+      const registry = new DefaultServiceRegistry()
+      registry.bindClass('geo.impl', GeoService, { implements: ['geo.api'] })
+
+      registry.bindClass('geo.impl', GeoService, { implements: ['geo.v2'] })
+
+      expect(registry.has('geo.api')).toBe(false)
+      expect(registry.has('geo.v2')).toBe(true)
+    })
+
+    it('should drop aliases when the primary is replaced by a plain registration', () => {
+      const registry = new DefaultServiceRegistry()
+      registry.bindClass('geo.impl', GeoService, { implements: ['geo.api'] })
+
+      registry.register('geo.impl', { locate: () => 'elsewhere' })
+
+      expect(registry.has('geo.api')).toBe(false)
+      expect(registry.get('geo.impl')).toEqual({ locate: expect.any(Function) })
+    })
+
+    it('should move an alias when it is reassigned to another primary', () => {
+      const registry = new DefaultServiceRegistry()
+      registry.bindClass('geo.a', GeoService, { implements: ['geo.api'] })
+      registry.bindClass('geo.b', GeoService, { implements: ['geo.api'] })
+
+      // Unregistering the old primary must not take the reassigned alias with it
+      registry.unregister('geo.a')
+
+      expect(registry.has('geo.api')).toBe(true)
+      expect(registry.get('geo.api')).toBeInstanceOf(GeoService)
+    })
+  })
+
+  describe('clear', () => {
+    it('should also remove services that were only bound lazily', () => {
+      const registry = new DefaultServiceRegistry()
+      registry.bind('layout.a', () => ({ name: 'a' }))
+      registry.register('layout.b', { name: 'b' })
+
+      registry.clear()
+
+      expect(registry.has('layout.a')).toBe(false)
+      expect(registry.has('layout.b')).toBe(false)
+      expect(registry.getServiceIds()).toEqual([])
     })
   })
 })
