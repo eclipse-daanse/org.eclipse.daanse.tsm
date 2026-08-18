@@ -217,6 +217,12 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
 
 #### Diagnostics
 
+- **`loadModule(manifest, { awaitCascade: true })`** returns only once the cascade it triggered has run, so the
+  whole picture is stable — what OSGi gets for free, where a service registration is delivered synchronously
+  and `registerService()` returns with the consequences already applied. Here the cascade has to be queued,
+  because `import()` is asynchronous and a synchronous registry listener cannot finish an activation that
+  awaits one. No timeout: the loader knows how many reactions are outstanding, so the wait is exact rather
+  than a guess. Off by default, and not to be set from a lifecycle hook.
 - `settle()` documents what it is for and its one rule: `loadAll()`, `unloadModule()` and `reloadModule()`
   await it themselves, after a single `loadModule()` the caller has to, and it must not be called from a
   lifecycle hook — a hook runs inside the cascade it would wait for. Detecting that from inside would need

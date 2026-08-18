@@ -172,8 +172,9 @@ export class ModuleLoader {
    * Wait until every queued reaction has run, including those a reaction caused.
    *
    * `loadAll()`, `unloadModule()` and `reloadModule()` await this themselves.
-   * After a single `loadModule()` it has to be called by the caller: activating
-   * one module can satisfy others, and that cascade runs in the queue.
+   * After a single `loadModule()` it has to be called by the caller — or
+   * `loadModule(manifest, { awaitCascade: true })` does it in one step:
+   * activating one module can satisfy others, and that cascade runs in the queue.
    *
    * Do not call it from a lifecycle hook — a hook runs inside the cascade it
    * would be waiting for, which deadlocks. Whether a call sits inside a queued
@@ -687,10 +688,20 @@ export class ModuleLoader {
    * Load a single module.
    *
    * Returns once this module is loaded, activated or parked. Modules that become
-   * satisfied *because* of it are activated in the queued cascade afterwards —
-   * call `settle()` when the whole picture has to be stable, as `loadAll()` does.
+   * satisfied *because* of it are activated in the queued cascade afterwards.
+   *
+   * @param options.awaitCascade Also wait for that cascade, so the whole picture
+   *   is stable on return — the behaviour OSGi gets for free, where a service
+   *   registration is delivered synchronously and `registerService()` returns
+   *   with the consequences already applied. Off by default, and it must not be
+   *   set from a lifecycle hook: a hook runs inside the cascade it would then
+   *   wait for. There is no timeout — the loader knows how many reactions are
+   *   outstanding, so waiting is exact rather than a guess.
    */
-  async loadModule(manifest: ModuleManifest): Promise<LoadedModule> {
+  async loadModule(
+    manifest: ModuleManifest,
+    options: { awaitCascade?: boolean } = {}
+  ): Promise<LoadedModule> {
     // Already loaded, waiting, or being processed right now. The last case is
     // what stops ensureDependencies() from recursing forever on a cycle: the
     // modules involved end up parked on each other instead of overflowing the
@@ -744,6 +755,7 @@ export class ModuleLoader {
           )
         }
         this.park(loadedModule, reasons)
+        if (options.awaitCascade) await this.settle()
         return loadedModule
       }
 
@@ -764,6 +776,7 @@ export class ModuleLoader {
 
       // This module may be what others were waiting for
       this.enqueue(() => this.reconcile())
+      if (options.awaitCascade) await this.settle()
 
       return loadedModule
 
