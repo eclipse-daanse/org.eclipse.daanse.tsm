@@ -4,6 +4,7 @@ import {
   LOG_SERVICE,
   TILE_SERVICE,
   TILE_SOURCE_FACTORY_PID,
+  TileSourceSchema,
   type Log,
   type TileSourceConfig
 } from '../src/contracts.js'
@@ -20,7 +21,9 @@ import {
   service: [TILE_SERVICE],
   configurationPid: TILE_SOURCE_FACTORY_PID,
   configurationPolicy: 'require',
-  properties: { kind: 'raster' }
+  configurationSchema: TileSourceSchema,
+  // Declared, so the page can offer "add one" before any instance exists
+  configurationFactory: true
 })
 export class TileSource {
   private name = 'unnamed'
@@ -30,7 +33,10 @@ export class TileSource {
   @activate()
   start(context: ComponentContext<TileSourceConfig>): void {
     this.name = context.configuration.name
-    this.log.write('TileSource', `instance '${this.name}' from ${context.configurationPid}`)
+    this.log.write(
+      'TileSource',
+      `instance '${this.name}' (${context.configuration.kind}) from ${context.configurationPid}`
+    )
   }
 
   @deactivate()

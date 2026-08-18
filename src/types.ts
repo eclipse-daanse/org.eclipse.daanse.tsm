@@ -5,6 +5,7 @@
 
 // Type-only, so the cycle with ConfigurationAdmin.ts exists on paper alone
 import type { ConfigurationAdmin } from './ConfigurationAdmin.js'
+import type { AttributeDefinition, MetatypeRegistry, ObjectClassDefinition } from './Metatype.js'
 
 /**
  * Module state in lifecycle
@@ -323,6 +324,27 @@ export interface ComponentOptions {
    * - ignore: pays no attention to configuration at all
    */
   configurationPolicy?: ConfigurationPolicy
+
+  /**
+   * What this component's configuration looks like: names, types, defaults,
+   * ranges. OSGi's `@Designate`, pointing at a Metatype description.
+   *
+   * Two things follow from declaring it. The declared defaults are applied
+   * underneath the configuration, so the component reads a value rather than
+   * inventing one, and a generic user interface can offer a form for a PID
+   * nobody wrote a form for — which is what Metatype exists for.
+   */
+  configurationSchema?: ObjectClassDefinition<Record<string, AttributeDefinition>>
+
+  /**
+   * The configuration PID is a factory PID, so the component is a template:
+   * one instance per configuration.
+   *
+   * Without it the loader decides from what exists, which is enough at runtime
+   * but leaves a user interface unable to tell that it *may* add another
+   * instance before the first one exists. `@Designate(factory = true)` in OSGi.
+   */
+  configurationFactory?: boolean
 }
 
 export type ConfigurationPolicy = 'optional' | 'require' | 'ignore'
@@ -789,6 +811,20 @@ export interface ModuleLoaderOptions {
    * `tsm.configuration.admin`, so a module can configure another one.
    */
   configurationAdmin?: ConfigurationAdmin
+
+  /**
+   * Where component configuration schemas are collected.
+   *
+   * The loader registers what each `@component()` declared as
+   * `configurationSchema` and applies the declared defaults. It is also published
+   * as a service under `tsm.metatype`, so a configuration user interface can be a
+   * module of its own.
+   *
+   * Pass the same registry to `ConfigurationAdmin` to have values validated
+   * against the schemas as well; the loader does not do that on its own, and
+   * neither does Config Admin in OSGi.
+   */
+  metatype?: MetatypeRegistry
 }
 
 /**

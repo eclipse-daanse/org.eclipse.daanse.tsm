@@ -23,6 +23,20 @@ export {
   modified
 } from './decorators.js'
 
+// Metatype - what a configuration looks like
+export {
+  MetatypeRegistry,
+  objectClass,
+  METATYPE_SERVICE_ID,
+  type AttributeDefinition,
+  type AttributeType,
+  type AttributeCardinality,
+  type AttributeError,
+  type ObjectClassDefinition,
+  type ConfigurationOf
+} from './Metatype.js'
+export { toJsonSchema, toMetamodelSchema, type JsonSchema } from './metatypeJsonSchema.js'
+
 // Configuration Admin
 export {
   ConfigurationAdmin,

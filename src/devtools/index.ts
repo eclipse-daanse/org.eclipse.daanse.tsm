@@ -31,6 +31,7 @@ import {
   type Configuration,
   type ConfigurationAdmin
 } from '../ConfigurationAdmin.js'
+import { METATYPE_SERVICE_ID, type MetatypeRegistry } from '../Metatype.js'
 
 import { consoleOutput, css, type DevtoolsOutput } from './output.js'
 
@@ -107,6 +108,8 @@ export interface TsmDevtools {
   configure(pid: string, values: ConfigurationProperties): Promise<void>
   /** Delete a PID's configuration */
   unconfigure(pid: string): Promise<void>
+  /** What a PID accepts: attributes, types, defaults, ranges — and what is wrong now */
+  describe(pid: string, locale?: string): void
   /** Shared libraries the host registered */
   shared(): void
 
@@ -514,6 +517,54 @@ export function installDevtools(options: DevtoolsOptions): TsmDevtools {
       out.log(`%cConfigured ${pid}`, css('ok'))
     },
 
+    describe(pid, locale) {
+      const registry = services.get<MetatypeRegistry>(METATYPE_SERVICE_ID)
+      if (!registry) {
+        out.error('No metatype registry — pass one to the ModuleLoader as metatype')
+        return
+      }
+
+      const definition = registry.getObjectClassDefinition(pid, locale)
+      if (!definition) {
+        out.log(`%cNothing describes ${pid}`, css('muted'))
+        return
+      }
+
+      out.log(`%c${definition.name ?? definition.id}%c ${pid}`, css('heading'), css('muted'))
+      if (definition.description !== undefined) {
+        out.log(`  %c${definition.description}`, css('muted'))
+      }
+
+      const current = configurationAdmin()?.findConfiguration(pid)?.getProperties()
+
+      for (const [id, attribute] of Object.entries(definition.attributes)) {
+        const traits = [
+          attribute.type,
+          attribute.cardinality !== undefined && attribute.cardinality !== 'single'
+            ? `list${typeof attribute.cardinality === 'number' ? ` of ${attribute.cardinality}` : ''}`
+            : undefined,
+          attribute.required === false ? 'optional' : 'required',
+          attribute.default !== undefined ? `default ${JSON.stringify(attribute.default)}` : undefined,
+          attribute.min !== undefined ? `min ${attribute.min}` : undefined,
+          attribute.max !== undefined ? `max ${attribute.max}` : undefined,
+          attribute.options ? `one of ${attribute.options.map(o => o.value).join('|')}` : undefined
+        ].filter(Boolean).join(' · ')
+
+        const value = current?.[id]
+        out.log(
+          `  %c${attribute.name ?? id}%c (${id}) — ${traits}` +
+          (value === undefined ? '' : ` = ${JSON.stringify(value)}`),
+          css('name'),
+          css('muted')
+        )
+      }
+
+      const errors = current ? registry.validate(pid, current) : []
+      for (const error of errors) {
+        out.log(`  %c${error.attribute} ${error.message}`, css('bad'))
+      }
+    },
+
     async unconfigure(pid) {
       const admin = configurationAdmin()
       if (!admin) return
@@ -723,6 +774,7 @@ export function installDevtools(options: DevtoolsOptions): TsmDevtools {
         ['Components', [
           'components(id?)      declared components and their state',
           'config(pid?)         configurations, or the values of one',
+          'describe(pid, loc?)  what a PID accepts, and what is wrong now',
           'configure(pid, v)    set values and let the components react',
           'unconfigure(pid)     delete a configuration'
         ]],

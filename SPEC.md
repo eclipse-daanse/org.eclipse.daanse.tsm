@@ -1003,16 +1003,193 @@ await configuration?.getConfiguration('demo.tiles').update({ tileUrl: url })
   während Konfiguration an der **Component** hängt — ein Override hätte also keinen
   eindeutigen Adressaten. Auf Code-Ebene ist es keine Einschränkung:
   `getServiceReferences(id, target)` nimmt jeden zur Laufzeit gebildeten Filter.
-- **Kein Metatype.** Schema, Typen und Labels für generierte
-  Konfigurations-Oberflächen sind in OSGi eine eigene Spezifikation (105) und hier
-  Sache der Anwendung. `ComponentContext<C>` gibt der Konfiguration einen Typ im
-  Code, aber keine Beschreibung zur Laufzeit.
+- **Metatype** ist in §11.4 beschrieben.
 - **Kein Bundle-Location-Binding und keine Permissions.** In OSGi verhindert die
   Bindung einer Configuration an eine Bundle-Location, dass ein fremdes Bundle
   fremde Konfiguration bekommt. Im Browser gibt es keine Sicherheitsgrenze
   zwischen Modulen, gegen die das schützen würde.
 - **Kein `ConfigurationPlugin`.** Werte werden zugestellt, wie sie gespeichert
   sind; Variablenersetzung gehört in den Store.
+
+---
+
+### 11.4 Metatype: was eine Konfiguration ist
+
+Konfiguration beschreibt sich selbst — Namen, Typen, Defaults, Grenzen. Das ist in
+OSGi der **Metatype Service** (Compendium 105), damit eine generische Oberfläche
+ein Formular für eine PID anbieten kann, für die niemand ein Formular geschrieben
+hat.
+
+Ein Punkt fällt hier besser aus als in Java. Dort braucht eine Konfiguration ein
+annotiertes **Interface** für den Typ und **Annotationen** für die Beschreibung,
+und beide können auseinanderlaufen. Hier ist ein Schema ein Wert, und der Typ wird
+daraus abgeleitet:
+
+```typescript
+export const TileSchema = objectClass({
+  id: 'demo.tiles',
+  name: 'Raster tiles',
+  attributes: {
+    url: { type: 'string', name: 'Tile URL', minLength: 8 },
+    zoom: { type: 'integer', name: 'Maximum zoom', default: 19, min: 1, max: 22 },
+    retina: { type: 'boolean', default: false },
+    token: { type: 'password', required: false }
+  }
+})
+
+export type TileConfig = ConfigurationOf<typeof TileSchema>
+// { url: string; zoom: number; retina: boolean; token?: string }
+```
+
+Angemeldet wird es an der Component — OSGi's `@Designate`:
+
+```typescript
+@component({
+  service: [TILE_SERVICE],
+  configurationPid: 'demo.tiles',
+  configurationSchema: TileSchema,
+  configurationFactory: false   // true: die PID ist eine Factory-PID
+})
+export class RasterTiles {
+  @activate()
+  start(context: ComponentContext<TileConfig>): void {
+    initialise(context.configuration.url, context.configuration.zoom)
+  }
+}
+```
+
+#### Attribute
+
+| Feld | Bedeutung |
+| --- | --- |
+| `type` | `string`, `number`, `integer`, `boolean`, `password`. OSGi unterscheidet acht numerische Typen, weil Java das tut; in JavaScript bleibt von der Unterscheidung nur, ob Bruchteile erlaubt sind |
+| `required` | **Default `true`**, wie in OSGi — die überraschende Vorgabe. Ein deklarierter Default vertritt den Wert |
+| `default` | wird als Component-Property angewendet, siehe unten |
+| `cardinality` | `single` (Default), `many`, oder eine Zahl als Höchstlänge |
+| `min` / `max` | für Zahlen |
+| `minLength` / `maxLength` | für Text. OSGi vergleicht `min`/`max` hier lexikographisch, was wenig nützt |
+| `options` | die erlaubten Werte, mit Labels — eine Auswahlliste |
+| `validate(value)` | was die Deklaration nicht ausdrücken kann; Meldung oder `undefined` |
+| `name` / `description` | Labels; `%key` wird über `localization` aufgelöst |
+
+#### Was das Framework damit tut
+
+Zwei Dinge, und beide sind spürbar:
+
+**Defaults wirken.** `configurationsFor()` legt die deklarierten Defaults unter die
+Konfiguration, so wie bnd die Defaults eines annotierten Konfigurationstyps als
+Component-Properties in den Descriptor schreibt. Die Component liest also einen
+Wert und muss keinen erfinden — im Beispiel steht deshalb nirgends `?? 1000`:
+
+```typescript
+@activate()
+start(context: ComponentContext<ClockConfig>): void {
+  this.restartTimer(context.configuration.interval)   // immer gesetzt
+}
+```
+
+Sie werden damit auch zu Service-Properties, ein Consumer kann also auf einen Wert
+filtern, den niemand konfiguriert hat.
+
+**Werte werden geprüft.** Bekommt der `ConfigurationAdmin` die Registry, weist er
+ein `update()` zurück, das nicht zum Schema passt:
+
+```typescript
+const metatype = new MetatypeRegistry()
+const configuration = new ConfigurationAdmin({ store, metatype })
+const loader = new ModuleLoader({ configurationAdmin: configuration, metatype })
+```
+
+Das ist eine **bewusste Abweichung**: In OSGi validiert Config Admin nicht, und
+Metatype beschreibt nur — geprüft wird in der Oberfläche, die schreibt. Ein
+falscher Wert an der Quelle abzulehnen ist mehr wert als diese Symmetrie, und ohne
+Registry ändert sich nichts.
+
+Beides ist opt-in: ohne `metatype` verhält sich alles wie vorher.
+
+#### Sichtbarkeit
+
+`MetatypeRegistry` ist selbst ein Service (`tsm.metatype`), eine
+Konfigurations-Oberfläche kann also ein Modul sein. `getPids()`,
+`getFactoryPids()`, `getObjectClassDefinition(pid, locale?)`, `defaults(pid)`,
+`validate(pid, values)`, `coerce(pid, values)`. In der Konsole:
+`tsm.describe(pid)` — Attribute mit Typen, Grenzen, aktuellen Werten und dem, was
+gerade nicht passt.
+
+Lokalisierung folgt OSGi's Mechanismus: `%key` in Namen und Beschreibungen,
+aufgelöst über `localization` pro Locale. Ein Key ohne Übersetzung behält seine
+`%key`-Form — ein sichtbarer Platzhalter ist leichter zu beheben als ein leeres
+Label.
+
+#### Anschluss an EMF: JSON Schema als Zwischenformat
+
+`ObjectClassDefinition`/`AttributeDefinition` und Ecore `EClass`/`EAttribute`
+beschreiben dasselbe. Statt einen eigenen Ecore-Generator zu bauen, gibt tsm
+**JSON Schema** aus; den Rest erledigt `@emfts/codec.jsonschema`, das bereits in
+beide Richtungen konvertiert:
+
+```typescript
+import { toMetamodelSchema } from '@eclipse-daanse/tsm'
+import { JsonSchemaToEPackageConverter } from '@emfts/codec.jsonschema'
+
+const ePackage = new JsonSchemaToEPackageConverter().convert(
+  toMetamodelSchema(metatype, { id: 'http://example.com/config', name: 'demoConfig' })
+)
+```
+
+Damit rendern `@emfts/vue-registry` (Default-Editoren pro EDataType) oder
+`@emfts/uimodel-composer` die Oberfläche — tsm braucht dafür keine Zeile
+UI-Code und keine Abhängigkeit auf EMFTs.
+
+Zwei Formen, weil es zwei Fragen sind:
+
+| | |
+| --- | --- |
+| `toJsonSchema(ocd)` | beschreibt **ein Dokument** — wie die Werte einer PID aussehen. Das will ein Validator oder eine Formular-Bibliothek |
+| `toMetamodelSchema(registry \| ocds)` | beschreibt **Klassen** unter `$defs`. Das liest ein EPackage-Konverter; ein Top-Level-Objektschema ignoriert er |
+
+Die Abbildung ist erstaunlich direkt, weil beide Vokabulare Datenformen
+beschreiben:
+
+| tsm | JSON Schema | daraus in Ecore |
+| --- | --- | --- |
+| `type: 'string' \| 'integer' \| 'number' \| 'boolean'` | `type`, gleich benannt | `EString`, `EInt`, `EDouble`, `EBoolean` |
+| `type: 'password'` | `type: 'string', format: 'password'` | `EString` |
+| `cardinality: 'many'` / `n` | `type: 'array'`, `maxItems: n` | `upperBound` |
+| `required` ohne `default` | `required: [...]` | `lowerBound: 1` |
+| `min`/`max`, `minLength`/`maxLength` | `minimum`/`maximum`, `minLength`/`maxLength` | — |
+| `options` | `enum`, als benanntes `$defs` mit `$ref` | `EEnum` mit `ELiterals` |
+
+Ein Durchlauf mit dem echten Konverter ergibt aus den Schemata des Beispiels:
+
+```
+EPackage demoConfig (http://example.com/tsm/config)
+  BasicEClass DemoTiles
+    url: EString [1..1]
+    zoom: EInt [0..1]
+    retina: EBoolean [0..1]
+    token: EString [0..1]
+  BasicEEnum DemoTileSourceKind
+    literal raster
+    literal vector
+  BasicEClass DemoTileSource
+    name: EString [1..1]
+    kind: DemoTileSourceKind [0..1]
+```
+
+**Grenzen dieses Wegs**, alle drei bewusst und benannt:
+
+- `validate()` ist eine Funktion und in keinem Schema darstellbar. Erhalten bleibt
+  nur, *dass* geprüft wird — als `x-tsm-validated`. Der modellseitige Ort für so
+  eine Regel wäre ein OCL-Constraint.
+- `localization` hat in JSON Schema keine Entsprechung. Ohne `locale` reist die
+  Tabelle als `x-tsm-localization` mit, mit `locale` sind die Labels schon
+  aufgelöst.
+- Defaults erreichen das EPackage nicht als `defaultValueLiteral` — der Konverter
+  überträgt `default` derzeit nicht. Im JSON Schema stehen sie.
+
+Der PID-Name überlebt als `x-tsm-object-class`, weil `demo.tile-source` kein
+Klassenname ist und zu `DemoTileSource` wird.
 
 ---
 

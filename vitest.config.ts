@@ -16,6 +16,12 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['src/__tests__/**/*.test.ts'],
+    // The schema-to-type inference is only provable by a type check, so those
+    // assertions live in *.test-d.ts and run through `npm run typecheck:types`
+    typecheck: {
+      include: ['src/__tests__/**/*.test-d.ts'],
+      tsconfig: 'tsconfig.types.json'
+    },
     coverage: {
       reporter: ['text', 'json', 'html'],
       include: ['src/**/*.ts'],

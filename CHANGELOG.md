@@ -385,6 +385,30 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
   with a dot stay private, and `service.ranking` from configuration re-orders providers without touching code. A PID
   that names a *factory* PID instantiates the component once per configuration — not a separate feature, the same
   mechanism, exactly as it follows from the PID in DS.
+- **Metatype** (`objectClass()`, `MetatypeRegistry`, `@component({ configurationSchema })`): configuration describes
+  itself — names, types, defaults, ranges, options — so a generic user interface can offer a form for a PID nobody
+  wrote a form for. OSGi's Compendium 105, with one thing working out better than in Java: there a configuration needs
+  an annotated interface for the type *and* annotations for the description, and the two can drift; here the schema is
+  a value and `ConfigurationOf<typeof schema>` derives the type from it. Type-level tests keep that inference honest
+  (`npm run typecheck:types`).
+- Two effects that are felt rather than merely described. **Declared defaults are applied** underneath the
+  configuration — where bnd puts the defaults of an annotated configuration type — so a component reads a value
+  instead of inventing one, and they become service properties like any other value. And **values are checked**: hand
+  the registry to `ConfigurationAdmin` and an `update()` that does not fit the schema is refused. That check is a
+  deliberate departure — in OSGi, Config Admin does not validate and Metatype only describes — and it is opt-in, since
+  without a registry nothing changes.
+- `required` defaults to **true**, as in OSGi, and a declared default stands in for a missing value. Localization
+  follows OSGi's mechanism: `%key` resolved per locale, with an untranslated key keeping its `%key` form rather than
+  turning into an empty label. `MetatypeRegistry` is a service (`tsm.metatype`), so a configuration UI can be a
+  module; `tsm.describe(pid)` shows attributes, ranges, current values and what does not fit.
+- **`toJsonSchema()` / `toMetamodelSchema()`** are the way out of tsm's own vocabulary. Rather than growing an Ecore
+  generator, tsm emits JSON Schema (Draft 2020-12) and `@emfts/codec.jsonschema` turns it into an EPackage — from
+  where `@emfts/vue-registry` and `@emfts/uimodel-composer` render the interface, with no UI code and no EMFTs
+  dependency in tsm. Two forms for two questions: `toJsonSchema` describes a *document* (what a validator or form
+  library wants), `toMetamodelSchema` describes *classes* under `$defs` (what an EPackage converter reads — it ignores
+  a top-level object schema). Verified against the real converter: three EClasses with correct bounds and a named
+  `EEnum`. `validate()` cannot survive the trip — a function is not expressible in any schema language, so only
+  `x-tsm-validated` records that a check exists; an OCL constraint is where such a rule belongs on the model side.
 - **New example `examples/config`** (`npm run example:config`): the same PID shown deciding three different things —
   a component held back while its bundle stays active (and the consumer bundle parked behind it), two components on
   one PID where only one has `@modified()` so their tick counts diverge on a single change, and a factory PID turning

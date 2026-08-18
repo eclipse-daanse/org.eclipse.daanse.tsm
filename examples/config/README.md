@@ -31,6 +31,24 @@ configuration, each with its own properties and its own registration of
 `(name=satellite)`. In DS this is not a separate feature either: it follows from
 the PID naming a factory.
 
+## The schemas
+
+Each of these PIDs is described by an `objectClass()` in
+[`src/contracts.ts`](src/contracts.ts), and the description is the TypeScript type
+as well — `ConfigurationOf<typeof TileSchema>`. Two things follow from that, both
+visible here:
+
+- The clocks read `context.configuration.interval` with no `?? 1000` anywhere,
+  because the schema declares the default and the loader applies it.
+- Saving a url shorter than eight characters, or a zoom above 22, is refused
+  before it reaches a component — the message appears in the lifecycle panel.
+
+`tsm.describe('demo.tiles')` in the console prints the attributes with their
+types, ranges and current values. And `toMetamodelSchema(metatype)` turns all of
+them into JSON Schema, which `@emfts/codec.jsonschema` converts into an EMF
+EPackage — that is the path to a generated form, and the reason this page has
+hand-written fields instead of a form generator of its own.
+
 ## Reload the page
 
 The values are still there. `LocalStorageConfigurationStore` writes one entry per

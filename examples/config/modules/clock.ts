@@ -1,6 +1,7 @@
 import { activate, component, deactivate, inject, modified } from '@eclipse-daanse/tsm/decorators'
 import type { ComponentContext } from '@eclipse-daanse/tsm'
 import {
+  ClockSchema,
   CLOCK_PID,
   LOG_SERVICE,
   RESTARTING_CLOCK,
@@ -18,7 +19,11 @@ import {
  * tick count: the steady clock keeps counting, the restarting one begins at zero
  * because it is a new object.
  */
-@component({ service: [STEADY_CLOCK], configurationPid: CLOCK_PID })
+@component({
+  service: [STEADY_CLOCK],
+  configurationPid: CLOCK_PID,
+  configurationSchema: ClockSchema
+})
 export class SteadyClock implements Clock {
   private ticks = 0
   private timer?: ReturnType<typeof setInterval>
@@ -27,8 +32,9 @@ export class SteadyClock implements Clock {
 
   @activate()
   start(context: ComponentContext<ClockConfig>): void {
-    this.log.write('SteadyClock', `started at ${context.configuration.interval ?? 1000}ms`)
-    this.restartTimer(context.configuration.interval ?? 1000)
+    // The schema declares a default, so an interval is always present
+    this.log.write('SteadyClock', `started at ${context.configuration.interval}ms`)
+    this.restartTimer(context.configuration.interval)
   }
 
   @modified()
@@ -60,7 +66,11 @@ export class SteadyClock implements Clock {
 }
 
 /** The same clock without `@modified()`: a change rebuilds it */
-@component({ service: [RESTARTING_CLOCK], configurationPid: CLOCK_PID })
+@component({
+  service: [RESTARTING_CLOCK],
+  configurationPid: CLOCK_PID,
+  configurationSchema: ClockSchema
+})
 export class RestartingClock implements Clock {
   private ticks = 0
   private timer?: ReturnType<typeof setInterval>
@@ -69,8 +79,8 @@ export class RestartingClock implements Clock {
 
   @activate()
   start(context: ComponentContext<ClockConfig>): void {
-    this.log.write('RestartingClock', `started at ${context.configuration.interval ?? 1000}ms`)
-    this.timer = setInterval(() => { this.ticks++ }, Math.max(context.configuration.interval ?? 1000, 100))
+    this.log.write('RestartingClock', `started at ${context.configuration.interval}ms`)
+    this.timer = setInterval(() => { this.ticks++ }, Math.max(context.configuration.interval, 100))
   }
 
   @deactivate()

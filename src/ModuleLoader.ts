@@ -42,6 +42,7 @@ import {
   type ConfigurationAdmin,
   type ConfigurationEvent
 } from './ConfigurationAdmin.js'
+import { METATYPE_SERVICE_ID, type MetatypeRegistry } from './Metatype.js'
 import { isTsmRuntimeAvailable, tsmRuntime } from './TsmRuntime.js'
 
 // Type for Module Federation containers
@@ -106,7 +107,8 @@ const DEFAULT_OPTIONS: Required<ModuleLoaderOptions> = {
   serviceRegistry: undefined as unknown as ServiceRegistry,
   strictRequirements: false,
   logger: undefined as unknown as ModuleLogger,
-  configurationAdmin: undefined as unknown as ConfigurationAdmin
+  configurationAdmin: undefined as unknown as ConfigurationAdmin,
+  metatype: undefined as unknown as MetatypeRegistry
 }
 
 /**
@@ -254,6 +256,8 @@ export class ModuleLoader {
   private componentRuntimes = new Map<string, ComponentRuntime[]>()
   /** Where component configuration comes from, when the host supplied one */
   private configurations?: ConfigurationAdmin
+  /** Where configuration schemas are collected, when the host supplied a registry */
+  private metatype?: MetatypeRegistry
   private configurationListener?: { onConfigurationEvent(event: ConfigurationEvent): void }
   /** Module-scoped registry facades, so a teardown can withdraw what a module registered */
   private scopes = new Map<string, ScopedServiceRegistry>()
@@ -267,6 +271,18 @@ export class ModuleLoader {
     this.logger = options.logger ?? new ConsoleLogger()
     this.observeServiceRegistry()
     this.observeConfigurations(options.configurationAdmin)
+    this.publishMetatype(options.metatype)
+  }
+
+  /**
+   * Take the schema registry and publish it, as the Metatype Service is a service
+   * in OSGi too — so a configuration user interface can be a module.
+   */
+  private publishMetatype(metatype?: MetatypeRegistry): void {
+    if (!metatype) return
+
+    this.metatype = metatype
+    this.services.register(METATYPE_SERVICE_ID, metatype, { providedBy: 'tsm' })
   }
 
   /**
@@ -753,6 +769,7 @@ export class ModuleLoader {
       this.configurationListener = undefined
     }
     this.configurations = undefined
+    this.metatype = undefined
   }
 
   /**
@@ -1323,6 +1340,10 @@ export class ModuleLoader {
     }))
     this.componentRuntimes.set(loadedModule.manifest.id, runtimes)
 
+    // Schemas before instances: the declared defaults are part of what an
+    // instance is configured with
+    this.designateSchemas(loadedModule.manifest.id, runtimes)
+
     // Registration first, for every component, and only then activation: a
     // component may inject a service another component of the same module
     // offers, and constructing it earlier would find nothing. DS separates the
@@ -1360,6 +1381,54 @@ export class ModuleLoader {
   }
 
   /**
+   * Publish what each component declared about the shape of its configuration.
+   *
+   * The equivalent of bnd writing a Designate element next to the component
+   * descriptor: nothing in the running system needs it, and a user interface
+   * cannot be written without it.
+   */
+  private designateSchemas(moduleId: string, runtimes: ComponentRuntime[]): void {
+    const metatype = this.metatype
+    if (!metatype) return
+
+    for (const runtime of runtimes) {
+      const schema = runtime.options.configurationSchema
+      if (!schema || runtime.policy === 'ignore') continue
+
+      for (const pid of runtime.pids) {
+        // Two components describing one PID differently is a contradiction, not a
+        // merge: whichever loads last would silently decide what the PID means
+        const existing = metatype.getObjectClassDefinition(pid)
+        if (existing !== undefined && existing !== schema) {
+          this.logger.warn(
+            `Component ${runtime.className} describes ${pid} as '${schema.id}', ` +
+            `which is already described as '${existing.id}' — the later one wins`
+          )
+        }
+
+        metatype.designate(pid, schema, {
+          factory: runtime.options.configurationFactory,
+          providedBy: moduleId
+        })
+      }
+    }
+  }
+
+  /**
+   * The declared defaults for a component's PIDs, in the same order the PIDs
+   * merge, so a specific PID's default beats a shared one's.
+   */
+  private declaredDefaults(runtime: ComponentRuntime): ConfigurationProperties {
+    if (!this.metatype) return {}
+
+    let defaults: ConfigurationProperties = {}
+    for (const pid of runtime.pids) {
+      defaults = { ...defaults, ...this.metatype.defaults(pid) }
+    }
+    return defaults
+  }
+
+  /**
    * Which instances of a component its configuration calls for.
    *
    * Three outcomes, and they are what `configurationPolicy` means:
@@ -1368,8 +1437,12 @@ export class ModuleLoader {
    * last one is not a separate feature either — it follows from the PID.
    */
   private configurationsFor(runtime: ComponentRuntime): WantedInstance[] {
+    // Declared defaults sit underneath everything: a component reads a configured
+    // value or the default it declared, and never has to invent one
+    const defaults = runtime.policy === 'ignore' ? {} : this.declaredDefaults(runtime)
+
     const unconfigured = (): WantedInstance[] =>
-      runtime.policy === 'require' ? [] : [{ factory: false, values: {} }]
+      runtime.policy === 'require' ? [] : [{ factory: false, values: { ...defaults } }]
 
     if (runtime.policy === 'ignore' || !this.configurations) {
       return unconfigured()
@@ -1377,7 +1450,7 @@ export class ModuleLoader {
 
     // Several PIDs merge left to right, so a shared PID can carry the common
     // values and a specific one override them
-    let values: ConfigurationProperties = {}
+    let values: ConfigurationProperties = { ...defaults }
     let pid: string | undefined
     for (const candidate of runtime.pids) {
       const properties = this.configurations.findConfiguration(candidate)?.getProperties()
@@ -1386,20 +1459,33 @@ export class ModuleLoader {
       pid ??= candidate
     }
 
-    for (const candidate of runtime.pids) {
-      const factoryConfigurations = this.configurations.listFactoryConfigurations(candidate)
-      if (factoryConfigurations.length === 0) continue
+    // Whether the PID is a factory PID can be declared, and otherwise follows
+    // from what exists — which is enough at runtime, and the reason a component
+    // can be a template without saying so
+    const declaredFactory = runtime.options.configurationFactory
 
-      // One instance per configuration of the factory, the singleton values
-      // underneath. Only the first factory PID counts: DS allows one as well.
-      return factoryConfigurations.map(configuration => ({
-        pid: configuration.pid,
-        factory: true,
-        values: { ...values, ...configuration.getProperties() }
-      }))
+    if (declaredFactory !== false) {
+      for (const candidate of runtime.pids) {
+        const factoryConfigurations = this.configurations.listFactoryConfigurations(candidate)
+        if (factoryConfigurations.length === 0) continue
+
+        // One instance per configuration of the factory, the singleton values
+        // underneath. Only the first factory PID counts: DS allows one as well.
+        return factoryConfigurations.map(configuration => ({
+          pid: configuration.pid,
+          factory: true,
+          values: { ...values, ...configuration.getProperties() }
+        }))
+      }
     }
 
-    return pid === undefined ? unconfigured() : [{ pid, factory: false, values }]
+    // A component declared as a template has no single configuration of its own,
+    // so a singleton configuration under that PID does not make it one
+    if (declaredFactory !== true && pid !== undefined) {
+      return [{ pid, factory: false, values }]
+    }
+
+    return unconfigured()
   }
 
   /**
@@ -1735,6 +1821,8 @@ export class ModuleLoader {
     const runtimes = this.componentRuntimes.get(moduleId)
     if (!runtimes) return
     this.componentRuntimes.delete(moduleId)
+    // The schemas described components that are going away
+    this.metatype?.removeAllOf(moduleId)
 
     for (const runtime of [...runtimes].reverse()) {
       for (const [key, instance] of [...runtime.instances].reverse()) {

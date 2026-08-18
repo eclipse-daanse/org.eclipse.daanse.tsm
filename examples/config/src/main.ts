@@ -12,6 +12,7 @@ import {
   ConfigurationAdmin,
   DefaultServiceRegistry,
   LocalStorageConfigurationStore,
+  MetatypeRegistry,
   ModuleLoader
 } from '@eclipse-daanse/tsm'
 import { installDevtools } from '@eclipse-daanse/tsm/devtools'
@@ -31,14 +32,20 @@ import { bundles } from './manifests.js'
 // Persisting in localStorage: the OSGi specification requires that configuration
 // survives a restart and says nothing about where it lives, which is exactly the
 // seam a store is
+// The components declare what their configuration looks like; the registry
+// collects those declarations, applies the declared defaults, and — because the
+// admin gets it too — refuses values that do not fit
+const metatype = new MetatypeRegistry()
 const configuration = new ConfigurationAdmin({
-  store: new LocalStorageConfigurationStore('tsm.example.config.')
+  store: new LocalStorageConfigurationStore('tsm.example.config.'),
+  metatype
 })
 
 const services = new DefaultServiceRegistry()
 const loader = new ModuleLoader({
   serviceRegistry: services,
-  configurationAdmin: configuration
+  configurationAdmin: configuration,
+  metatype
 })
 
 const entries: Array<{ at: Date; source: string; message: string }> = []
@@ -64,15 +71,26 @@ const clockInterval = element<HTMLInputElement>('clock-interval')
 const sourceName = element<HTMLInputElement>('source-name')
 const sourceUrl = element<HTMLInputElement>('source-url')
 
-/** Every change goes through the admin, and the loader reacts in its queue */
+/**
+ * Every change goes through the admin, and the loader reacts in its queue.
+ *
+ * The admin validates against the declared schema, so a rejected value shows up
+ * here rather than reaching a component.
+ */
 async function change(action: () => Promise<void>): Promise<void> {
-  await action()
+  try {
+    await action()
+  } catch (error) {
+    log.write('configuration', error instanceof Error ? error.message : String(error))
+    return
+  }
   await loader.settle()
   render()
 }
 
 element('tiles-save').addEventListener('click', () => {
   void change(() =>
+    // Only `url` is set here; `zoom` and `retina` come from the schema's defaults
     configuration.getConfiguration(TILES_PID).update({ url: tilesUrl.value })
   )
 })
@@ -105,7 +123,7 @@ element('source-add').addEventListener('click', () => {
     // A named factory configuration, so its PID stays the same across restarts
     await configuration
       .getFactoryConfiguration(TILE_SOURCE_FACTORY_PID, name)
-      .update({ name, url: sourceUrl.value })
+      .update({ name, url: sourceUrl.value, kind: 'raster' })
     sourceName.value = ''
     sourceUrl.value = ''
   })

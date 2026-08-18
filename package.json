@@ -40,6 +40,7 @@
     "test:run": "vitest run",
     "lint": "eslint src examples/config examples/graph examples/whiteboard examples/workbench",
     "typecheck:examples": "tsc --noEmit -p tsconfig.examples.json",
+    "typecheck:types": "vitest --run --typecheck.only",
     "prepare": "husky"
   },
   "keywords": [
