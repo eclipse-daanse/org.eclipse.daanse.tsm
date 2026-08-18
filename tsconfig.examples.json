@@ -13,6 +13,7 @@
     }
   },
   "include": [
+    "examples/config/**/*.ts",
     "examples/graph/**/*.ts",
     "examples/whiteboard/**/*.ts",
     "examples/workbench/**/*.ts",

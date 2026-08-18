@@ -19,8 +19,25 @@ export {
   transient,
   component,
   activate,
-  deactivate
+  deactivate,
+  modified
 } from './decorators.js'
+
+// Configuration Admin
+export {
+  ConfigurationAdmin,
+  MemoryConfigurationStore,
+  LocalStorageConfigurationStore,
+  CONFIGURATION_ADMIN_SERVICE_ID,
+  FACTORY_PID_SEPARATOR,
+  SERVICE_PID,
+  SERVICE_FACTORY_PID,
+  type Configuration,
+  type ConfigurationRecord,
+  type ConfigurationStore,
+  type ConfigurationEvent,
+  type ConfigurationListener
+} from './ConfigurationAdmin.js'
 
 // Runtime (for host applications)
 export {
@@ -47,7 +64,11 @@ export type {
   ServiceDeclaration,
   ServiceRequirement,
   ComponentInfo,
+  ComponentConfigurationInfo,
   ComponentOptions,
+  ComponentContext,
+  ConfigurationPolicy,
+  ConfigurationProperties,
   ServiceCardinality,
   ServiceQuery,
   ServiceRegistration,

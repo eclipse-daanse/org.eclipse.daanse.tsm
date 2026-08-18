@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ModuleLoader } from '../ModuleLoader'
 import { installDevtools, collectingOutput, type CollectingOutput } from '../devtools'
 import { tsmRuntime } from '../TsmRuntime'
+import { ConfigurationAdmin } from '../ConfigurationAdmin'
+import { activate, component, modified } from '../decorators'
 import type { ModuleContext, ModuleManifest, ObservableServiceRegistry } from '../types'
 
 interface GlobalWithWindow { window?: Record<string, unknown> }
@@ -516,6 +518,144 @@ describe('installDevtools', () => {
       expect(out.text()).toContain('daanse.<command>()')
       expect(out.text()).toContain('unsatisfied()')
       expect(out.text()).toContain('providers(id, flt?)')
+    })
+  })
+})
+
+describe('installDevtools - components and configuration', () => {
+  let savedWindow: Record<string, unknown> | undefined
+  let out: CollectingOutput
+  let admin: ConfigurationAdmin
+
+  beforeEach(() => {
+    savedWindow = globalRef.window
+    globalRef.window = {}
+    out = collectingOutput()
+    admin = new ConfigurationAdmin()
+  })
+
+  afterEach(() => {
+    globalRef.window = savedWindow
+  })
+
+  function componentManifest(id: string): ModuleManifest {
+    return {
+      id,
+      name: id,
+      version: '1.0.0',
+      entry: `http://localhost/${id}/remoteEntry.js`,
+      exports: {}
+    }
+  }
+
+  async function withComponents(): Promise<{
+    loader: ModuleLoader
+    tsm: ReturnType<typeof installDevtools>
+  }> {
+    @component({ service: ['demo.tiles'], configurationPid: 'demo.tiles' })
+    class RasterTiles {
+      @activate() start(): void {}
+      @modified() update(): void {}
+    }
+
+    @component({ configurationPolicy: 'require' })
+    class TrafficWatcher {
+      @activate() start(): void {}
+    }
+
+    const loader = new ModuleLoader({ configurationAdmin: admin })
+    globalRef.window!.tiles = { RasterTiles, TrafficWatcher }
+    await loader.loadModule(componentManifest('tiles'))
+
+    return { loader, tsm: installDevtools({ loader, target: null, output: out }) }
+  }
+
+  describe('components', () => {
+    it('should list what each component declared and where it stands', async () => {
+      const { tsm } = await withComponents()
+
+      tsm.components()
+
+      const text = out.lines.join('\n')
+      expect(text).toContain('RasterTiles')
+      expect(text).toContain('immediate · demo.tiles')
+      expect(text).toContain('modified')
+      // The one requiring configuration says so, and says it is waiting
+      expect(text).toContain('config require')
+      expect(text).toContain('unsatisfied-configuration')
+    })
+
+    it('should return the declarations for further inspection', async () => {
+      const { tsm } = await withComponents()
+
+      expect(tsm.components('tiles').map(entry => entry.className))
+        .toEqual(['RasterTiles', 'TrafficWatcher'])
+    })
+
+    it('should say so when a module has none', async () => {
+      const { tsm } = await withComponents()
+
+      tsm.components('nothing-here')
+
+      expect(out.lines.join('\n')).toContain('No components in nothing-here')
+    })
+  })
+
+  describe('config', () => {
+    it('should list configurations with the components that read them', async () => {
+      const { tsm } = await withComponents()
+      await admin.getConfiguration('demo.tiles').update({ url: 'a' })
+
+      tsm.config()
+
+      expect(out.lines.join('\n')).toContain('demo.tiles')
+      expect(out.lines.join('\n')).toContain('tiles/RasterTiles')
+    })
+
+    it('should show the values of one PID', async () => {
+      const { tsm } = await withComponents()
+      await admin.getConfiguration('demo.tiles').update({ url: 'a' })
+
+      tsm.config('demo.tiles')
+
+      expect(out.inspected[0].value).toMatchObject({ url: 'a' })
+    })
+
+    it('should say when a PID has no configuration', async () => {
+      const { tsm } = await withComponents()
+
+      tsm.config('demo.unknown')
+
+      expect(out.lines.join('\n')).toContain('No configuration for demo.unknown')
+    })
+
+    it('should set values and wait for the components to react', async () => {
+      const { loader, tsm } = await withComponents()
+
+      await tsm.configure('TrafficWatcher', { interval: 5000 })
+
+      // configure() settles the queue, so the component has started by now
+      expect(loader.getComponents('tiles')[1].configurations[0].state).toBe('active')
+      expect(out.lines.join('\n')).toContain('Configured TrafficWatcher')
+    })
+
+    it('should delete a configuration and let the component stop', async () => {
+      const { loader, tsm } = await withComponents()
+      await tsm.configure('TrafficWatcher', { interval: 5000 })
+
+      await tsm.unconfigure('TrafficWatcher')
+
+      expect(loader.getComponents('tiles')[1].configurations[0].state)
+        .toBe('unsatisfied-configuration')
+    })
+
+    it('should explain itself when the loader has no Configuration Admin', async () => {
+      const loader = new ModuleLoader()
+      const tsm = installDevtools({ loader, target: null, output: out })
+
+      tsm.config()
+
+      expect(out.errors[0].message).toContain('configurationAdmin')
     })
   })
 })

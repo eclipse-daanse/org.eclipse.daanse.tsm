@@ -4,9 +4,14 @@
  */
 
 import type {
+  ComponentConfigurationInfo,
+  ComponentContext,
   ComponentInfo,
   ComponentOptions,
+  ConfigurationPolicy,
+  ConfigurationProperties,
   InjectableConstructor,
+  ServiceRegistration,
   ModuleManifest,
   ModuleState,
   ModuleLoaderOptions,
@@ -29,8 +34,14 @@ import { collectsMany } from './cardinality.js'
 import {
   getActivateMethod,
   getComponentMetadata,
-  getDeactivateMethod
+  getDeactivateMethod,
+  getModifiedMethod
 } from './decorators.js'
+import {
+  CONFIGURATION_ADMIN_SERVICE_ID,
+  type ConfigurationAdmin,
+  type ConfigurationEvent
+} from './ConfigurationAdmin.js'
 import { isTsmRuntimeAvailable, tsmRuntime } from './TsmRuntime.js'
 
 // Type for Module Federation containers
@@ -94,7 +105,8 @@ const DEFAULT_OPTIONS: Required<ModuleLoaderOptions> = {
   hotReload: false,
   serviceRegistry: undefined as unknown as ServiceRegistry,
   strictRequirements: false,
-  logger: undefined as unknown as ModuleLogger
+  logger: undefined as unknown as ModuleLogger,
+  configurationAdmin: undefined as unknown as ConfigurationAdmin
 }
 
 /**
@@ -120,6 +132,81 @@ class ConsoleLogger implements ModuleLogger {
 /**
  * Main module loader class
  */
+/**
+ * A component declaration together with its running instances.
+ *
+ * DS separates a component *description* — what the class declared — from its
+ * *configurations*, the concrete instances with their bindings and properties.
+ * The distinction only becomes visible once configuration is involved: without
+ * it there is exactly one instance per declaration, with a factory PID there is
+ * one per configuration, and with a missing required PID there is none.
+ */
+interface ComponentRuntime {
+  ctor: InjectableConstructor<unknown>
+  options: ComponentOptions
+  className: string
+  /** Effective configuration PIDs, defaulting to the class name */
+  pids: string[]
+  policy: ConfigurationPolicy
+  /** Keyed by {@link instanceKeyOf}: the PID for a factory instance, else one entry */
+  instances: Map<string, ComponentInstance>
+}
+
+interface ComponentInstance {
+  /** The configuration this instance runs with, if any */
+  pid?: string
+  /** The configuration values themselves, merged across the component's PIDs */
+  configuration: ConfigurationProperties
+  /** What the services registered for this instance publish */
+  properties: ServiceProperties
+  registration?: ServiceRegistration
+  instance?: Record<string | symbol, unknown>
+}
+
+/** What a component's configuration amounts to for one instance of it */
+interface WantedInstance {
+  pid?: string
+  /**
+   * Whether the PID identifies this instance.
+   *
+   * Only for a factory configuration, where each configuration *is* its own
+   * component configuration. For an ordinary PID there is one instance either
+   * way, and configuration appearing or disappearing changes its values rather
+   * than replacing it — DS draws the same line.
+   */
+  factory: boolean
+  values: ConfigurationProperties
+}
+
+/** Key for the one instance a component has when its PID is not a factory PID */
+const SINGLETON = '\u0000singleton'
+
+/**
+ * How an instance is identified among its component's instances: by its PID when
+ * a factory configuration created it, and as *the* instance otherwise.
+ */
+function instanceKeyOf(wanted: { pid?: string; factory: boolean }): string {
+  return wanted.factory && wanted.pid !== undefined ? wanted.pid : SINGLETON
+}
+
+/**
+ * Whether two property sets are the same, so an update that changes nothing
+ * costs nothing — a re-delivered configuration must not rebuild a component.
+ */
+function sameProperties(left: ServiceProperties, right: ServiceProperties): boolean {
+  const keys = Object.keys(left)
+  if (keys.length !== Object.keys(right).length) return false
+
+  return keys.every(key => {
+    const a = left[key]
+    const b = right[key]
+    if (Array.isArray(a) && Array.isArray(b)) {
+      return a.length === b.length && a.every((entry, index) => entry === b[index])
+    }
+    return a === b
+  })
+}
+
 export class ModuleLoader {
   private modules = new Map<string, LoadedModule>()
   private manifests = new Map<string, ModuleManifest>()
@@ -155,21 +242,19 @@ export class ModuleLoader {
    */
   private disabled = new Set<string>()
   /**
-   * Per module: the component instances the loader created, so their
-   * `@deactivate` methods can run when the module stops.
-   */
-  private componentInstances = new Map<string, Array<{
-    instance: Record<string | symbol, unknown>
-    method: string | symbol
-  }>>()
-  /**
-   * Per module: what its `@component()` classes declared.
+   * Per module: its `@component()` classes and what became of them.
    *
-   * `providedBy` on a service reference names the module, not the class inside
-   * it, so without this the components of a bundle are invisible from outside —
-   * which is what a listing like DS' `scr:list` shows.
+   * Two things at once, and deliberately so. A service reference names the
+   * module that registered it, never the class inside it, so without this the
+   * components of a bundle are invisible from outside — the view DS offers as
+   * `scr:list`. And a component's lifecycle is no longer its module's:
+   * configuration can hold one component back or instantiate it several times
+   * while the module around it just runs.
    */
-  private componentDeclarations = new Map<string, ComponentInfo[]>()
+  private componentRuntimes = new Map<string, ComponentRuntime[]>()
+  /** Where component configuration comes from, when the host supplied one */
+  private configurations?: ConfigurationAdmin
+  private configurationListener?: { onConfigurationEvent(event: ConfigurationEvent): void }
   /** Module-scoped registry facades, so a teardown can withdraw what a module registered */
   private scopes = new Map<string, ScopedServiceRegistry>()
   /** Serializes reactions to registry events; they are async, the events are not */
@@ -181,6 +266,28 @@ export class ModuleLoader {
     this.services = options.serviceRegistry ?? new DefaultServiceRegistry()
     this.logger = options.logger ?? new ConsoleLogger()
     this.observeServiceRegistry()
+    this.observeConfigurations(options.configurationAdmin)
+  }
+
+  /**
+   * Watch configuration, and publish the admin as a service.
+   *
+   * Config Admin is a service in OSGi too, and SCR is one of its clients rather
+   * than part of it: everything the loader does with configuration goes through
+   * PIDs and these events.
+   */
+  private observeConfigurations(admin?: ConfigurationAdmin): void {
+    if (!admin) return
+
+    this.configurations = admin
+    this.configurationListener = {
+      onConfigurationEvent: (event: ConfigurationEvent) => {
+        this.enqueue(() => this.applyConfiguration(event))
+      }
+    }
+    admin.addListener(this.configurationListener)
+
+    this.services.register(CONFIGURATION_ADMIN_SERVICE_ID, admin, { providedBy: 'tsm' })
   }
 
   /**
@@ -639,7 +746,13 @@ export class ModuleLoader {
     this.boundRegistrations.clear()
     this.declarationMismatches.clear()
     this.disabled.clear()
-    this.componentInstances.clear()
+    this.componentRuntimes.clear()
+
+    if (this.configurationListener) {
+      this.configurations?.removeListener(this.configurationListener)
+      this.configurationListener = undefined
+    }
+    this.configurations = undefined
   }
 
   /**
@@ -661,6 +774,10 @@ export class ModuleLoader {
    * Load all registered modules in dependency order
    */
   async loadAll(): Promise<void> {
+    // Configuration first: a component requiring a PID that is already in the
+    // store should start straight away rather than be parked and woken again
+    await this.configurations?.ready()
+
     const manifests = Array.from(this.manifests.values())
 
     // Resolve dependencies
@@ -716,19 +833,60 @@ export class ModuleLoader {
   }
 
   /**
-   * The `@component()` classes of the loaded modules, with what each declared.
+   * What the loaded modules declared as `@component()` classes, and what became
+   * of each declaration.
    *
-   * A service reference names the module that provided it, never the class, so
-   * this is the only way to see the components of a bundle from outside — the
-   * view DS offers as `scr:list`.
+   * The view a service reference cannot give: it names the module that registered
+   * a service, never the class inside it. DS offers the same listing as
+   * `scr:list`, including the distinction between a declaration and its
+   * configurations — a component may currently be running once, several times, or
+   * not at all.
    *
-   * @param moduleId Restrict to one module
+   * @param moduleId Restricts the listing to one module
    */
   getComponents(moduleId?: string): ComponentInfo[] {
-    if (moduleId !== undefined) {
-      return [...(this.componentDeclarations.get(moduleId) ?? [])]
+    const entries = moduleId !== undefined
+      ? [[moduleId, this.componentRuntimes.get(moduleId) ?? []] as const]
+      : [...this.componentRuntimes.entries()]
+
+    return entries.flatMap(([id, runtimes]) =>
+      runtimes.map(runtime => this.describeComponent(id, runtime))
+    )
+  }
+
+  private describeComponent(moduleId: string, runtime: ComponentRuntime): ComponentInfo {
+    const activateMethod = getActivateMethod(runtime.ctor)
+
+    const configurations: ComponentConfigurationInfo[] = [...runtime.instances.values()]
+      .map(instance => ({
+        pid: instance.pid,
+        state: instance.instance !== undefined || this.isInstantiated(instance)
+          ? 'active' as const
+          : 'satisfied' as const,
+        properties: instance.properties
+      }))
+
+    // No instance at all means the configuration it requires is missing: every
+    // other reason to hold a component back parks its whole module
+    if (configurations.length === 0) {
+      configurations.push({
+        state: 'unsatisfied-configuration',
+        properties: {}
+      })
     }
-    return [...this.componentDeclarations.values()].flat()
+
+    return {
+      moduleId,
+      className: runtime.className,
+      services: runtime.options.service ?? [],
+      immediate: runtime.options.immediate ?? activateMethod !== undefined,
+      hasActivate: activateMethod !== undefined,
+      hasDeactivate: getDeactivateMethod(runtime.ctor) !== undefined,
+      hasModified: getModifiedMethod(runtime.ctor) !== undefined,
+      configurationPid: runtime.pids,
+      configurationPolicy: runtime.policy,
+      configurations
+    }
   }
 
   /**
@@ -1101,9 +1259,18 @@ export class ModuleLoader {
     // Compare what the manifest promised against what was actually registered
     if (manifest.provides && manifest.provides.length > 0) {
       const undelivered: string[] = []
+      const awaitingConfiguration = this.servicesAwaitingConfiguration(manifest.id)
 
       for (const service of manifest.provides) {
-        if (this.services.has(service.id)) {
+        // A component that requires configuration it does not have registers
+        // nothing, and that is a waiting state rather than drift between
+        // manifest and code
+        if (awaitingConfiguration.has(service.id)) {
+          this.logger.info(
+            `Module ${manifest.id} does not provide ${service.id} yet: ` +
+            `its component waits for configuration`
+          )
+        } else if (this.services.has(service.id)) {
           this.logger.info(`Module ${manifest.id} provides service: ${service.id} (${service.scope ?? 'singleton'})`)
         } else {
           undelivered.push(service.id)
@@ -1146,80 +1313,398 @@ export class ModuleLoader {
     const components = this.findComponents(loadedModule)
     if (components.length === 0) return
 
-    const scope = this.scopeFor(loadedModule.manifest.id)
-    const started: Array<{
-      instance: Record<string | symbol, unknown>
-      method: string | symbol
-    }> = []
+    const runtimes: ComponentRuntime[] = components.map(({ ctor, options }) => ({
+      ctor,
+      options,
+      className: ctor.name,
+      pids: this.pidsOf(ctor, options),
+      policy: options.configurationPolicy ?? 'optional',
+      instances: new Map()
+    }))
+    this.componentRuntimes.set(loadedModule.manifest.id, runtimes)
 
     // Registration first, for every component, and only then activation: a
     // component may inject a service another component of the same module
     // offers, and constructing it earlier would find nothing. DS separates the
     // two phases for the same reason.
-    const declarations: ComponentInfo[] = []
-    const registered = components.map(({ ctor, options }) => {
-      const [primary, ...aliases] = options.service ?? []
+    for (const runtime of runtimes) {
+      for (const wanted of this.configurationsFor(runtime)) {
+        this.registerInstance(loadedModule, runtime, wanted)
+      }
+      if (runtime.instances.size === 0) {
+        this.logger.info(
+          `Component ${runtime.className} of ${loadedModule.manifest.id} waits for ` +
+          `configuration: ${runtime.pids.join(', ')}`
+        )
+      }
+    }
 
-      const registration = primary === undefined
-        ? undefined
-        : scope.bindClass(primary, ctor as InjectableConstructor<unknown>, {
-            implements: aliases,
-            properties: options.properties,
-            propertiesById: options.propertiesById,
-            ranking: options.ranking,
-            scope: options.scope
-          })
+    for (const runtime of runtimes) {
+      for (const instance of [...runtime.instances.values()]) {
+        await this.activateInstance(loadedModule, runtime, instance)
+      }
+    }
+  }
 
-      const activateMethod = getActivateMethod(ctor)
-      declarations.push({
-        moduleId: loadedModule.manifest.id,
-        className: ctor.name,
-        services: options.service ?? [],
-        immediate: options.immediate ?? activateMethod !== undefined,
-        hasActivate: activateMethod !== undefined,
-        hasDeactivate: getDeactivateMethod(ctor) !== undefined
-      })
+  /**
+   * The configuration PIDs a component reads.
+   *
+   * Defaults to the class name, as DS defaults to the component name — so a
+   * component is configurable without declaring anything, and the PID is
+   * something a person can guess.
+   */
+  private pidsOf(ctor: InjectableConstructor<unknown>, options: ComponentOptions): string[] {
+    const declared = options.configurationPid
+    if (declared === undefined) return [ctor.name]
+    return Array.isArray(declared) ? declared : [declared]
+  }
 
-      return { ctor, options, registration }
+  /**
+   * Which instances of a component its configuration calls for.
+   *
+   * Three outcomes, and they are what `configurationPolicy` means:
+   * none when required configuration is missing, one for the ordinary case, and
+   * one per configuration when a PID turns out to be a factory PID. In DS the
+   * last one is not a separate feature either — it follows from the PID.
+   */
+  private configurationsFor(runtime: ComponentRuntime): WantedInstance[] {
+    const unconfigured = (): WantedInstance[] =>
+      runtime.policy === 'require' ? [] : [{ factory: false, values: {} }]
+
+    if (runtime.policy === 'ignore' || !this.configurations) {
+      return unconfigured()
+    }
+
+    // Several PIDs merge left to right, so a shared PID can carry the common
+    // values and a specific one override them
+    let values: ConfigurationProperties = {}
+    let pid: string | undefined
+    for (const candidate of runtime.pids) {
+      const properties = this.configurations.findConfiguration(candidate)?.getProperties()
+      if (!properties) continue
+      values = { ...values, ...properties }
+      pid ??= candidate
+    }
+
+    for (const candidate of runtime.pids) {
+      const factoryConfigurations = this.configurations.listFactoryConfigurations(candidate)
+      if (factoryConfigurations.length === 0) continue
+
+      // One instance per configuration of the factory, the singleton values
+      // underneath. Only the first factory PID counts: DS allows one as well.
+      return factoryConfigurations.map(configuration => ({
+        pid: configuration.pid,
+        factory: true,
+        values: { ...values, ...configuration.getProperties() }
+      }))
+    }
+
+    return pid === undefined ? unconfigured() : [{ pid, factory: false, values }]
+  }
+
+  /**
+   * What the services of one instance publish: what the component declared, with
+   * its configuration merged over it.
+   *
+   * Configuration wins, as in DS — it is the later, deployment-time word on the
+   * same question. Keys starting with a dot stay private to the component and
+   * out of the service properties, also as in DS.
+   */
+  private propertiesFor(
+    declared: ServiceProperties | undefined,
+    configuration: ConfigurationProperties
+  ): ServiceProperties {
+    const properties: ServiceProperties = { ...declared }
+
+    for (const [key, value] of Object.entries(configuration)) {
+      if (key.startsWith('.')) continue
+      properties[key] = value
+    }
+
+    return properties
+  }
+
+  /**
+   * The ranking one instance registers with.
+   *
+   * `service.ranking` from configuration overrides what the class declared,
+   * which is how DS lets deployment re-order providers without touching code.
+   */
+  private rankingFor(
+    options: ComponentOptions,
+    configuration: ConfigurationProperties
+  ): number | undefined {
+    const configured = configuration['service.ranking']
+    return typeof configured === 'number' ? configured : options.ranking
+  }
+
+  /** Register the services of one component instance, without creating it yet */
+  private registerInstance(
+    loadedModule: LoadedModule,
+    runtime: ComponentRuntime,
+    wanted: WantedInstance
+  ): ComponentInstance {
+    const scope = this.scopeFor(loadedModule.manifest.id)
+    const { options } = runtime
+    const [primary, ...aliases] = options.service ?? []
+    const properties = this.propertiesFor(options.properties, wanted.values)
+
+    // Every ID this instance answers to carries the configuration too, so a
+    // consumer filtering on the interface selects the same instance
+    const propertiesById: Record<string, ServiceProperties> = {}
+    for (const serviceId of options.service ?? []) {
+      propertiesById[serviceId] = this.propertiesFor(
+        options.propertiesById?.[serviceId] ?? options.properties,
+        wanted.values
+      )
+    }
+
+    const registration = primary === undefined
+      ? undefined
+      : scope.bindClass(primary, runtime.ctor, {
+          implements: aliases,
+          properties,
+          propertiesById,
+          ranking: this.rankingFor(options, wanted.values),
+          scope: options.scope,
+          // Only a factory configuration makes this one of several registrations
+          // of the class; for an ordinary PID it is the class's one registration,
+          // and a repeated one should replace it
+          instanceKey: wanted.factory ? wanted.pid : undefined
+        })
+
+    const instance: ComponentInstance = {
+      pid: wanted.pid,
+      configuration: wanted.values,
+      properties,
+      registration
+    }
+    runtime.instances.set(instanceKeyOf(wanted), instance)
+    return instance
+  }
+
+  /**
+   * Create a component instance and run its `@activate` method.
+   *
+   * Only for immediate components: one that merely offers a service waits until
+   * somebody resolves it, and then the registry creates it.
+   */
+  private async activateInstance(
+    loadedModule: LoadedModule,
+    runtime: ComponentRuntime,
+    instance: ComponentInstance
+  ): Promise<void> {
+    if (instance.instance !== undefined) return
+
+    const activateMethod = getActivateMethod(runtime.ctor)
+    if (!(runtime.options.immediate ?? activateMethod !== undefined)) return
+
+    // Resolve this registration rather than the ID: with several providers under
+    // one service ID, get() would hand back somebody else's component
+    const object = instance.registration
+      ? instance.registration.resolve<Record<string | symbol, unknown>>()
+      : this.scopeFor(loadedModule.manifest.id).construct<Record<string | symbol, unknown>>(
+          runtime.ctor as InjectableConstructor<Record<string | symbol, unknown>>
+        )
+    if (!object) return
+
+    instance.instance = object
+    if (activateMethod !== undefined) {
+      await this.callComponentMethod(loadedModule, instance, activateMethod)
+    }
+  }
+
+  /** Run one of a component's lifecycle methods with its context */
+  private async callComponentMethod(
+    loadedModule: LoadedModule,
+    instance: ComponentInstance,
+    methodName: string | symbol
+  ): Promise<void> {
+    const object = instance.instance
+    if (!object) return
+
+    const method = object[methodName]
+    if (typeof method !== 'function') return
+
+    await (method as (context: ComponentContext) => unknown).call(
+      object,
+      this.componentContext(loadedModule, instance)
+    )
+  }
+
+  private componentContext(
+    loadedModule: LoadedModule,
+    instance: ComponentInstance
+  ): ComponentContext {
+    return {
+      ...this.createContext(loadedModule),
+      configuration: instance.configuration,
+      properties: instance.properties,
+      configurationPid: instance.pid
+    }
+  }
+
+  /**
+   * Bring a component's instances in line with its configuration.
+   *
+   * The component lifecycle runs on its own here, which is the whole point: the
+   * module around it stays active while one of its components waits for a PID,
+   * is rebuilt, or gains a second instance. In OSGi that separation is the line
+   * between the framework and SCR.
+   */
+  private async applyConfiguration(event: ConfigurationEvent): Promise<void> {
+    if (this.disposed || !this.configurations) return
+
+    for (const [moduleId, runtimes] of [...this.componentRuntimes]) {
+      const loadedModule = this.modules.get(moduleId)
+      if (!loadedModule || loadedModule.state !== 'active') continue
+
+      for (const runtime of runtimes) {
+        if (!this.affects(runtime, event)) continue
+        await this.reconcileComponent(loadedModule, runtime)
+      }
+    }
+  }
+
+  /** Whether an event concerns a component: its own PID, or its factory PID */
+  private affects(runtime: ComponentRuntime, event: ConfigurationEvent): boolean {
+    if (runtime.policy === 'ignore') return false
+
+    return runtime.pids.includes(event.pid) ||
+      (event.factoryPid !== undefined && runtime.pids.includes(event.factoryPid))
+  }
+
+  private async reconcileComponent(
+    loadedModule: LoadedModule,
+    runtime: ComponentRuntime
+  ): Promise<void> {
+    const wanted = new Map(
+      this.configurationsFor(runtime).map(entry => [instanceKeyOf(entry), entry])
+    )
+
+    for (const [key, instance] of [...runtime.instances]) {
+      if (!wanted.has(key)) {
+        await this.stopInstance(loadedModule, runtime, key, instance)
+      }
+    }
+
+    for (const [key, entry] of wanted) {
+      const existing = runtime.instances.get(key)
+
+      if (!existing) {
+        const created = this.registerInstance(loadedModule, runtime, entry)
+        await this.activateInstance(loadedModule, runtime, created)
+        continue
+      }
+
+      await this.updateInstance(loadedModule, runtime, existing, entry)
+    }
+  }
+
+  /**
+   * Apply changed configuration to an instance that already exists.
+   *
+   * Three ways, in DS' order of preference: an instance that was never created
+   * only needs its properties updated, one with a `@modified()` method is handed
+   * the new values, and one without is torn down and built again.
+   */
+  private async updateInstance(
+    loadedModule: LoadedModule,
+    runtime: ComponentRuntime,
+    instance: ComponentInstance,
+    wanted: WantedInstance
+  ): Promise<void> {
+    const properties = this.propertiesFor(runtime.options.properties, wanted.values)
+    if (sameProperties(instance.properties, properties)) return
+
+    const modifiedMethod = getModifiedMethod(runtime.ctor)
+    const created = instance.instance !== undefined || this.isInstantiated(instance)
+
+    if (created && modifiedMethod === undefined) {
+      await this.stopInstance(loadedModule, runtime, instanceKeyOf(wanted), instance)
+      const rebuilt = this.registerInstance(loadedModule, runtime, wanted)
+      await this.activateInstance(loadedModule, runtime, rebuilt)
+      return
+    }
+
+    // The PID can appear or disappear underneath the same instance: configuration
+    // for an ordinary PID was created or deleted
+    instance.pid = wanted.pid
+    instance.configuration = wanted.values
+    instance.properties = properties
+
+    const propertiesById: Record<string, ServiceProperties> = {}
+    for (const serviceId of runtime.options.service ?? []) {
+      propertiesById[serviceId] = this.propertiesFor(
+        runtime.options.propertiesById?.[serviceId] ?? runtime.options.properties,
+        wanted.values
+      )
+    }
+    instance.registration?.setProperties(properties, {
+      ranking: this.rankingFor(runtime.options, wanted.values),
+      propertiesById
     })
 
-    this.componentDeclarations.set(loadedModule.manifest.id, declarations)
+    if (created && modifiedMethod !== undefined) {
+      await this.callComponentMethod(loadedModule, instance, modifiedMethod)
+    }
+  }
 
-    for (const { ctor, options, registration } of registered) {
-      const activateMethod = getActivateMethod(ctor)
-      // A component with something to run is created now; one that only offers a
-      // service waits until somebody resolves it
-      const immediate = options.immediate ?? activateMethod !== undefined
-      if (!immediate) continue
+  /**
+   * Whether the registry has built this instance, which it does for a delayed
+   * component the moment a consumer resolves it — without telling the loader.
+   */
+  private isInstantiated(instance: ComponentInstance): boolean {
+    const registration = instance.registration
+    if (!registration) return false
 
-      // Resolve this registration rather than the ID: with several providers under
-      // one service ID, get() would hand back somebody else's component
-      const instance = registration
-        ? registration.resolve<Record<string | symbol, unknown>>()
-        : scope.construct<Record<string | symbol, unknown>>(
-            ctor as InjectableConstructor<Record<string | symbol, unknown>>
-          )
-      if (!instance) continue
+    const registry = this.services as Partial<ServiceRegistry>
+    if (typeof registry.getServiceReferences !== 'function') return false
 
-      if (activateMethod !== undefined) {
-        const method = instance[activateMethod]
-        if (typeof method === 'function') {
-          await (method as (context: ModuleContext) => unknown).call(
-            instance,
-            this.createContext(loadedModule)
-          )
-        }
-      }
+    return registry.getServiceReferences(registration.serviceId)
+      .some(reference => reference.key === registration.key && reference.instantiated)
+  }
 
-      const deactivateMethod = getDeactivateMethod(ctor)
-      if (deactivateMethod !== undefined) {
-        started.push({ instance, method: deactivateMethod })
+  /** Run one instance's `@deactivate` method and withdraw its services */
+  private async stopInstance(
+    loadedModule: LoadedModule,
+    runtime: ComponentRuntime,
+    key: string,
+    instance: ComponentInstance
+  ): Promise<void> {
+    runtime.instances.delete(key)
+
+    const deactivateMethod = getDeactivateMethod(runtime.ctor)
+    if (deactivateMethod !== undefined && instance.instance) {
+      try {
+        await this.callComponentMethod(loadedModule, instance, deactivateMethod)
+      } catch (error) {
+        // A failing teardown must not keep the registration alive
+        this.logger.error(
+          `@deactivate of ${runtime.className} in ${loadedModule.manifest.id} failed:`,
+          error
+        )
       }
     }
 
-    if (started.length > 0) {
-      this.componentInstances.set(loadedModule.manifest.id, started)
+    instance.registration?.unregister()
+  }
+
+  /**
+   * Services a module declares but cannot register yet, because the components
+   * offering them require configuration that does not exist.
+   */
+  private servicesAwaitingConfiguration(moduleId: string): Set<string> {
+    const pending = new Set<string>()
+
+    for (const runtime of this.componentRuntimes.get(moduleId) ?? []) {
+      if (runtime.instances.size > 0) continue
+      for (const serviceId of runtime.options.service ?? []) {
+        pending.add(serviceId)
+      }
     }
+
+    return pending
   }
 
   /** The exported classes of a module that declare `@component()` */
@@ -1245,22 +1730,15 @@ export class ModuleLoader {
   }
 
   /** Run the `@deactivate` methods of a module's components, newest first */
-  private async stopComponents(moduleId: string): Promise<void> {
-    this.componentDeclarations.delete(moduleId)
+  private async stopComponents(loadedModule: LoadedModule): Promise<void> {
+    const moduleId = loadedModule.manifest.id
+    const runtimes = this.componentRuntimes.get(moduleId)
+    if (!runtimes) return
+    this.componentRuntimes.delete(moduleId)
 
-    const started = this.componentInstances.get(moduleId)
-    if (!started) return
-    this.componentInstances.delete(moduleId)
-
-    for (const { instance, method } of [...started].reverse()) {
-      const handler = instance[method]
-      if (typeof handler !== 'function') continue
-
-      try {
-        await (handler as () => unknown).call(instance)
-      } catch (error) {
-        // A failing teardown must not stop the rest from being torn down
-        this.logger.error(`@deactivate of a component in ${moduleId} failed:`, error)
+    for (const runtime of [...runtimes].reverse()) {
+      for (const [key, instance] of [...runtime.instances].reverse()) {
+        await this.stopInstance(loadedModule, runtime, key, instance)
       }
     }
   }
@@ -1283,7 +1761,7 @@ export class ModuleLoader {
       await loadedModule.lifecycle.deactivate(context)
     }
 
-    await this.stopComponents(loadedModule.manifest.id)
+    await this.stopComponents(loadedModule)
 
     // Withdraw the module's remaining services. A module that unregisters in
     // its own hook is unaffected; one that does not no longer leaves services

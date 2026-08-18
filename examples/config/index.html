@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TSM: Configuration</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Configuration</h1>
+      <p>
+        Configuration belongs to the <strong>component</strong>, not to the bundle.
+        Set a value and watch what it decides: whether a component runs at all,
+        how many instances of it exist, and what its services publish. The bundles
+        stay active throughout.
+      </p>
+      <p class="hint">
+        Values are kept in <code>localStorage</code> — reload the page and they are
+        still here, which is the part of Configuration Admin the OSGi spec requires
+        and leaves the medium of to the implementation.
+      </p>
+    </header>
+
+    <main>
+      <section class="panel">
+        <h2>Configuration</h2>
+
+        <article class="card">
+          <h3>demo.tiles</h3>
+          <p class="meta"><code>RasterTiles</code> · policy <strong>require</strong></p>
+          <p class="explain">
+            Nothing is registered until this exists. Delete it and the map bundle
+            is parked, because its tile service loses its only provider.
+          </p>
+          <label>url <input id="tiles-url" type="text" placeholder="https://tiles/{z}/{x}/{y}" /></label>
+          <div class="row">
+            <button id="tiles-save">Save</button>
+            <button id="tiles-delete" class="secondary">Delete</button>
+          </div>
+        </article>
+
+        <article class="card">
+          <h3>demo.clock</h3>
+          <p class="meta"><code>SteadyClock</code> and <code>RestartingClock</code> · policy optional</p>
+          <p class="explain">
+            Two components on one PID. Only one has a <code>@modified()</code>
+            method — change the interval and compare their tick counts.
+          </p>
+          <label>interval (ms) <input id="clock-interval" type="number" min="100" step="100" /></label>
+          <div class="row">
+            <button id="clock-save">Save</button>
+            <button id="clock-delete" class="secondary">Delete</button>
+          </div>
+          <div id="clock-ticks" class="ticks"></div>
+        </article>
+
+        <article class="card">
+          <h3>demo.tile-source <span class="tag">factory</span></h3>
+          <p class="meta"><code>TileSource</code> · one instance per configuration</p>
+          <p class="explain">
+            A factory PID turns the class into a template. Each configuration
+            becomes its own instance with its own service registration.
+          </p>
+          <label>name <input id="source-name" type="text" placeholder="satellite" /></label>
+          <label>url <input id="source-url" type="text" placeholder="https://sat/{z}/{x}/{y}" /></label>
+          <div class="row">
+            <button id="source-add">Add source</button>
+          </div>
+          <ul id="source-list" class="instances"></ul>
+        </article>
+      </section>
+
+      <section class="panel">
+        <h2>Components</h2>
+        <div id="components"></div>
+
+        <h2>Providers of demo.tiles</h2>
+        <div id="providers"></div>
+
+        <h2>Bundles</h2>
+        <div id="bundles"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Lifecycle</h2>
+        <p class="explain">What the components reported, newest first.</p>
+        <ol id="log" class="log"></ol>
+      </section>
+    </main>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

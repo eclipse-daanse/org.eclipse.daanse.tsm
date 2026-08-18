@@ -21,6 +21,7 @@ const SCOPE_KEY = Symbol.for('tsm:scope')
 const COMPONENT_KEY = Symbol.for('tsm:component')
 const ACTIVATE_KEY = Symbol.for('tsm:component:activate')
 const DEACTIVATE_KEY = Symbol.for('tsm:component:deactivate')
+const MODIFIED_KEY = Symbol.for('tsm:component:modified')
 
 /**
  * Metadata for a single constructor parameter injection
@@ -170,6 +171,25 @@ export function deactivate(): MethodDecorator {
   }
 }
 
+/**
+ * Marks the method to call when the component's configuration changed.
+ *
+ * Its presence is what decides how a change is applied, exactly as in DS:
+ * without one the component is torn down and built again with the new values,
+ * with one it stays alive and is handed them. Choose it when rebuilding would
+ * cost something the component cannot cheaply recreate — an open connection, a
+ * mounted view, accumulated state.
+ *
+ * The properties of the services it registered are updated either way, so a
+ * consumer's target filter sees the new values without the registration being
+ * withdrawn.
+ */
+export function modified(): MethodDecorator {
+  return (target, propertyKey) => {
+    Reflect.defineMetadata(MODIFIED_KEY, propertyKey, target.constructor)
+  }
+}
+
 /** Reads the component declaration, or undefined for a plain class */
 export function getComponentMetadata(target: MetadataTarget): ComponentOptions | undefined {
   return Reflect.getOwnMetadata(COMPONENT_KEY, target)
@@ -188,6 +208,11 @@ export function getActivateMethod(target: MetadataTarget): string | symbol | und
 /** The method marked with @deactivate, if any */
 export function getDeactivateMethod(target: MetadataTarget): string | symbol | undefined {
   return Reflect.getOwnMetadata(DEACTIVATE_KEY, target)
+}
+
+/** The method marked with @modified, if any */
+export function getModifiedMethod(target: MetadataTarget): string | symbol | undefined {
+  return Reflect.getOwnMetadata(MODIFIED_KEY, target)
 }
 
 /**

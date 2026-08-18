@@ -30,6 +30,7 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "demo": "vite",
+    "example:config": "vite examples/config",
     "example:graph": "vite examples/graph",
     "example:whiteboard": "vite examples/whiteboard",
     "example:workbench": "vite examples/workbench",
@@ -37,7 +38,7 @@
     "demo:build": "vite build",
     "test": "vitest",
     "test:run": "vitest run",
-    "lint": "eslint src examples/graph examples/whiteboard examples/workbench",
+    "lint": "eslint src examples/config examples/graph examples/whiteboard examples/workbench",
     "typecheck:examples": "tsc --noEmit -p tsconfig.examples.json",
     "prepare": "husky"
   },

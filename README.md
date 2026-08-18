@@ -205,6 +205,7 @@ export function activate(context: ModuleContext) {
 | Path | Shows |
 |------|-------|
 | [`examples/whiteboard`](examples/whiteboard) | Satisfaction, `0..n` collection, ranking, dynamic requirements, devtools — no framework, no build step (`npm run example:whiteboard`) |
+| [`examples/config`](examples/config) | Configuration bound to components: a PID decides whether a component runs, how many instances exist, and what its services publish — with `@modified()` shown against a rebuild side by side (`npm run example:config`) |
 | [`examples/graph`](examples/graph) | The three layers drawn live from the loader: bundles, their components, the services between them, changing as bundles load and unload (`npm run example:graph`) |
 | [`examples/workbench`](examples/workbench) | Seven separately built bundles, discovered at runtime: `@component` declarations, a generated `provides`, regions that collect, slots that compete, views coming and going (`npm run example:workbench:build && npm run example:workbench`) |
 | [`examples/shared-libraries`](examples/shared-libraries) | Host-provided Vue and PrimeVue via `__tsm__`, with separate plugin builds |
