@@ -16,6 +16,7 @@
     "examples/config/**/*.ts",
     "examples/graph/**/*.ts",
     "examples/whiteboard/**/*.ts",
+    "examples/wiring/**/*.ts",
     "examples/workbench/**/*.ts",
     "src/**/*.ts"
   ],

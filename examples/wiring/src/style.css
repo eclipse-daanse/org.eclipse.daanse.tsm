@@ -1,0 +1,137 @@
+:root {
+  --background: #f7f8fa;
+  --surface: #ffffff;
+  --border: #d8dce4;
+  --text: #1c2430;
+  --muted: #5d6b7f;
+  --accent: #1f6feb;
+  --ok: #1a7f37;
+  --waiting: #bf8700;
+  --bad: #c0392b;
+  --derived: #6b7f9a;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #12161c;
+    --surface: #1a2029;
+    --border: #2c3542;
+    --text: #e6edf3;
+    --muted: #9aa7b8;
+    --accent: #58a6ff;
+    --ok: #3fb950;
+    --waiting: #d29922;
+    --bad: #f85149;
+    --derived: #8b9cb3;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 2rem;
+  background: var(--background);
+  color: var(--text);
+  font: 14px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+header { max-width: 62rem; margin-bottom: 1.5rem; }
+h1 { margin: 0 0 .5rem; font-size: 1.6rem; }
+header p { margin: 0 0 1rem; color: var(--muted); max-width: 52rem; }
+
+h2 {
+  margin: 0 0 .35rem;
+  font-size: .8rem;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--muted);
+}
+
+h2:not(:first-child) { margin-top: 1.75rem; }
+.hint { margin: 0 0 .75rem; font-size: .85rem; color: var(--muted); }
+
+code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: .9em;
+  background: var(--border);
+  padding: .1em .3em;
+  border-radius: 3px;
+}
+
+.controls { display: flex; flex-wrap: wrap; gap: .5rem; }
+
+button {
+  padding: .45rem .9rem;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font: inherit;
+  cursor: pointer;
+}
+
+button.primary { background: var(--accent); color: #fff; border-color: transparent; }
+button.secondary { color: var(--muted); }
+button:hover { filter: brightness(1.06); }
+
+main {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(21rem, 1fr));
+  gap: 1.5rem;
+  align-items: start;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: .7rem .85rem;
+  margin-bottom: .6rem;
+}
+
+.card-title { font-weight: 600; margin-bottom: .3rem; }
+
+.capability, .requirement, .wire, .verdict, .runtime-state, .muted {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: .78rem;
+  overflow-wrap: anywhere;
+}
+
+/* Derived capabilities are not written by hand — worth seeing at a glance */
+.capability.derived { color: var(--derived); }
+.capability.declared { color: var(--text); font-weight: 600; }
+
+.requirement { color: var(--accent); margin-top: .45rem; }
+.wire { color: var(--ok); padding-left: 1rem; }
+.wire.failed { color: var(--bad); }
+.wire.optional { color: var(--muted); }
+
+.verdict, .runtime-state, .muted {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: 5px;
+  padding: .4rem .6rem;
+  margin-bottom: .35rem;
+}
+
+.verdict.ok { border-left-color: var(--ok); }
+.verdict.never { border-left-color: var(--bad); color: var(--bad); }
+.runtime-state.active { border-left-color: var(--ok); }
+.runtime-state.unsatisfied { border-left-color: var(--waiting); color: var(--waiting); }
+.runtime-state.error { border-left-color: var(--bad); }
+.muted { color: var(--muted); border-left-color: var(--border); }
+
+.log { list-style: none; margin: .75rem 0 0; padding: 0; max-height: 18rem; overflow-y: auto; }
+
+.log li {
+  padding: .3rem .45rem;
+  border-bottom: 1px solid var(--border);
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: .76rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.log li:first-child { color: var(--text); }

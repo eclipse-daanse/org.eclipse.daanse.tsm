@@ -300,6 +300,69 @@ describe('resolveWiring', () => {
   })
 })
 
+describe('the requirement report', () => {
+  it('should pair every requirement with its wires', () => {
+    const resolution = resolveWiring([
+      bundle('tiles', { provides: [{ id: 'demo.tiles' }] }),
+      bundle('map', { requiresService: [{ id: 'demo.tiles' }] })
+    ])
+
+    const report = resolution.requirements.find(entry => entry.moduleId === 'map')!
+    expect(report.requirement.namespace).toBe(SERVICE_NAMESPACE)
+    expect(report.wires.map(wire => wire.provider)).toEqual(['tiles'])
+    expect(report.failure).toBeUndefined()
+  })
+
+  it('should carry the same objects the flat lists carry', () => {
+    // The reason this exists: derived requirements are fresh objects on every
+    // requirementsOf() call, so a consumer cannot match a Wire against one it
+    // fetched itself. Within one resolution the identity holds.
+    const resolution = resolveWiring([
+      bundle('tiles', { provides: [{ id: 'demo.tiles' }] }),
+      bundle('map', { requiresService: [{ id: 'demo.tiles' }] })
+    ])
+
+    const report = resolution.requirements.find(entry => entry.wires.length > 0)!
+    expect(resolution.wires).toContain(report.wires[0])
+    expect(report.wires[0].requirement).toBe(report.requirement)
+  })
+
+  it('should mark the failure on the requirement that caused it', () => {
+    const resolution = resolveWiring([bundle('map', { dependencies: ['tiles'] })])
+
+    const [report] = resolution.requirements
+    expect(report.failure).toBeDefined()
+    expect(resolution.unresolved).toContain(report.failure)
+  })
+
+  it('should report an unmet optional requirement without a failure', () => {
+    const resolution = resolveWiring([bundle('map', { optionalDependencies: ['traffic'] })])
+
+    const [report] = resolution.requirements
+    expect(report.wires).toEqual([])
+    expect(report.failure).toBeUndefined()
+  })
+
+  it('should list every wire of a multiple requirement', () => {
+    const resolution = resolveWiring([
+      bundle('a', { capabilities: [{ namespace: 'demo.widget' }] }),
+      bundle('b', { capabilities: [{ namespace: 'demo.widget' }] }),
+      bundle('many', { requirements: [{ namespace: 'demo.widget', cardinality: 'multiple' }] })
+    ])
+
+    const report = resolution.requirements.find(entry => entry.moduleId === 'many')!
+    expect(report.wires.map(wire => wire.provider).sort()).toEqual(['a', 'b'])
+  })
+
+  it('should leave out what the resolver does not consider', () => {
+    const resolution = resolveWiring([
+      bundle('app', { requirements: [{ namespace: 'demo.later', effective: 'active' }] })
+    ])
+
+    expect(resolution.requirements).toEqual([])
+  })
+})
+
 describe('wiringOf', () => {
   it('should show both directions for one module', () => {
     const resolution = resolveWiring([

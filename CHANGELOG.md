@@ -385,6 +385,15 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
   with a dot stay private, and `service.ranking` from configuration re-orders providers without touching code. A PID
   that names a *factory* PID instantiates the component once per configuration — not a separate feature, the same
   mechanism, exactly as it follows from the PID in DS.
+- **New example `examples/wiring`** (`npm run example:wiring`): the resolution computed from manifests alone, with
+  nothing loaded — a capability that is not a service (`demo.theme` with attributes), a requirement selecting on it by
+  filter and `versionRange`, `cardinality: 'multiple'` wiring to every match, and side by side the two cases only the
+  resolution can tell apart: a module waiting for a service somebody promises, and one waiting for a service nobody
+  does. Pressing *load* then fetches only what resolves.
+- **`WiringResolution.requirements`** pairs each requirement with its wires or its failure (`RequirementReport`).
+  Necessary because the requirements derived from `dependencies`, `requiresService` and `sharedDependencies` are fresh
+  objects on every `requirementsOf()` call — a consumer matching a `Wire` against one it fetched itself found nothing,
+  silently. Building the example is how that surfaced.
 - **Shared libraries now follow the manifest.** `createTsmExternals(manifest)` externalizes what
   `sharedDependencies` declares instead of deciding from lists kept in the build config, and
   `tsmPlugin({ manifest })` **fails the build** when a declared library's code is found in a chunk anyway. That was

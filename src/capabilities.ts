@@ -19,6 +19,7 @@ import type {
   Capability,
   ModuleManifest,
   Requirement,
+  RequirementReport,
   ServicePropertyValue,
   UnresolvedRequirement,
   Wire,
@@ -186,6 +187,7 @@ export function resolveWiring(manifests: ModuleManifest[]): WiringResolution {
 
   const wires: Wire[] = []
   const unresolved: UnresolvedRequirement[] = []
+  const requirements: RequirementReport[] = []
   const failed = new Set<string>()
 
   for (const manifest of manifests) {
@@ -193,6 +195,8 @@ export function resolveWiring(manifests: ModuleManifest[]): WiringResolution {
       if (!isEffectiveAtResolve(requirement.effective)) continue
 
       const matches = offered.filter(entry => satisfies(requirement, entry.capability))
+      const report: RequirementReport = { moduleId: manifest.id, requirement, wires: [] }
+      requirements.push(report)
 
       if (matches.length === 0) {
         if ((requirement.resolution ?? 'mandatory') === 'optional') continue
@@ -202,11 +206,13 @@ export function resolveWiring(manifests: ModuleManifest[]): WiringResolution {
         const anyInNamespace = offered.some(
           entry => entry.capability.namespace === requirement.namespace
         )
-        unresolved.push({
+        const failure: UnresolvedRequirement = {
           moduleId: manifest.id,
           requirement,
           reason: anyInNamespace ? 'no-match' : 'no-capability'
-        })
+        }
+        unresolved.push(failure)
+        report.failure = failure
         failed.add(manifest.id)
         continue
       }
@@ -216,12 +222,14 @@ export function resolveWiring(manifests: ModuleManifest[]): WiringResolution {
         : [best(matches)]
 
       for (const entry of chosen) {
-        wires.push({
+        const wire: Wire = {
           requirer: manifest.id,
           requirement,
           provider: entry.provider,
           capability: entry.capability
-        })
+        }
+        wires.push(wire)
+        report.wires.push(wire)
       }
     }
   }
@@ -229,6 +237,7 @@ export function resolveWiring(manifests: ModuleManifest[]): WiringResolution {
   return {
     wires,
     unresolved,
+    requirements,
     resolved: manifests.map(manifest => manifest.id).filter(id => !failed.has(id))
   }
 }
