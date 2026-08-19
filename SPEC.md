@@ -1206,6 +1206,18 @@ trägt.
 
 ---
 
+### 11.5 Die Spezifikationen zum Nachlesen
+
+Die Kapitel, auf die sich tsm bezieht, liegen unter
+[`docs/osgi/`](docs/osgi/) — OSGi Release 8, mit einer Zuordnung, welches Kapitel
+welchen Teil trägt: Core 5 (Service Layer), Core 3 (Filter-Syntax), Core 4
+(Lebenszyklus), Compendium 104 (Configuration Admin), 105 (Metatype), 112
+(Declarative Services) und 159 (Feature Service, noch ohne Gegenstück).
+
+Damit ist eine Frage nach dem gemeinten Verhalten nachlesbar statt zu raten.
+
+---
+
 ## 12. Versioning & Kompatibilität
 
 ### 12.1 TSM Versioning
