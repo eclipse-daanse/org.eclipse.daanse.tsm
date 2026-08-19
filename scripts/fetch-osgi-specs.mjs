@@ -1,67 +1,60 @@
 #!/usr/bin/env node
 /**
- * Fetch the OSGi specification chapters tsm is modelled on into docs/osgi/.
+ * Fetch the OSGi specifications tsm is modelled on into docs/osgi/.
  *
- * The documents are not kept in the repository: they are 6.5 MB of material
- * nobody here wrote, and their licence permits copying but not modification, so
- * there is nothing to maintain — only to download when someone wants to read it.
+ * The documents are not kept in the repository: 17 MB nobody here wrote, under a
+ * licence that permits copying but not modification, so there is nothing to
+ * maintain — only to download when someone wants to read it.
  *
  *   npm run docs:osgi              # skips what is already there
  *   npm run docs:osgi -- --force   # downloads again, e.g. after RELEASE changed
  */
 
-import { mkdir, writeFile, access } from 'node:fs/promises'
+import { mkdir, writeFile, access, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const RELEASE = '8.0.0'
-const BASE = 'https://docs.osgi.org/specification'
+const RELEASE = 'r8'
+const VERSION = '8.0.0'
+const BASE = `https://docs.osgi.org/download/${RELEASE}`
 
 /**
- * The chapters, and what each one carries. Keep this list in step with the table
- * in docs/osgi/README.md — it is the same information, once for a reader and once
- * for the downloader.
+ * The two specifications, whole rather than by chapter: a PDF reads through, and
+ * once the files stay out of the repository their size costs nothing but the
+ * download. Which chapter carries which part of tsm is in docs/osgi/README.md.
  */
-const CHAPTERS = [
-  ['osgi.core', 'framework.service', 'Core 5 — Service Layer'],
-  ['osgi.core', 'framework.module', 'Core 3 — Module Layer, incl. filter syntax'],
-  ['osgi.core', 'framework.lifecycle', 'Core 4 — Life Cycle Layer'],
-  ['osgi.core', 'framework.namespaces', 'Core 8 — Framework Namespaces'],
-  ['osgi.cmpn', 'service.cm', 'Compendium 104 — Configuration Admin'],
-  ['osgi.cmpn', 'service.metatype', 'Compendium 105 — Metatype'],
-  ['osgi.cmpn', 'service.component', 'Compendium 112 — Declarative Services'],
-  ['osgi.cmpn', 'service.feature', 'Compendium 159 — Feature Service']
+const DOCUMENTS = [
+  ['osgi.core', 'Core — module, life cycle and service layers, filter syntax'],
+  ['osgi.cmpn', 'Compendium — Configuration Admin 104, Metatype 105, Declarative Services 112, Feature Service 159']
 ]
-
-/** The licence text, which the licence itself requires to travel along */
-const LICENCE = ['osgi.cmpn', 'LICENSE', 'Eclipse Foundation Specification License v1.0']
 
 const force = process.argv.includes('--force')
 const target = join(dirname(fileURLToPath(import.meta.url)), '..', 'docs', 'osgi')
 
-/** `osgi.core` + `framework.service` becomes `core-framework.service.html` */
-function fileNameFor(specification, chapter) {
-  return `${specification.replace('osgi.', '')}-${chapter}.html`
-}
-
-async function exists(path) {
+async function sizeOf(path) {
   try {
     await access(path)
-    return true
+    return (await stat(path)).size
   } catch {
-    return false
+    return undefined
   }
 }
 
-async function download(specification, chapter, description, name) {
+function megabytes(bytes) {
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+async function download(specification, description) {
+  const name = `${specification}-${VERSION}.pdf`
   const path = join(target, name)
 
-  if (!force && await exists(path)) {
-    console.log(`  kept     ${name}  (${description})`)
+  const present = await sizeOf(path)
+  if (!force && present !== undefined) {
+    console.log(`  kept     ${name}  ${megabytes(present)}`)
     return 'kept'
   }
 
-  const url = `${BASE}/${specification}/${RELEASE}/${chapter}.html`
+  const url = `${BASE}/${name}`
   const response = await fetch(url)
   if (!response.ok) {
     throw new Error(`HTTP ${response.status} for ${url}`)
@@ -69,24 +62,18 @@ async function download(specification, chapter, description, name) {
 
   const body = Buffer.from(await response.arrayBuffer())
   await writeFile(path, body)
-  console.log(`  fetched  ${name}  ${(body.length / 1024).toFixed(0)} KiB  (${description})`)
+  console.log(`  fetched  ${name}  ${megabytes(body.length)}  — ${description}`)
   return 'fetched'
 }
 
 async function main() {
   await mkdir(target, { recursive: true })
-  console.log(`OSGi Release ${RELEASE} → docs/osgi/`)
-
-  const jobs = [
-    ...CHAPTERS.map(([specification, chapter, description]) =>
-      [specification, chapter, description, fileNameFor(specification, chapter)]),
-    [LICENCE[0], LICENCE[1], LICENCE[2], 'LICENSE.html']
-  ]
+  console.log(`OSGi Release ${VERSION} → docs/osgi/`)
 
   const results = []
-  for (const job of jobs) {
-    // One at a time: a readable log matters more here than a second saved
-    results.push(await download(...job))
+  for (const [specification, description] of DOCUMENTS) {
+    // One at a time: 17 MB with a readable log beats a second saved
+    results.push(await download(specification, description))
   }
 
   const fetched = results.filter(result => result === 'fetched').length

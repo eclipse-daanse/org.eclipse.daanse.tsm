@@ -1206,7 +1206,20 @@ trägt.
 
 ---
 
-### 11.5 Die Spezifikationen zum Nachlesen
+### 11.5 Konformität
+
+[`docs/CONFORMANCE.md`](docs/CONFORMANCE.md) stellt Abschnitt für Abschnitt
+gegenüber, was tsm von OSGi Release 8 umsetzt und wo es abweicht — mit der Art der
+Abweichung: **Sprache** (folgt aus TypeScript statt Java), **Plattform** (Browser
+statt JVM), **Laufzeit** (asynchrones Modul-Laden), **Modell** (Satisfaction pro
+Modul statt pro Component), **Absicht** oder **Lücke**.
+
+Von 108 verglichenen Punkten sind 44 konform, 40 anders und 24 nicht vorhanden.
+Von den 64 Abweichungen sind die meisten keine Wahl: 15 folgen aus der Sprache,
+12 aus der Plattform, 2 aus dem Laufzeitmodell, 9 aus dem Modulschnitt, 13 sind
+begründete Entscheidungen — und **7 sind echte Lücken**.
+
+### 11.6 Die Spezifikationen zum Nachlesen
 
 Die Kapitel, auf die sich tsm bezieht, liegen unter
 [`docs/osgi/`](docs/osgi/) — OSGi Release 8, mit einer Zuordnung, welches Kapitel
