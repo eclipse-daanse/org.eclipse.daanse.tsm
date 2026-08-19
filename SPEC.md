@@ -1191,6 +1191,19 @@ EPackage demoConfig (http://example.com/tsm/config)
 Der PID-Name überlebt als `x-tsm-object-class`, weil `demo.tile-source` kein
 Klassenname ist und zu `DemoTileSource` wird.
 
+**Der verlustfreie Weg** ist `@emfts/tsm-metatype`, das ein
+`ObjectClassDefinition` direkt in ein EPackage übersetzt und dabei nichts abgeben
+muss: Defaults landen in `defaultValueLiteral`, Wertgrenzen und Übersetzungen in
+EAnnotations, `validate()` als benannter Constraint dort, wo ein `EValidator` ihn
+sucht, und `password` als eigener `EDataType`. Das Paket liegt auf der
+EMFTs-Seite, wo `@emfts/core` schon zu Hause ist; von tsm importiert es nur
+Typen, sodass eine Formatänderung dort einen Typfehler auslöst statt ein
+Attribut stillschweigend zu verlieren. tsm bleibt damit frei von EMFTs.
+
+Beides hat seinen Platz: JSON Schema für Validatoren, JSON Forms und
+Dokumentation, der direkte Weg für ein Modell, das die Deklaration vollständig
+trägt.
+
 ---
 
 ## 12. Versioning & Kompatibilität
