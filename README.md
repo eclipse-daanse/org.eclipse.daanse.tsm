@@ -81,14 +81,17 @@ export function deactivate() {
 ```typescript
 // vite.config.ts
 import { tsmPlugin, createTsmExternals } from '@eclipse-daanse/tsm/vite'
+import manifest from './manifest.json'
 
 export default defineConfig({
   plugins: [
-    tsmPlugin({ sharedModules: ['vue', 'primevue'] })
+    // The manifest decides what is shared, and the build is failed if a shared
+    // package is bundled anyway — which would give the module its own copy
+    tsmPlugin({ manifest, sharedModules: ['vue', 'primevue'] })
   ],
   build: {
     rollupOptions: {
-      external: createTsmExternals(['vue', 'primevue'])
+      external: createTsmExternals(manifest)
     }
   }
 })

@@ -450,3 +450,109 @@ describe('tsmPlugin manifest validation', () => {
     expect(ctx.errors[0]).toContain('cannot read manifest')
   })
 })
+
+describe('tsmPlugin - shared libraries bundled by mistake', () => {
+  const manifest = {
+    id: 'ui',
+    sharedDependencies: [{ id: 'vue', versionRange: '^3.4.0' }, { id: '@scope/lib', versionRange: '^1.0.0' }]
+  }
+
+  interface Recorded { errors: string[]; warnings: string[] }
+
+  async function generate(
+    bundle: Record<string, unknown>,
+    options: { strict?: boolean } = {}
+  ): Promise<Recorded> {
+    const plugin = tsmPlugin({ manifest, strict: options.strict ?? true })
+    const recorded: Recorded = { errors: [], warnings: [] }
+    const ctx = {
+      error(message: string) { recorded.errors.push(message); throw new Error(message) },
+      warn(message: string) { recorded.warnings.push(message) },
+      emitFile() {}
+    }
+    type Hook = (this: typeof ctx, ...args: unknown[]) => unknown
+
+    await (plugin.buildStart as Hook).call(ctx)
+    try {
+      await (plugin.generateBundle as Hook).call(ctx, {}, bundle)
+    } catch {
+      // this.error() throws by contract; the message is recorded
+    }
+    return recorded
+  }
+
+  function chunk(modules: string[]): Record<string, unknown> {
+    return {
+      'ui.js': {
+        type: 'chunk',
+        modules: Object.fromEntries(modules.map(id => [id, {}]))
+      }
+    }
+  }
+
+  it('should fail when a declared library was bundled', async () => {
+    const recorded = await generate(chunk([
+      '/project/src/index.ts',
+      '/project/node_modules/vue/dist/vue.runtime.esm-bundler.js'
+    ]))
+
+    expect(recorded.errors).toHaveLength(1)
+    expect(recorded.errors[0]).toContain("'vue' is declared in sharedDependencies")
+    expect(recorded.errors[0]).toContain('createTsmExternals')
+    // The evidence, so the report can be acted on
+    expect(recorded.errors[0]).toContain('node_modules/vue/dist')
+  })
+
+  it('should pass when the library stayed external', async () => {
+    const recorded = await generate(chunk([
+      '/project/src/index.ts',
+      '/project/src/widget.vue'
+    ]))
+
+    expect(recorded.errors).toEqual([])
+    expect(recorded.warnings).toEqual([])
+  })
+
+  it('should recognise a scoped package', async () => {
+    const recorded = await generate(chunk([
+      '/project/node_modules/@scope/lib/index.js'
+    ]))
+
+    expect(recorded.errors[0]).toContain("'@scope/lib'")
+  })
+
+  it('should not mistake a package whose name merely starts the same', async () => {
+    const recorded = await generate(chunk([
+      // vue-router is its own package and is not declared as shared
+      '/project/node_modules/vue-router/dist/vue-router.mjs'
+    ]))
+
+    expect(recorded.errors).toEqual([])
+  })
+
+  it('should warn instead of failing when strict is off', async () => {
+    const recorded = await generate(
+      chunk(['/project/node_modules/vue/dist/vue.js']),
+      { strict: false }
+    )
+
+    expect(recorded.errors).toEqual([])
+    expect(recorded.warnings).toHaveLength(1)
+  })
+
+  it('should find it in a windows path too', async () => {
+    const recorded = await generate(chunk([
+      'C:\\project\\node_modules\\vue\\dist\\vue.js'
+    ]))
+
+    expect(recorded.errors).toHaveLength(1)
+  })
+
+  it('should ignore assets, which have no modules', async () => {
+    const recorded = await generate({
+      'style.css': { type: 'asset', source: '.a{}' }
+    })
+
+    expect(recorded.errors).toEqual([])
+  })
+})

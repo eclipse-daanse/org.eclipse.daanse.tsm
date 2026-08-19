@@ -23,6 +23,18 @@ export {
   modified
 } from './decorators.js'
 
+// Import maps for shared libraries
+export {
+  generateImportMap,
+  importMapScript,
+  installImportMap,
+  type ImportMap,
+  type ImportMapResult,
+  type OfferedLibrary,
+  type MissingLibrary,
+  type IncompatibleLibrary
+} from './importMap.js'
+
 // Requirements and capabilities (Core 3.3)
 export {
   capabilitiesOf,

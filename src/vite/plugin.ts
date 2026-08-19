@@ -377,7 +377,20 @@ export function tsmPlugin(options: TsmPluginOptions = {}): Plugin {
     },
 
     // The generated manifest belongs to the build output, like a descriptor
-    generateBundle() {
+    generateBundle(_outputOptions, bundle) {
+      // A package declared as shared but bundled anyway is a second instance of
+      // it, and nothing at runtime can tell: validateSharedDependencies only asks
+      // whether the *host* has the library, not whether the module uses it
+      for (const problem of bundledSharedLibraries(validatable, bundle)) {
+        const report = strict ? this.error.bind(this) : this.warn.bind(this)
+        report(
+          `tsm: '${problem.library}' is declared in sharedDependencies but its code ` +
+          `is bundled into ${problem.fileName} (${problem.evidence}). ` +
+          `That gives the module its own copy instead of the host's. ` +
+          `Pass the manifest to createTsmExternals() so the two agree.`
+        )
+      }
+
       if (components !== 'derive' || !validatable) return
 
       const provides = [...declaredServices.values()].map(service => ({
@@ -437,48 +450,125 @@ export function generateCssLoader(cssUrl: string): string {
 }
 
 export interface CreateExternalsOptions {
-  /** Modules that provide libraries (won't externalize their deps) */
+  /**
+   * Modules that provide libraries (won't externalize their deps).
+   *
+   * @deprecated Only consulted when a module id is passed instead of a manifest.
+   *   A manifest says it already: a provider does not list what it provides in
+   *   its own `sharedDependencies`, so it bundles it.
+   */
   libraryProviders?: string[]
-  /** Additional packages to always externalize */
+
+  /**
+   * Packages to externalize on top of the manifest's `sharedDependencies`.
+   *
+   * Defaults to the tsm package itself, which the host always supplies. Anything
+   * else belongs in the manifest, where the loader can see it too.
+   */
   alwaysExternal?: string[]
-  /** Packages to externalize for non-library-providers */
+
+  /**
+   * Packages to externalize for non-library-providers.
+   *
+   * @deprecated Only consulted when a module id is passed instead of a manifest.
+   */
   sharedPackages?: string[]
 }
 
 /**
- * Create external function for TSM module builds
+ * Shared libraries whose code ended up inside the bundle.
  *
- * Library providers bundle shared libraries (Vue, UI frameworks, etc.)
- * Other modules mark them as external and load from library providers at runtime.
- *
- * @param moduleId - The ID of the module being built
- * @param options - Configuration options
+ * The evidence is a module path under `node_modules/<library>/`: if the package
+ * had been external, no file of it would be in a chunk at all.
  */
-export function createTsmExternals(moduleId: string, options: CreateExternalsOptions = {}) {
+function bundledSharedLibraries(
+  manifest: ValidatableManifest | undefined,
+  bundle: Record<string, { type: string; modules?: Record<string, unknown> }>
+): Array<{ library: string; fileName: string; evidence: string }> {
+  const shared = (manifest?.sharedDependencies ?? []).map(dependency => dependency.id)
+  if (shared.length === 0) return []
+
+  const found: Array<{ library: string; fileName: string; evidence: string }> = []
+
+  for (const [fileName, chunk] of Object.entries(bundle)) {
+    if (chunk.type !== 'chunk' || !chunk.modules) continue
+
+    for (const library of shared) {
+      // Both separators, so a Windows build reports the same thing
+      const needles = [`node_modules/${library}/`, `node_modules\\${library}\\`]
+      const hit = Object.keys(chunk.modules).find(
+        moduleId => needles.some(needle => moduleId.includes(needle))
+      )
+      if (hit === undefined) continue
+
+      found.push({ library, fileName, evidence: shorten(hit) })
+    }
+  }
+
+  return found
+}
+
+/** Enough of a path to recognise, without the machine it was built on */
+function shorten(moduleId: string): string {
+  const index = moduleId.lastIndexOf('node_modules')
+  return index < 0 ? moduleId : moduleId.slice(index)
+}
+
+/** The packages a module never bundles: the host always supplies tsm itself */
+const ALWAYS_EXTERNAL = ['tsm', '@eclipse-daanse/tsm']
+
+/**
+ * Which packages a module build must not bundle.
+ *
+ * Pass the **manifest**: what it declares as `sharedDependencies` is external,
+ * everything else is bundled. That way the declaration the loader validates and
+ * the build that has to honour it are the same sentence — a package declared as
+ * shared but bundled anyway yields a second instance, and nothing at runtime can
+ * detect it. `tsmPlugin({ manifest })` fails the build over exactly that.
+ *
+ * ```ts
+ * import manifest from './manifest.json'
+ * export default defineConfig({
+ *   build: { rollupOptions: { external: createTsmExternals(manifest) } },
+ *   plugins: [tsmPlugin({ manifest })]
+ * })
+ * ```
+ *
+ * @param source The manifest, or — for the older arrangement — a module id, in
+ *   which case `libraryProviders` and `sharedPackages` decide as before.
+ */
+export function createTsmExternals(
+  source: string | ValidatableManifest,
+  options: CreateExternalsOptions = {}
+) {
+  /** `vue` also covers `vue/dist/…`, `@scope/pkg` also `@scope/pkg/sub` */
+  const covers = (packageName: string, id: string): boolean =>
+    id === packageName || id.startsWith(`${packageName}/`)
+
+  if (typeof source !== 'string') {
+    const external = [
+      ...(source.sharedDependencies ?? []).map(dependency => dependency.id),
+      ...(options.alwaysExternal ?? ALWAYS_EXTERNAL)
+    ]
+    return (id: string): boolean => external.some(packageName => covers(packageName, id))
+  }
+
+  // Older arrangement: the module id decides, from lists kept here
   const {
     libraryProviders = [],
     alwaysExternal = ['vue', 'vue-router', 'tsm'],
     sharedPackages = ['primevue', '@primevue', 'primeicons']
   } = options
-
-  const isLibraryProvider = libraryProviders.includes(moduleId)
+  const isLibraryProvider = libraryProviders.includes(source)
 
   return (id: string): boolean => {
-    // Always external packages
-    for (const pkg of alwaysExternal) {
-      if (id === pkg || id.startsWith(pkg + '/')) return true
-    }
+    if (alwaysExternal.some(packageName => covers(packageName, id))) return true
 
     // Library providers bundle everything else
-    if (isLibraryProvider) {
-      return false
-    }
+    if (isLibraryProvider) return false
 
-    // Other modules: shared packages are external
-    for (const pkg of sharedPackages) {
-      if (id === pkg || id.startsWith(pkg + '/') || id.startsWith(pkg)) return true
-    }
-
-    return false
+    return sharedPackages.some(
+      packageName => covers(packageName, id) || id.startsWith(packageName)
+    )
   }
 }
