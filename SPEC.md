@@ -534,27 +534,88 @@ const { ref, computed } = __tsm__.require('my-app', 'vue');
 const { Button } = __tsm__.require('ui-library');
 ```
 
-### 6.2 createTsmExternals
+### 6.2 Geteilte Bibliotheken
 
-Konfiguriert welche Packages gebündelt vs. externalisiert werden:
+Eine Bibliothek, die alle Module teilen sollen, muss **eine** Instanz sein. Zwei
+Kopien von Vue heißen zwei Reaktivitätssysteme: `provide`/`inject` trägt nicht über
+die Grenze, Komponenten aus dem einen lassen sich im anderen nicht rendern. Und
+anders als in Java gibt es keinen Verifier, der das meldet — es verhält sich
+still falsch.
+
+Deshalb entscheidet das **Manifest**, und der Build muss sich daran halten:
 
 ```typescript
 // vite.config.ts
-import { tsmPlugin, createTsmExternals } from 'tsm/vite'
+import { tsmPlugin, createTsmExternals } from '@eclipse-daanse/tsm/vite'
+import manifest from './manifest.json'
 
 export default defineConfig({
-  plugins: [tsmPlugin()],
+  plugins: [tsmPlugin({ manifest })],
   build: {
     rollupOptions: {
-      external: createTsmExternals('my-plugin', {
-        libraryProviders: ['core-library'],  // Diese bündeln shared libs
-        alwaysExternal: ['vue', 'vue-router', 'tsm'],
-        sharedPackages: ['primevue', '@primevue']
-      })
+      external: createTsmExternals(manifest)
     }
   }
 })
 ```
+
+`createTsmExternals(manifest)` externalisiert, was in `sharedDependencies` steht
+(samt Unterpfaden wie `vue/dist/…`) plus tsm selbst; alles andere wird gebündelt.
+Ein Modul, das eine Bibliothek *bereitstellt*, führt sie nicht in seinen eigenen
+`sharedDependencies` — und bündelt sie damit von selbst.
+
+**Der Build scheitert, wenn eine deklarierte Bibliothek doch im Bundle landet.**
+`tsmPlugin({ manifest })` sucht in den Chunks nach Modulpfaden unter
+`node_modules/<lib>/`; ein Treffer beweist, dass die Externalisierung nicht griff.
+Das ist der einzige Zeitpunkt, an dem dieser Fehler feststellbar ist — zur Laufzeit
+prüft `validateSharedDependencies` nur, ob der *Host* die Bibliothek hat, nicht ob
+das Modul sie benutzt.
+
+Die ältere Form `createTsmExternals('modul-id', { libraryProviders, sharedPackages })`
+gilt weiter, entscheidet aber aus Listen in der Build-Konfiguration statt aus dem
+Manifest.
+
+### 6.3 Import Maps statt `__tsm__.require()`
+
+`__tsm__.require()` ist ein Module-Federation-Erbe: der Vite-Plugin schreibt
+`import { ref } from 'vue'` in einen Zugriff auf eine globale Registry um. Der
+Standardweg dafür sind **Import Maps** — dann bleibt der Import ein Import, und der
+Host bestimmt nur die URL:
+
+```typescript
+import { generateImportMap, installImportMap } from '@eclipse-daanse/tsm'
+
+const { importMap, missing, incompatible } = generateImportMap(manifests, {
+  vue: { url: '/libs/vue.esm-browser.js', version: '3.5.13' },
+  d3: '/libs/d3.js'
+})
+
+if (missing.length > 0 || incompatible.length > 0) {
+  throw new Error('Die angebotenen Bibliotheken passen nicht zu den Modulen')
+}
+
+installImportMap(importMap)   // vor dem ersten Modul-Import
+const loader = new ModuleLoader({ sharedLibraries: 'import-map' })
+```
+
+Eine Import Map bildet Namen auf URLs ab und weiß nichts von `^3.4.0`. Die Prüfung
+muss also **vorher** passieren, und genau das tut `generateImportMap`: es liest die
+`sharedDependencies` aller Manifeste und meldet, was fehlt (`missing`) oder in einer
+unpassenden Version angeboten wird (`incompatible`). Mit
+`sharedLibraries: 'import-map'` prüft der Loader nichts mehr — es gibt zu diesem
+Zeitpunkt nichts, was er fragen könnte.
+
+**Zwei Grenzen, beide aus dem Browser:**
+
+- Eine Import Map wird **einmal** gelesen, bevor der erste Spezifikator aufgelöst
+  wird. `installImportMap` muss also laufen, bevor irgendein Modul importiert wird,
+  und weigert sich, eine zweite Map hinzuzufügen. Eine Bibliothek nachträglich
+  ergänzen geht nicht — die Map gehört an den Anfang der Seite oder ins HTML.
+- `scopes` werden **nicht** generiert. Sie könnten einem Modul eine andere Version
+  geben als einem anderen — das nächstverwandte zu OSGis Package Wiring —, aber
+  genau das will man bei geteilten Bibliotheken nicht: zwei Instanzen sind das
+  Problem, das das Teilen löst. Der Typ lässt sie zu, damit ein Host sie bewusst
+  setzen kann.
 
 ---
 

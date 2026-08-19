@@ -385,6 +385,20 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
   with a dot stay private, and `service.ranking` from configuration re-orders providers without touching code. A PID
   that names a *factory* PID instantiates the component once per configuration — not a separate feature, the same
   mechanism, exactly as it follows from the PID in DS.
+- **Shared libraries now follow the manifest.** `createTsmExternals(manifest)` externalizes what
+  `sharedDependencies` declares instead of deciding from lists kept in the build config, and
+  `tsmPlugin({ manifest })` **fails the build** when a declared library's code is found in a chunk anyway. That was
+  the one place the failure could be caught: a bundled copy means the module gets its own instance — two Vue
+  reactivity systems, `provide`/`inject` not crossing the boundary — and at runtime nothing notices, because
+  `validateSharedDependencies` only asks whether the *host* has the library, not whether the module uses it. The older
+  `createTsmExternals('module-id', …)` form still works.
+- **Import maps** (`generateImportMap`, `importMapScript`, `installImportMap`, `sharedLibraries: 'import-map'`) as the
+  standard alternative to `__tsm__.require()`: modules simply `import` their libraries and the host decides the URL. A
+  map knows names and URLs but nothing of `^3.4.0`, so `generateImportMap` does that check while it still can — it
+  reads every manifest's `sharedDependencies` and reports what is `missing` or `incompatible` before the map is
+  installed. `scopes` are deliberately not generated: they could hand two modules different versions, which is the
+  problem sharing exists to avoid.
+- Documentation fix: the README showed `createTsmExternals(['vue', 'primevue'])`, an array the signature never took.
 - **Requirements and capabilities** (OSGi Core 3.3): a module offers `capabilities` in a namespace and asserts
   `requirements` about them, with `filter`, `versionRange`, `resolution` and `cardinality`. What the manifest already
   said is derived into the same model rather than living beside it — every module has an `osgi.identity` capability,

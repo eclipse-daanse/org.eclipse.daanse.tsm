@@ -112,7 +112,8 @@ const DEFAULT_OPTIONS: Required<ModuleLoaderOptions> = {
   strictRequirements: false,
   logger: undefined as unknown as ModuleLogger,
   configurationAdmin: undefined as unknown as ConfigurationAdmin,
-  metatype: undefined as unknown as MetatypeRegistry
+  metatype: undefined as unknown as MetatypeRegistry,
+  sharedLibraries: 'runtime'
 }
 
 /**
@@ -1100,6 +1101,13 @@ export class ModuleLoader {
   private validateSharedDependencies(manifest: ModuleManifest): void {
     const sharedDeps = manifest.sharedDependencies
     if (!sharedDeps || sharedDeps.length === 0) {
+      return
+    }
+
+    // With an import map the browser resolves the specifier and there is nothing
+    // here to ask; `generateImportMap()` does the checking before the map is
+    // installed, which is the only moment it can be done
+    if (this.options.sharedLibraries === 'import-map') {
       return
     }
 

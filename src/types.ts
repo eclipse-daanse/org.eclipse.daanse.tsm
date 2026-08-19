@@ -937,6 +937,20 @@ export interface ModuleLoaderOptions {
   configurationAdmin?: ConfigurationAdmin
 
   /**
+   * Where a module's shared libraries come from.
+   *
+   * - `runtime` (default): the host registers them with `initTsmRuntime()` and
+   *   modules receive them through `__tsm__.require()`, which the Vite plugin's
+   *   transform arranges. The loader validates presence and version before a
+   *   module is activated.
+   * - `import-map`: the modules simply `import` them and the browser resolves the
+   *   specifier. The loader then validates nothing, because there is nothing it
+   *   could ask — check the map against the manifests with `generateImportMap()`
+   *   before installing it, which reports what is missing or incompatible.
+   */
+  sharedLibraries?: 'runtime' | 'import-map'
+
+  /**
    * Where component configuration schemas are collected.
    *
    * The loader registers what each `@component()` declared as
