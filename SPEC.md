@@ -1206,6 +1206,84 @@ trägt.
 
 ---
 
+### 11.4a Requirements und Capabilities
+
+Das allgemeine Abhängigkeitsmodell von OSGi Core 3.3: Ein Modul bietet
+**Capabilities** in einem Namespace, und **Requirements** behaupten, dass eine
+solche Capability existiert.
+
+```json
+{
+  "id": "app",
+  "capabilities": [
+    { "namespace": "demo.theme", "attributes": { "name": "dark", "version": "2.1.0" } }
+  ],
+  "requirements": [
+    { "namespace": "demo.engine", "filter": "(kind=vector)", "versionRange": "^2.0.0" }
+  ]
+}
+```
+
+#### Resolution ist statisch
+
+Der entscheidende Unterschied zu `requiresService`: Resolution liest **Manifeste**
+und beantwortet, ob ein Modul überhaupt laufen *könnte* — bevor irgendetwas geladen
+ist. Dass ein versprochener Service zur Laufzeit wirklich registriert wird, ist
+eine andere Frage. Die Spezifikation zieht dieselbe Linie: eine Capability im
+Namespace `osgi.service` ist zur Resolve-Zeit „a promise" (Compendium 135.4).
+
+Daraus folgt der praktische Gewinn — die Unterscheidung, die vorher fehlte:
+
+| | |
+| --- | --- |
+| `getUnsatisfiedModules()` | ein Modul **wartet** auf einen Service |
+| `getUnresolvedModules()` | ein Modul wartet **vergeblich**, weil kein Manifest das Verlangte überhaupt verspricht |
+
+#### Ein Mechanismus statt vier
+
+Was das Manifest bisher an drei Stellen sagte, wird abgeleitet statt danebengelegt:
+
+| Manifest | wird zu |
+| --- | --- |
+| jedes Modul | Capability `osgi.identity` mit `osgi.identity`, `type`, `version` |
+| `provides` | Capability `osgi.service` mit `objectClass` und den deklarierten Properties |
+| `dependencies` | Requirement `osgi.identity` mit Filter und `versionRange` |
+| `optionalDependencies` | dasselbe mit `resolution: 'optional'` |
+| `requiresService` | Requirement `osgi.service`; `optional` und Kardinalität `0..n` werden `optional`, weil das Modul dann auch ohne Provider läuft |
+| `sharedDependencies` | Requirement `tsm.library` |
+
+Beide Wege bleiben gültig; `capabilities`/`requirements` sind die allgemeine Form,
+kein Ersatz.
+
+#### Direktiven
+
+| | |
+| --- | --- |
+| `resolution` | `mandatory` (Default) oder `optional` |
+| `cardinality` | `single` (Default) oder `multiple` |
+| `filter` | LDAP über die Attribute **einer** Capability — `(&(a=1)(b=2))` muss von einer erfüllt werden, nicht von zwei, die je die Hälfte tragen |
+| `effective` | nur `resolve` (Default) wird vom Resolver betrachtet |
+
+Zwei Abweichungen, beide bewusst:
+
+- **Attributnamen im Filter sind case-sensitiv** — so verlangt es Core 3.3.6, im
+  Unterschied zu Service-Properties. `createServiceFilter(expr, { caseSensitive: true })`.
+- **`versionRange` statt Version im Filter.** OSGi drückt Versionen im Filter aus;
+  ein Filter vergleicht aber Text, und damit wäre `(version>=1.9.0)` für `1.10.0`
+  nur zufällig richtig. `versionRange` ist ein Semver-Range und wird gegen das
+  Attribut `version` geprüft — der Filter bleibt daneben gültig.
+
+#### Was fehlt, und warum
+
+Package-Wiring (`Import-Package`/`Export-Package`) hat kein Gegenstück: ES-Module
+lösen ihre Importe selbst auf. Damit entfallen auch `uses`-Constraints und
+Klassenraum-Konsistenz (Core 3.7), Fragmente und Refresh — sie setzen einen
+Klassenlader voraus. Die Provider-Auswahl (Core 3.7.10) ist auf „höchste Version
+gewinnt" reduziert; ein vollständiger Constraint-Solver löst Probleme, die ohne
+Package-Wiring nicht entstehen.
+
+In der Konsole: `tsm.capabilities(ns?)`, `tsm.wiring(id)`, `tsm.unresolved()`.
+
 ### 11.5 Konformität
 
 [`docs/CONFORMANCE.md`](docs/CONFORMANCE.md) stellt Abschnitt für Abschnitt
@@ -1214,9 +1292,9 @@ Abweichung: **Sprache** (folgt aus TypeScript statt Java), **Plattform** (Browse
 statt JVM), **Laufzeit** (asynchrones Modul-Laden), **Modell** (Satisfaction pro
 Modul statt pro Component), **Absicht** oder **Lücke**.
 
-Von 108 verglichenen Punkten sind 44 konform, 40 anders und 24 nicht vorhanden.
-Von den 64 Abweichungen sind die meisten keine Wahl: 15 folgen aus der Sprache,
-12 aus der Plattform, 2 aus dem Laufzeitmodell, 9 aus dem Modulschnitt, 13 sind
+Von 120 verglichenen Punkten sind 50 konform, 44 anders und 26 nicht vorhanden.
+Von den 70 Abweichungen sind die meisten keine Wahl: 17 folgen aus der Sprache,
+13 aus der Plattform, 2 aus dem Laufzeitmodell, 9 aus dem Modulschnitt, 16 sind
 begründete Entscheidungen — und **7 sind echte Lücken**.
 
 ### 11.6 Die Spezifikationen zum Nachlesen

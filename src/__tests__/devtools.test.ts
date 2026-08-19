@@ -659,3 +659,82 @@ describe('installDevtools - components and configuration', () => {
     })
   })
 })
+
+describe('installDevtools - capabilities and wiring', () => {
+  let savedWindow: Record<string, unknown> | undefined
+  let out: CollectingOutput
+
+  beforeEach(() => {
+    savedWindow = globalRef.window
+    globalRef.window = {}
+    out = collectingOutput()
+  })
+
+  afterEach(() => {
+    globalRef.window = savedWindow
+  })
+
+  function withWiring(): ReturnType<typeof installDevtools> {
+    const loader = new ModuleLoader()
+    loader.register([
+      {
+        id: 'tiles', name: 'tiles', version: '1.0.0', entry: '/tiles.js', exports: {},
+        provides: [{ id: 'demo.tiles' }],
+        capabilities: [{ namespace: 'demo.theme', attributes: { name: 'dark' } }]
+      },
+      {
+        id: 'map', name: 'map', version: '1.0.0', entry: '/map.js', exports: {},
+        dependencies: ['tiles'], requiresService: [{ id: 'demo.tiles' }]
+      },
+      {
+        id: 'lost', name: 'lost', version: '1.0.0', entry: '/lost.js', exports: {},
+        requirements: [{ namespace: 'demo.nothing' }]
+      }
+    ])
+    return installDevtools({ loader, target: null, output: out })
+  }
+
+  it('should list what each module offers', () => {
+    withWiring().capabilities()
+
+    const text = out.lines.join('\n')
+    expect(text).toContain('osgi.identity')
+    expect(text).toContain('objectClass=demo.tiles')
+    expect(text).toContain('demo.theme')
+  })
+
+  it('should narrow to one namespace', () => {
+    withWiring().capabilities('demo.theme')
+
+    const text = out.lines.join('\n')
+    expect(text).toContain('name=dark')
+    expect(text).not.toContain('objectClass')
+  })
+
+  it('should show a module wired in both directions', () => {
+    withWiring().wiring('tiles')
+
+    const text = out.lines.join('\n')
+    expect(text).toContain('provides')
+    expect(text).toContain('map')
+  })
+
+  it('should name what waits in vain, and why', () => {
+    withWiring().unresolved()
+
+    const text = out.lines.join('\n')
+    expect(text).toContain('lost')
+    expect(text).toContain('nothing in that namespace')
+  })
+
+  it('should say so when everything resolves', () => {
+    const loader = new ModuleLoader()
+    loader.register([{
+      id: 'alone', name: 'alone', version: '1.0.0', entry: '/a.js', exports: {}
+    }])
+
+    installDevtools({ loader, target: null, output: out }).unresolved()
+
+    expect(out.lines.join('\n')).toContain('Every module can resolve')
+  })
+})

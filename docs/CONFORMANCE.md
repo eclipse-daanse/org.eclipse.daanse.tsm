@@ -123,6 +123,23 @@ The **Art** column says what kind of difference it is:
 | — | Validation | `validate`, `coerce`; the admin refuses a bad `update()` | ◐ | Absicht — in OSGi neither CM nor Metatype validates; here it is opt-in and refuses at the source |
 | — | Localization | `%key` per locale, an untranslated key keeps its `%key` form | ✅ | mechanism as in the spec, table instead of properties files |
 
+## Core 3.3 — Requirements and Capabilities
+
+| § | Concept | tsm | | Art |
+|---|---|---|---|---|
+| 3.3 | The dependency model — namespace, capability, requirement | `Capability`, `Requirement`, `resolveWiring()` | ✅ | |
+| 3.3.3 | Bundle Capabilities | `capabilities` in the manifest, plus derived ones for identity and provided services | ✅ | |
+| 3.3.4 | Capability Attributes, typed | `string`, `number`, `boolean`, arrays; `version` compared as a version | ◐ | Sprache — OSGi types attributes in the header (`version:Version=…`); here the type follows from the value, and `versionRange` does the version comparison |
+| 3.3.6 | Bundle Requirements | `requirements`, with `filter`, `resolution`, `cardinality`, `effective` | ✅ | |
+| 3.3.6 | `filter` matched per capability | one capability must satisfy the whole filter | ✅ | |
+| 3.3.6 | Case sensitive attribute names | `createServiceFilter(expr, { caseSensitive: true })` | ✅ | the distinction from service properties is kept |
+| 3.3.6 | Version constraints in the filter | `versionRange`, a semver range beside the filter | ◐ | Absicht — a filter compares text, so `(version>=1.9.0)` would accept `1.10.0` only by accident |
+| 3.3.5 | System Bundle Capabilities | none | ✗ | Absicht — there is no system bundle |
+| 3.2.5/3.2.6 | Version, Version Ranges | semver instead of OSGi's four-part version | ◐ | Sprache — the ecosystem's convention, and `semver` is already a dependency |
+| 3.4 | Execution Environment (`osgi.ee`) | none | ✗ | Plattform — no JVM profile to assert |
+| 3.7.10 | Provider Selection | highest `version` attribute wins, declaration order breaks a tie | ◐ | Absicht — a full constraint solver addresses problems that only package wiring creates |
+| — | Resolution timing | static, over manifests, before loading; `getUnresolvedModules()` reports what waits *in vain* | ✅ | the line the specification draws at Compendium 135.4: a service capability is a promise |
+
 ## Compendium 112 — Declarative Services
 
 | § | Concept | tsm | | Art |
@@ -166,7 +183,7 @@ The **Art** column says what kind of difference it is:
 
 | Spec | | Why |
 |---|---|---|
-| **Core 3** — Module Layer | ✗ | Requirements and capabilities, wiring, package resolution. tsm has `dependencies` and `requiresService`, which express the two cases that matter without a wiring model. Modell |
+| **Core 3.5, 3.7, 3.9** — class loading, constraint solving, package wiring | ✗ | Plattform — ES modules resolve their own imports, so `Import-Package`, `uses` constraints, class space consistency, fragments and refresh have nothing to attach to |
 | **Core 3.6** — Multiple versions | ✗ | One version per module ID at runtime. Plattform — ES modules give no isolation to hang a second version on |
 | **Compendium 159** — Feature Service | ✗ | Nothing yet; this is the open question of what a feature would mean here |
 | **Compendium 701** — Log Service, Event Admin, Http Whiteboard, … | ✗ | Out of scope: tsm is the module and service layer, not a service catalogue |
@@ -175,15 +192,15 @@ The **Art** column says what kind of difference it is:
 
 ## What this adds up to
 
-Counted over the 108 rows above: **44 conform**, **40 present but different**,
-**24 absent**. Of the 64 departures, the large majority are **not choices**:
+Counted over the 120 rows above: **50 conform**, **44 present but different**,
+**26 absent**. Of the 70 departures, the large majority are **not choices**:
 
-- **Sprache** (15 rows) — Java's `Dictionary`, checked exceptions, class names as
+- **Sprache** (17 rows) — Java's `Dictionary`, checked exceptions, class names as
   service identity, overload resolution, reference counting, eight numeric types.
   Copying these would make tsm worse, not more conform. Two of them come out
   *better* in TypeScript: the schema that is also the type (105.9, 112.8.2), and
   decorator metadata that needs no descriptor generation (112.4).
-- **Plattform** (12 rows) — everything that rests on a class loader, a file system,
+- **Plattform** (13 rows) — everything that rests on a class loader, a file system,
   or a security boundary between bundles: lazy activation, persistent storage,
   permissions, location binding, targeted PIDs, multiple versions.
 - **Laufzeit** (2 rows) — `import()` is asynchronous, so reactions to events run in
@@ -192,7 +209,11 @@ Counted over the 108 rows above: **44 conform**, **40 present but different**,
 - **Modell** (9 rows) — tsm settles satisfaction per module where DS settles it
   per component, and the loader is framework and SCR in one. Configuration already
   works per component (112.7.1); services do not.
-- **Absicht** (13 rows) — named and argued in `SPEC.md`: no whiteboard for
+
+Core 3.3 — the generic requirement/capability model — is implemented as of the
+section above; what remains absent from Core 3 is everything resting on a class
+loader.
+- **Absicht** (16 rows) — named and argued in `SPEC.md`: no whiteboard for
   ManagedService or MetaTypeProvider, no XML, no ConfigurationPlugin, validation at
   the source instead of in the UI, `[]` instead of `null`.
 

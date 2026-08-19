@@ -4,6 +4,9 @@
  */
 
 import type {
+  UnresolvedRequirement,
+  Wire,
+  WiringResolution,
   ComponentConfigurationInfo,
   ComponentContext,
   ComponentInfo,
@@ -31,6 +34,7 @@ import { DependencyResolver } from './DependencyResolver.js'
 import { DefaultServiceRegistry } from './ServiceRegistry.js'
 import { ScopedServiceRegistry } from './ScopedServiceRegistry.js'
 import { collectsMany } from './cardinality.js'
+import { resolveWiring, wiringOf } from './capabilities.js'
 import {
   getActivateMethod,
   getComponentMetadata,
@@ -2153,6 +2157,35 @@ export class ModuleLoader {
    * `getLoadedModuleIds()` answers what is running; this answers what is known,
    * which is what a listing needs in order to show a module as not loaded.
    */
+  /**
+   * Wire the registered manifests against each other (Core 3.3).
+   *
+   * Static: it reads manifests, not the running system, and answers whether a
+   * module *could* run. A service capability is a promise at this point — that it
+   * is kept is what `requiresService` checks at runtime.
+   */
+  getWiring(): WiringResolution {
+    return resolveWiring(this.getManifests())
+  }
+
+  /**
+   * What a module is wired to, and what is wired to it — Gogo's `inspect`.
+   */
+  getModuleWiring(moduleId: string): { requires: Wire[]; provides: Wire[] } {
+    return wiringOf(this.getWiring(), moduleId)
+  }
+
+  /**
+   * Requirements that no registered manifest can ever satisfy.
+   *
+   * The difference to `getUnsatisfiedModules()` is the one that matters in
+   * practice: that reports a module *waiting*, this one reports a module waiting
+   * **in vain**, because nothing among the manifests even promises what it needs.
+   */
+  getUnresolvedModules(): UnresolvedRequirement[] {
+    return this.getWiring().unresolved
+  }
+
   getManifests(): ModuleManifest[] {
     return Array.from(this.manifests.values())
   }

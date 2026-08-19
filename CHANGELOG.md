@@ -385,6 +385,21 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
   with a dot stay private, and `service.ranking` from configuration re-orders providers without touching code. A PID
   that names a *factory* PID instantiates the component once per configuration — not a separate feature, the same
   mechanism, exactly as it follows from the PID in DS.
+- **Requirements and capabilities** (OSGi Core 3.3): a module offers `capabilities` in a namespace and asserts
+  `requirements` about them, with `filter`, `versionRange`, `resolution` and `cardinality`. What the manifest already
+  said is derived into the same model rather than living beside it — every module has an `osgi.identity` capability,
+  `provides` becomes `osgi.service`, `dependencies` and `requiresService` become requirements — so there is one
+  mechanism instead of four, and both ways stay valid.
+- Resolution is **static**, over manifests, before anything loads, which yields the distinction that was missing:
+  `getUnsatisfiedModules()` reports a module *waiting*, `getUnresolvedModules()` reports one waiting **in vain**
+  because no manifest even promises what it needs. The specification draws the same line — a capability in the
+  `osgi.service` namespace is "a promise" at resolve time (Compendium 135.4) — so `requiresService` remains the
+  runtime question. Also `getWiring()` and `getModuleWiring(id)`, plus `tsm.capabilities()`, `tsm.wiring(id)` and
+  `tsm.unresolved()` in the console, which is Gogo's `inspect`.
+- Two departures, both deliberate: a requirement's filter matches attribute names **case sensitively**, as Core 3.3.6
+  asks and unlike service properties (`createServiceFilter(expr, { caseSensitive: true })`); and versions are compared
+  with a semver `versionRange` beside the filter rather than inside it, because a filter compares text and
+  `(version>=1.9.0)` would accept `1.10.0` only by accident.
 - **Metatype** (`objectClass()`, `MetatypeRegistry`, `@component({ configurationSchema })`): configuration describes
   itself — names, types, defaults, ranges, options — so a generic user interface can offer a form for a PID nobody
   wrote a form for. OSGi's Compendium 105, with one thing working out better than in Java: there a configuration needs
