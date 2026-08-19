@@ -41,6 +41,7 @@
     "lint": "eslint src examples/config examples/graph examples/whiteboard examples/workbench",
     "typecheck:examples": "tsc --noEmit -p tsconfig.examples.json",
     "typecheck:types": "vitest --run --typecheck.only",
+    "docs:osgi": "node scripts/fetch-osgi-specs.mjs",
     "prepare": "husky"
   },
   "keywords": [
