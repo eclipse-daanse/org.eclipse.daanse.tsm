@@ -289,6 +289,23 @@ export interface UnresolvedRequirement {
 }
 
 /**
+ * One requirement and what became of it.
+ *
+ * Necessary because the requirements of `dependencies`, `requiresService` and
+ * `sharedDependencies` are *derived*: `requirementsOf()` builds fresh objects on
+ * every call, so a consumer could not match a `Wire` against a requirement it
+ * fetched itself. Here both come from the same pass.
+ */
+export interface RequirementReport {
+  moduleId: string
+  requirement: Requirement
+  /** What it was wired to; empty when nothing matched */
+  wires: Wire[]
+  /** Set when a mandatory requirement found nothing */
+  failure?: UnresolvedRequirement
+}
+
+/**
  * What the capability resolution found.
  *
  * Separate from `DependencyResolution`, which answers a different question: load
@@ -301,6 +318,13 @@ export interface WiringResolution {
   unresolved: UnresolvedRequirement[]
   /** Module IDs that resolve — including those whose only failures were optional */
   resolved: string[]
+  /**
+   * Every requirement the resolver considered, with its wires or its failure.
+   *
+   * Requirements that are not effective at resolve time do not appear: the
+   * resolver does not look at them.
+   */
+  requirements: RequirementReport[]
 }
 
 /**

@@ -208,6 +208,7 @@ export function activate(context: ModuleContext) {
 | Path | Shows |
 |------|-------|
 | [`examples/whiteboard`](examples/whiteboard) | Satisfaction, `0..n` collection, ranking, dynamic requirements, devtools — no framework, no build step (`npm run example:whiteboard`) |
+| [`examples/wiring`](examples/wiring) | Requirements and capabilities (Core 3.3): the resolution computed from manifests alone, showing what could run before anything is loaded — and telling a module that waits from one that waits in vain (`npm run example:wiring`) |
 | [`examples/config`](examples/config) | Configuration bound to components: a PID decides whether a component runs, how many instances exist, and what its services publish — with `@modified()` shown against a rebuild side by side (`npm run example:config`) |
 | [`examples/graph`](examples/graph) | The three layers drawn live from the loader: bundles, their components, the services between them, changing as bundles load and unload (`npm run example:graph`) |
 | [`examples/workbench`](examples/workbench) | Seven separately built bundles, discovered at runtime: `@component` declarations, a generated `provides`, regions that collect, slots that compete, views coming and going (`npm run example:workbench:build && npm run example:workbench`) |

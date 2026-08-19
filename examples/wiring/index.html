@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TSM: Requirements and Capabilities</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Requirements and Capabilities</h1>
+      <p>
+        Everything on this page is computed from <strong>manifests alone</strong> —
+        nothing is loaded until you press <em>Load the resolvable ones</em>. That is
+        what resolution is: it answers whether a module <em>could</em> run, before a
+        single line of it is fetched.
+      </p>
+      <div class="controls">
+        <button id="btn-downgrade">Downgrade the dark theme to 1.5.0</button>
+        <button id="btn-remove-light">Remove the light theme</button>
+        <button id="btn-add-pdf">Add a PDF provider</button>
+        <button id="btn-load" class="primary">Load the resolvable ones</button>
+        <button id="btn-reset" class="secondary">Reset</button>
+      </div>
+    </header>
+
+    <main>
+      <section>
+        <h2>Offered</h2>
+        <p class="hint">
+          Derived from each manifest, plus whatever it declares itself. Identity and
+          service capabilities are not written by hand — they follow from
+          <code>provides</code> and from having an id at all.
+        </p>
+        <div id="capabilities"></div>
+      </section>
+
+      <section>
+        <h2>Wired</h2>
+        <p class="hint">One requirement, one capability, one module — or a reason why not.</p>
+        <div id="wires"></div>
+      </section>
+
+      <section>
+        <h2>Waiting, and waiting in vain</h2>
+        <p class="hint">
+          The distinction this whole model buys. A module whose service nobody
+          <em>promises</em> can never run, and that is knowable now; one whose
+          provider merely has not started yet is a different case entirely.
+        </p>
+        <div id="verdict"></div>
+
+        <h2>Runtime</h2>
+        <div id="runtime"></div>
+        <ol id="log" class="log"></ol>
+      </section>
+    </main>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

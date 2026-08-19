@@ -115,6 +115,7 @@ export type {
   Requirement,
   Wire,
   WiringResolution,
+  RequirementReport,
   UnresolvedRequirement,
   ServiceQuery,
   ServiceRegistration,
