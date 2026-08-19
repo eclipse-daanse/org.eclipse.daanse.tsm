@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { ModuleLoader } from '../ModuleLoader'
+import { containers, resetContainers, testLoader } from './helpers/moduleContainers'
 import { DefaultServiceRegistry } from '../ServiceRegistry'
 import { draw, type GraphModel } from '../../examples/graph/src/draw'
 import { onDemand, serviceOrder, startup } from '../../examples/graph/src/manifests'
@@ -15,24 +16,22 @@ import * as traffic from '../../examples/graph/modules/traffic'
  * The graph example draws what the loader reports, so the test checks both: the
  * model the host assembles, and that the drawing turns it into boxes.
  */
-interface GlobalWithWindow { window?: Record<string, unknown> }
-const globalRef = globalThis as GlobalWithWindow
 
 describe('examples/graph', () => {
-  let savedWindow: Record<string, unknown> | undefined
   let services: DefaultServiceRegistry
 
   function setup(): ModuleLoader {
-    globalRef.window = {
+    resetContainers()
+    Object.assign(containers, {
       tiles,
       'tiles-vector': tilesVector,
       navigation,
       traffic,
       map,
       elevation
-    }
+    })
     services = new DefaultServiceRegistry()
-    const loader = new ModuleLoader({ serviceRegistry: services })
+    const loader = testLoader({ serviceRegistry: services })
     loader.register(startup)
     return loader
   }
@@ -67,11 +66,9 @@ describe('examples/graph', () => {
   }
 
   beforeEach(() => {
-    savedWindow = globalRef.window
   })
 
   afterEach(() => {
-    globalRef.window = savedWindow
   })
 
   it('should report each bundle with its components', async () => {

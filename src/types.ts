@@ -951,6 +951,22 @@ export interface ModuleLoaderOptions {
   logger?: ModuleLogger
 
   /**
+   * Hand the loader modules that are already imported, instead of letting it
+   * fetch them from their `entry` URL.
+   *
+   * Returns the module namespace for a manifest, or undefined to fall through to
+   * the URL. This is the path for an application migrating from a bundler
+   * monolith: the modules still live in the host bundle, but the loader runs them
+   * with everything else — manifests, ordering, components, lifecycle.
+   *
+   * ```typescript
+   * const preloaded = new Map([['tiles', await import('./modules/tiles.js')]])
+   * new ModuleLoader({ entryResolver: manifest => preloaded.get(manifest.id) })
+   * ```
+   */
+  entryResolver?: (manifest: ModuleManifest) => unknown | undefined
+
+  /**
    * Configuration Admin the loader reads component configuration from.
    *
    * Without one, `configurationPolicy: 'require'` can never be met and those

@@ -12,12 +12,6 @@ import { ModuleLoader } from '../ModuleLoader'
 import { DependencyResolver } from '../DependencyResolver'
 import type { RegistryEventListener } from '../types'
 
-// Mock window for Node.js environment
-declare const global: typeof globalThis & { window?: Record<string, unknown> }
-if (typeof global.window === 'undefined') {
-  global.window = {} as Record<string, unknown>
-}
-
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURES_PATH = path.join(__dirname, 'fixtures', 'plugins')
 
@@ -400,7 +394,7 @@ describe('Integration Tests', () => {
 
       loader.register(manifests)
 
-      // loadAll will fail in Node.js (no window/dynamic HTTP import)
+      // loadAll fails here because Node's ESM loader takes only file: and data:
       // but we can verify it attempts to load in correct order
       try {
         await loader.loadAll()

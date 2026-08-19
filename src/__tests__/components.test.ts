@@ -1,6 +1,7 @@
 import 'reflect-metadata'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ModuleLoader } from '../ModuleLoader'
+import { containers, resetContainers, testLoader } from './helpers/moduleContainers'
 import { activate, component, deactivate, inject } from '../decorators'
 import type { ModuleContext, ModuleManifest } from '../types'
 
@@ -9,11 +10,9 @@ import type { ModuleContext, ModuleManifest } from '../types'
  * does the registering — instead of a module calling register() in its activate
  * export.
  */
-interface GlobalWithWindow { window?: Record<string, unknown> }
-const globalRef = globalThis as GlobalWithWindow
 
 function loader(): ModuleLoader {
-  return new ModuleLoader()
+  return testLoader()
 }
 
 function manifest(id: string, extra: Partial<ModuleManifest> = {}): ModuleManifest {
@@ -28,15 +27,12 @@ function manifest(id: string, extra: Partial<ModuleManifest> = {}): ModuleManife
 }
 
 describe('declarative components', () => {
-  let savedWindow: Record<string, unknown> | undefined
 
   beforeEach(() => {
-    savedWindow = globalRef.window
-    globalRef.window = {}
+    resetContainers()
   })
 
   afterEach(() => {
-    globalRef.window = savedWindow
   })
 
   describe('registration', () => {
@@ -46,8 +42,8 @@ describe('declarative components', () => {
         locate(): string { return 'here' }
       }
 
-      const loader = new ModuleLoader()
-      globalRef.window!.geo = { GeoService }
+      const loader = testLoader()
+      containers.geo = { GeoService }
 
       await loader.loadModule(manifest('geo'))
 
@@ -60,9 +56,9 @@ describe('declarative components', () => {
       @component({ service: ['plain.service'] })
       class PlainService {}
 
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       // The module exports a class and nothing else
-      globalRef.window!.plain = { PlainService }
+      containers.plain = { PlainService }
 
       const loaded = await loader.loadModule(manifest('plain'))
 
@@ -78,8 +74,8 @@ describe('declarative components', () => {
       })
       class Widget {}
 
-      const loader = new ModuleLoader()
-      globalRef.window!.widget = { Widget }
+      const loader = testLoader()
+      containers.widget = { Widget }
 
       await loader.loadModule(manifest('widget'))
 
@@ -95,8 +91,8 @@ describe('declarative components', () => {
       })
       class ChartRenderer {}
 
-      const loader = new ModuleLoader()
-      globalRef.window!.chart = { ChartRenderer }
+      const loader = testLoader()
+      containers.chart = { ChartRenderer }
 
       await loader.loadModule(manifest('chart'))
 
@@ -109,8 +105,8 @@ describe('declarative components', () => {
     it('should ignore exports that are not components', async () => {
       class NotAComponent {}
 
-      const loader = new ModuleLoader()
-      globalRef.window!.mixed = { NotAComponent, helper: () => 'x', value: 42 }
+      const loader = testLoader()
+      containers.mixed = { NotAComponent, helper: () => 'x', value: 42 }
 
       const loaded = await loader.loadModule(manifest('mixed'))
 
@@ -131,8 +127,8 @@ describe('declarative components', () => {
         }
       }
 
-      const loader = new ModuleLoader()
-      globalRef.window!.immediate = { Immediate }
+      const loader = testLoader()
+      containers.immediate = { Immediate }
 
       await loader.loadModule(manifest('immediate'))
 
@@ -151,8 +147,8 @@ describe('declarative components', () => {
         constructor() { constructed() }
       }
 
-      const loader = new ModuleLoader()
-      globalRef.window!.delayed = { Delayed }
+      const loader = testLoader()
+      containers.delayed = { Delayed }
 
       await loader.loadModule(manifest('delayed'))
 
@@ -173,8 +169,8 @@ describe('declarative components', () => {
         constructor() { constructed() }
       }
 
-      const loader = new ModuleLoader()
-      globalRef.window!.eager = { Eager }
+      const loader = testLoader()
+      containers.eager = { Eager }
 
       await loader.loadModule(manifest('eager'))
 
@@ -193,8 +189,8 @@ describe('declarative components', () => {
         }
       }
 
-      const loader = new ModuleLoader()
-      globalRef.window!.asyncmod = { AsyncComponent }
+      const loader = testLoader()
+      containers.asyncmod = { AsyncComponent }
 
       await loader.loadModule(manifest('asyncmod'))
       order.push('load returned')
@@ -211,8 +207,8 @@ describe('declarative components', () => {
         start(): void { started() }
       }
 
-      const loader = new ModuleLoader()
-      globalRef.window!.background = { Background }
+      const loader = testLoader()
+      containers.background = { Background }
 
       await loader.loadModule(manifest('background'))
 
@@ -234,8 +230,8 @@ describe('declarative components', () => {
         @activate() start(): void { started.push('second') }
       }
 
-      const loader = new ModuleLoader()
-      globalRef.window!.pairmod = { First, Second }
+      const loader = testLoader()
+      containers.pairmod = { First, Second }
 
       await loader.loadModule(manifest('pairmod'))
 
@@ -277,9 +273,9 @@ describe('declarative components', () => {
         start(): void {}
       }
 
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       // Declared in the order that used to fail: the consumer comes first
-      globalRef.window!.metrics = { MetricsView, MetricsService }
+      containers.metrics = { MetricsView, MetricsService }
 
       const loaded = await loader.loadModule(manifest('metrics'))
 
@@ -306,8 +302,8 @@ describe('declarative components', () => {
         @activate() start(): void {}
       }
 
-      const loader = new ModuleLoader()
-      globalRef.window!.listed = { GeoService, Widget, Background }
+      const loader = testLoader()
+      containers.listed = { GeoService, Widget, Background }
 
       await loader.loadModule(manifest('listed'))
 
@@ -342,9 +338,9 @@ describe('declarative components', () => {
       @component({ service: ['b.service'] })
       class B {}
 
-      const loader = new ModuleLoader()
-      globalRef.window!.first = { A }
-      globalRef.window!.second = { B }
+      const loader = testLoader()
+      containers.first = { A }
+      containers.second = { B }
 
       await loader.loadModule(manifest('first'))
       await loader.loadModule(manifest('second'))
@@ -357,8 +353,8 @@ describe('declarative components', () => {
       @component({ service: ['gone.service'] })
       class Gone {}
 
-      const loader = new ModuleLoader()
-      globalRef.window!.temporary = { Gone }
+      const loader = testLoader()
+      containers.temporary = { Gone }
       await loader.loadModule(manifest('temporary'))
 
       await loader.unloadModule('temporary')
@@ -367,8 +363,8 @@ describe('declarative components', () => {
     })
 
     it('should return nothing for a module without components', async () => {
-      const loader = new ModuleLoader()
-      globalRef.window!.plainmod = { activate: vi.fn() }
+      const loader = testLoader()
+      containers.plainmod = { activate: vi.fn() }
       await loader.loadModule(manifest('plainmod'))
 
       expect(loader.getComponents('plainmod')).toEqual([])
@@ -388,8 +384,8 @@ describe('declarative components', () => {
         stop(): void { stopped() }
       }
 
-      const loader = new ModuleLoader()
-      globalRef.window!.timer = { Timer }
+      const loader = testLoader()
+      containers.timer = { Timer }
       await loader.loadModule(manifest('timer'))
 
       await loader.unloadModule('timer')
@@ -411,8 +407,8 @@ describe('declarative components', () => {
         stop(): void { seen.push(`stop:${this.token}`) }
       }
 
-      const loader = new ModuleLoader()
-      globalRef.window!.stateful = { Stateful }
+      const loader = testLoader()
+      containers.stateful = { Stateful }
       await loader.loadModule(manifest('stateful'))
       await loader.unloadModule('stateful')
 
@@ -435,8 +431,8 @@ describe('declarative components', () => {
         @deactivate() stop(): void { order.push('stop second') }
       }
 
-      const loader = new ModuleLoader()
-      globalRef.window!.pair = { First, Second }
+      const loader = testLoader()
+      containers.pair = { First, Second }
       await loader.loadModule(manifest('pair'))
 
       await loader.unloadModule('pair')
@@ -459,8 +455,8 @@ describe('declarative components', () => {
         @deactivate() stop(): void { stopped() }
       }
 
-      const loader = new ModuleLoader()
-      globalRef.window!.mixed2 = { Broken, Fine }
+      const loader = testLoader()
+      containers.mixed2 = { Broken, Fine }
       await loader.loadModule(manifest('mixed2'))
 
       await loader.unloadModule('mixed2')
@@ -477,10 +473,10 @@ describe('declarative components', () => {
         @deactivate() stop(): void { stopped() }
       }
 
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const registry = loader.getServiceRegistry()
       registry.register('geo.service', {})
-      globalRef.window!.consumer = { Consumer }
+      containers.consumer = { Consumer }
       await loader.loadModule(manifest('consumer', {
         requiresService: [{ id: 'geo.service' }]
       }))
@@ -503,9 +499,9 @@ describe('declarative components', () => {
         start(): void {}
       }
 
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       loader.getServiceRegistry().register('geo.service', { locate: () => 'here' })
-      globalRef.window!.reporter = { Reporter }
+      containers.reporter = { Reporter }
 
       await loader.loadModule(manifest('reporter'))
 
@@ -522,8 +518,8 @@ describe('declarative components', () => {
         start(): void {}
       }
 
-      const loader = new ModuleLoader()
-      globalRef.window!.both = {
+      const loader = testLoader()
+      containers.both = {
         Reader,
         // Runs before the components, so it can set up their dependencies
         activate: (context: ModuleContext) => {
@@ -541,8 +537,8 @@ describe('declarative components', () => {
       @component({ service: ['declared.service'] })
       class Declared {}
 
-      const loader = new ModuleLoader()
-      globalRef.window!.declaring = { Declared }
+      const loader = testLoader()
+      containers.declaring = { Declared }
 
       await loader.loadModule(manifest('declaring'))
 

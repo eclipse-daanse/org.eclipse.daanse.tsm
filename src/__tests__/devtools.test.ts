@@ -1,13 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ModuleLoader } from '../ModuleLoader'
+import { containers, resetContainers, testLoader } from './helpers/moduleContainers'
 import { installDevtools, collectingOutput, type CollectingOutput } from '../devtools'
 import { tsmRuntime } from '../TsmRuntime'
 import { ConfigurationAdmin } from '../ConfigurationAdmin'
 import { activate, component, modified } from '../decorators'
 import type { ModuleContext, ModuleManifest, ObservableServiceRegistry } from '../types'
 
-interface GlobalWithWindow { window?: Record<string, unknown> }
-const globalRef = globalThis as GlobalWithWindow
 
 function stub(
   loader: ModuleLoader,
@@ -27,7 +26,7 @@ function stub(
     requiresService: options.requires,
     provides: options.provides?.map(serviceId => ({ id: serviceId }))
   }
-  globalRef.window![id] = {
+  containers[id] = {
     activate: (context: ModuleContext) => { options.onActivate?.(context.services) }
   }
   loader.register([manifest])
@@ -35,19 +34,16 @@ function stub(
 }
 
 describe('installDevtools', () => {
-  let savedWindow: Record<string, unknown> | undefined
   let out: CollectingOutput
   let host: Record<string, unknown>
 
   beforeEach(() => {
-    savedWindow = globalRef.window
-    globalRef.window = {}
+    resetContainers()
     out = collectingOutput()
     host = {}
   })
 
   afterEach(() => {
-    globalRef.window = savedWindow
   })
 
   function devtools(loader: ModuleLoader) {
@@ -56,7 +52,7 @@ describe('installDevtools', () => {
 
   describe('installation', () => {
     it('should install itself on the target under a default name', () => {
-      const tools = devtools(new ModuleLoader())
+      const tools = devtools(testLoader())
 
       expect(host.tsm).toBe(tools)
       expect(out.text()).toContain('tsm.help()')
@@ -64,7 +60,7 @@ describe('installDevtools', () => {
 
     it('should honour a custom name', () => {
       const tools = installDevtools({
-        loader: new ModuleLoader(), target: host, output: out, name: 'daanse'
+        loader: testLoader(), target: host, output: out, name: 'daanse'
       })
 
       expect(host.daanse).toBe(tools)
@@ -72,14 +68,14 @@ describe('installDevtools', () => {
     })
 
     it('should install nowhere when the target is null', () => {
-      const tools = installDevtools({ loader: new ModuleLoader(), target: null, output: out })
+      const tools = installDevtools({ loader: testLoader(), target: null, output: out })
 
       expect(host).toEqual({})
       expect(tools.modules).toBeTypeOf('function')
     })
 
     it('should remove itself again', () => {
-      const tools = devtools(new ModuleLoader())
+      const tools = devtools(testLoader())
 
       tools.uninstall()
 
@@ -87,7 +83,7 @@ describe('installDevtools', () => {
     })
 
     it('should expose the objects behind the commands', () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const tools = devtools(loader)
 
       expect(tools.raw.loader).toBe(loader)
@@ -97,7 +93,7 @@ describe('installDevtools', () => {
 
   describe('modules', () => {
     it('should list registered modules with their state', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       stub(loader, 'alpha', {})
       stub(loader, 'beta', { requires: [{ id: 'absent.service' }] })
       await loader.loadAll()
@@ -112,7 +108,7 @@ describe('installDevtools', () => {
     })
 
     it('should show a registered but never loaded module', () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       stub(loader, 'alpha', {})
 
       devtools(loader).modules()
@@ -121,7 +117,7 @@ describe('installDevtools', () => {
     })
 
     it('should say when nothing is registered', () => {
-      devtools(new ModuleLoader()).modules()
+      devtools(testLoader()).modules()
 
       expect(out.text()).toContain('No modules registered')
     })
@@ -129,7 +125,7 @@ describe('installDevtools', () => {
 
   describe('shell aliases', () => {
     it('should map lb to modules and ls to services', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       stub(loader, 'alpha', {
         provides: ['geo.service'],
         onActivate: services => { services.register('geo.service', {}) }
@@ -149,7 +145,7 @@ describe('installDevtools', () => {
 
   describe('manifest and state', () => {
     it('should return and show a manifest', () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const manifest = stub(loader, 'alpha', {})
 
       expect(devtools(loader).manifest('alpha')).toBe(manifest)
@@ -157,12 +153,12 @@ describe('installDevtools', () => {
     })
 
     it('should report an unknown module', () => {
-      expect(devtools(new ModuleLoader()).manifest('nope')).toBeUndefined()
+      expect(devtools(testLoader()).manifest('nope')).toBeUndefined()
       expect(out.errors[0].message).toContain('Unknown module: nope')
     })
 
     it('should tabulate the load state', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const manifest = stub(loader, 'alpha', {})
       await loader.loadModule(manifest)
 
@@ -173,7 +169,7 @@ describe('installDevtools', () => {
     })
 
     it('should report a module that is not loaded', () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       stub(loader, 'alpha', {})
 
       expect(devtools(loader).state('alpha')).toBeUndefined()
@@ -183,7 +179,7 @@ describe('installDevtools', () => {
 
   describe('load, unload, reload', () => {
     it('should load a module and wait for the cascade', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const consumer = stub(loader, 'consumer', { requires: [{ id: 'geo.service' }] })
       stub(loader, 'provider', {
         provides: ['geo.service'],
@@ -200,7 +196,7 @@ describe('installDevtools', () => {
     })
 
     it('should show what a parked module waits for', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const manifest = stub(loader, 'waiting', { requires: [{ id: 'absent.service' }] })
 
       await devtools(loader).load(manifest.id)
@@ -210,7 +206,7 @@ describe('installDevtools', () => {
     })
 
     it('should report a failing load instead of throwing', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const manifest: ModuleManifest = {
         id: 'broken', name: 'broken', version: '1.0.0',
         entry: 'http://localhost/broken.js', exports: {}
@@ -222,7 +218,7 @@ describe('installDevtools', () => {
     })
 
     it('should unload a module', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const manifest = stub(loader, 'alpha', {})
       await loader.loadModule(manifest)
 
@@ -231,12 +227,12 @@ describe('installDevtools', () => {
     })
 
     it('should report unloading something that was not loaded', async () => {
-      await expect(devtools(new ModuleLoader()).unload('ghost')).resolves.toBe(false)
+      await expect(devtools(testLoader()).unload('ghost')).resolves.toBe(false)
       expect(out.text()).toContain('was not loaded')
     })
 
     it('should report a refused reload', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const manifest = stub(loader, 'alpha', {})
       await loader.loadModule(manifest)
 
@@ -248,7 +244,7 @@ describe('installDevtools', () => {
 
   describe('disable and enable', () => {
     it('should switch a module off and show it as disabled', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       stub(loader, 'alpha', {})
       await loader.loadAll()
       const tools = devtools(loader)
@@ -261,7 +257,7 @@ describe('installDevtools', () => {
     })
 
     it('should switch it on again and report the resulting state', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       stub(loader, 'alpha', {})
       await loader.loadAll()
       const tools = devtools(loader)
@@ -273,7 +269,7 @@ describe('installDevtools', () => {
     })
 
     it('should report an unknown module and one that was not disabled', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       stub(loader, 'alpha', {})
       const tools = devtools(loader)
 
@@ -287,7 +283,7 @@ describe('installDevtools', () => {
 
   describe('consumers', () => {
     it('should list who asked for a service and how', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       stub(loader, 'map', { requires: [{ id: 'geo.service' }] })
       await loader.loadAll()
 
@@ -300,7 +296,7 @@ describe('installDevtools', () => {
     })
 
     it('should say when nobody declared the service', () => {
-      devtools(new ModuleLoader()).consumers('nothing')
+      devtools(testLoader()).consumers('nothing')
 
       expect(out.text()).toContain('Nobody declared nothing')
     })
@@ -308,7 +304,7 @@ describe('installDevtools', () => {
 
   describe('diagnosis', () => {
     it('should list waiting modules and what they wait for', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       stub(loader, 'waiting', { requires: [{ id: 'absent.service' }] })
       await loader.loadAll()
 
@@ -318,13 +314,13 @@ describe('installDevtools', () => {
     })
 
     it('should confirm when nothing waits', () => {
-      devtools(new ModuleLoader()).unsatisfied()
+      devtools(testLoader()).unsatisfied()
 
       expect(out.text()).toContain('Nothing is waiting')
     })
 
     it('should list declaration drift', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       stub(loader, 'search', { provides: ['ui.search'] })
       await loader.loadAll()
 
@@ -334,7 +330,7 @@ describe('installDevtools', () => {
     })
 
     it('should confirm a truthful manifest', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       stub(loader, 'search', {
         provides: ['ui.search'],
         onActivate: services => { services.register('ui.search', {}) }
@@ -349,7 +345,7 @@ describe('installDevtools', () => {
 
   describe('services', () => {
     it('should list services with provider and scope', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       stub(loader, 'provider', {
         provides: ['geo.service'],
         onActivate: services => { services.register('geo.service', { locate: () => 'here' }) }
@@ -364,7 +360,7 @@ describe('installDevtools', () => {
     })
 
     it('should mention providers standing by', () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const registry = loader.getServiceRegistry()
       registry.register('geo.service', {}, { providedBy: 'a' })
       registry.register('geo.service', {}, { providedBy: 'b' })
@@ -375,7 +371,7 @@ describe('installDevtools', () => {
     })
 
     it('should resolve a single service', () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const service = { locate: () => 'here' }
       loader.getServiceRegistry().register('geo.service', service)
 
@@ -384,12 +380,12 @@ describe('installDevtools', () => {
     })
 
     it('should report an unknown service', () => {
-      expect(devtools(new ModuleLoader()).service('nope')).toBeUndefined()
+      expect(devtools(testLoader()).service('nope')).toBeUndefined()
       expect(out.errors[0].message).toContain('No service under: nope')
     })
 
     it('should list providers best first, with ranking', () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const registry = loader.getServiceRegistry()
       registry.register('widget', {}, { providedBy: 'weak' })
       registry.register('widget', {}, { providedBy: 'strong', ranking: 10 })
@@ -401,7 +397,7 @@ describe('installDevtools', () => {
     })
 
     it('should apply a target filter', () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const registry = loader.getServiceRegistry()
       registry.register('widget', {}, { providedBy: 'chart', properties: { kind: 'chart' } })
       registry.register('widget', {}, { providedBy: 'table', properties: { kind: 'table' } })
@@ -413,7 +409,7 @@ describe('installDevtools', () => {
     })
 
     it('should report a service with no provider', () => {
-      expect(devtools(new ModuleLoader()).providers('absent')).toEqual([])
+      expect(devtools(testLoader()).providers('absent')).toEqual([])
       expect(out.text()).toContain('No provider for absent')
     })
   })
@@ -424,7 +420,7 @@ describe('installDevtools', () => {
       tsmRuntime.register('devtools-vue', {}, '3.4.0', 'host')
 
       installDevtools({
-        loader: new ModuleLoader(), target: host, output: out, runtime: tsmRuntime
+        loader: testLoader(), target: host, output: out, runtime: tsmRuntime
       }).shared()
 
       expect(out.text()).toContain('devtools-vue')
@@ -434,7 +430,7 @@ describe('installDevtools', () => {
     })
 
     it('should say when no runtime was passed', () => {
-      devtools(new ModuleLoader()).shared()
+      devtools(testLoader()).shared()
 
       expect(out.errors[0].message).toContain('needs the TSM runtime')
     })
@@ -442,20 +438,20 @@ describe('installDevtools', () => {
 
   describe('optional collaborators', () => {
     it('should explain that discovery needs a registry', async () => {
-      await devtools(new ModuleLoader()).discover()
+      await devtools(testLoader()).discover()
 
       expect(out.errors[0].message).toContain('needs a PluginRegistry')
     })
 
     it('should explain that resolve needs a resolver', () => {
-      devtools(new ModuleLoader()).resolve()
+      devtools(testLoader()).resolve()
 
       expect(out.errors[0].message).toContain('needs a DependencyResolver')
     })
 
     it('should show the load order when a resolver is present', async () => {
       const { DependencyResolver } = await import('../DependencyResolver')
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       stub(loader, 'core', {})
       stub(loader, 'ui', {})
 
@@ -469,7 +465,7 @@ describe('installDevtools', () => {
 
   describe('queue', () => {
     it('should collect, show and load a selection', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       stub(loader, 'alpha', {})
       stub(loader, 'beta', {})
       const tools = devtools(loader)
@@ -489,13 +485,13 @@ describe('installDevtools', () => {
     })
 
     it('should refuse an unknown module', () => {
-      devtools(new ModuleLoader()).add('ghost')
+      devtools(testLoader()).add('ghost')
 
       expect(out.errors[0].message).toContain('Unknown module: ghost')
     })
 
     it('should remove and clear entries', () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       stub(loader, 'alpha', {})
       const tools = devtools(loader)
       tools.add('alpha')
@@ -512,7 +508,7 @@ describe('installDevtools', () => {
   describe('help', () => {
     it('should list the commands under the installed name', () => {
       installDevtools({
-        loader: new ModuleLoader(), target: host, output: out, name: 'daanse'
+        loader: testLoader(), target: host, output: out, name: 'daanse'
       }).help()
 
       expect(out.text()).toContain('daanse.<command>()')
@@ -523,19 +519,16 @@ describe('installDevtools', () => {
 })
 
 describe('installDevtools - components and configuration', () => {
-  let savedWindow: Record<string, unknown> | undefined
   let out: CollectingOutput
   let admin: ConfigurationAdmin
 
   beforeEach(() => {
-    savedWindow = globalRef.window
-    globalRef.window = {}
+    resetContainers()
     out = collectingOutput()
     admin = new ConfigurationAdmin()
   })
 
   afterEach(() => {
-    globalRef.window = savedWindow
   })
 
   function componentManifest(id: string): ModuleManifest {
@@ -563,8 +556,8 @@ describe('installDevtools - components and configuration', () => {
       @activate() start(): void {}
     }
 
-    const loader = new ModuleLoader({ configurationAdmin: admin })
-    globalRef.window!.tiles = { RasterTiles, TrafficWatcher }
+    const loader = testLoader({ configurationAdmin: admin })
+    containers.tiles = { RasterTiles, TrafficWatcher }
     await loader.loadModule(componentManifest('tiles'))
 
     return { loader, tsm: installDevtools({ loader, target: null, output: out }) }
@@ -650,7 +643,7 @@ describe('installDevtools - components and configuration', () => {
     })
 
     it('should explain itself when the loader has no Configuration Admin', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const tsm = installDevtools({ loader, target: null, output: out })
 
       tsm.config()
@@ -661,21 +654,18 @@ describe('installDevtools - components and configuration', () => {
 })
 
 describe('installDevtools - capabilities and wiring', () => {
-  let savedWindow: Record<string, unknown> | undefined
   let out: CollectingOutput
 
   beforeEach(() => {
-    savedWindow = globalRef.window
-    globalRef.window = {}
+    resetContainers()
     out = collectingOutput()
   })
 
   afterEach(() => {
-    globalRef.window = savedWindow
   })
 
   function withWiring(): ReturnType<typeof installDevtools> {
-    const loader = new ModuleLoader()
+    const loader = testLoader()
     loader.register([
       {
         id: 'tiles', name: 'tiles', version: '1.0.0', entry: '/tiles.js', exports: {},
@@ -728,7 +718,7 @@ describe('installDevtools - capabilities and wiring', () => {
   })
 
   it('should say so when everything resolves', () => {
-    const loader = new ModuleLoader()
+    const loader = testLoader()
     loader.register([{
       id: 'alone', name: 'alone', version: '1.0.0', entry: '/a.js', exports: {}
     }])

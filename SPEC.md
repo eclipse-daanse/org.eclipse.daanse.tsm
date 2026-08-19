@@ -26,7 +26,7 @@ TSM ist ein **Runtime-Modul-System** für TypeScript/JavaScript-Anwendungen, das
 
 | Prinzip | Beschreibung |
 |---------|--------------|
-| **Browser-First** | Primär für Browser-Umgebung, kein Node.js-spezifischer Code |
+| **Umgebungsneutral** | Kein Zugriff auf `window` oder `document` im Kern; der Loader läuft im Browser und in Node |
 | **Zero Build-Time Dependencies** | Plugins werden zur Laufzeit geladen, nicht bei Build |
 | **Framework-Agnostisch** | Funktioniert mit Vue, React, Angular, Vanilla JS |
 | **Type-Safe** | Volle TypeScript-Unterstützung mit generischen APIs |
@@ -260,7 +260,8 @@ class ModuleLoader {
   loadAll(): Promise<void>
   loadModule(
     manifest: ModuleManifest,
-    options?: { awaitCascade?: boolean }
+    // `container`: ein bereits importiertes Modul übergeben, statt `entry` zu holen
+    options?: { awaitCascade?: boolean; container?: unknown }
   ): Promise<LoadedModule>
 
   // Unloading
@@ -766,7 +767,10 @@ context.services.register('editor.extensions', {
 
 ### 9.4 Bekannte Limitierungen
 
-1. **Kein SSR**: Nur Browser-Umgebung unterstützt
+1. **SSR**: Der Loader selbst läuft in Node — Module werden über `container` /
+   `entryResolver` übergeben oder per `file:`/`data:`-URL importiert. `http(s)`-URLs
+   brauchen in Node `--experimental-network-imports`; die Runtime für geteilte
+   Bibliotheken (`__tsm__`) bleibt browsergebunden
 2. **Keine Circular Deps**: Zyklische Abhängigkeiten werden erkannt aber nicht aufgelöst
 3. **Kein Tree-Shaking**: Komplette Module werden geladen
 4. **Single Version**: Pro Modul-ID nur eine Version zur Laufzeit
@@ -1266,6 +1270,35 @@ Dokumentation, der direkte Weg für ein Modell, das die Deklaration vollständig
 trägt.
 
 ---
+
+### 11.3a Module übergeben statt holen
+
+Ein Modul kommt auf drei Wegen zum Loader, in dieser Reihenfolge:
+
+```typescript
+// 1. explizit, pro Aufruf — für Tests und einzelne Module
+await loader.loadModule(manifest, { container: await import('./modules/tiles.js') })
+
+// 2. über einen Resolver — für eine Anwendung, deren Module noch im Host-Bundle liegen
+const preloaded = new Map([['tiles', tilesNamespace]])
+new ModuleLoader({ entryResolver: manifest => preloaded.get(manifest.id) })
+
+// 3. sonst: dynamischer Import von `manifest.entry`
+```
+
+**Es gibt keinen globalen Namensraum mehr.** Früher wurde ein Modul unter
+`window[moduleId]` gesucht — die Module-Federation-Konvention. Das hatte drei
+Kosten: Kollisionen mit DOM-`id`s, die der Browser als Globals auslegt (`<ul
+id="palette">` wurde als Modul `palette` genommen); zwei Anwendungen auf einer
+Seite teilten den Namensraum; und der Loader war in Node nicht lauffähig, weil
+`window` dort nicht existiert.
+
+Entfallen ist damit auch der halbe Module-Federation-Pfad: `container.get(export)`
+wurde aufgerufen, `container.init(shareScope)` nie — für einen echten Remote also
+untauglich, und §2 schließt Module Federation ohnehin aus dem Scope aus.
+
+Ein übergebener Container wird für `reloadModule()` behalten: ein Modul ohne
+abrufbare URL startet auf demselben Code neu. `unloadModule()` gibt ihn frei.
 
 ### 11.4a Requirements und Capabilities
 

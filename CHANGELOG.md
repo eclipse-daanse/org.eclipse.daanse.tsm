@@ -385,6 +385,20 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
   with a dot stay private, and `service.ranking` from configuration re-orders providers without touching code. A PID
   that names a *factory* PID instantiates the component once per configuration — not a separate feature, the same
   mechanism, exactly as it follows from the PID in DS.
+- **Breaking: `window[moduleId]` is gone.** A module is handed over explicitly now — `loadModule(manifest,
+  { container })` for one, `new ModuleLoader({ entryResolver })` for many — or fetched from its `entry` URL. Migrating
+  from the old path is one line per call site (#19).
+- What that removes: collisions with DOM ids, which the browser exposes as globals — `<ul id="palette">` was taken as
+  the module `palette`, and the `isModuleContainer` guard existed only to fend that off; a shared namespace between two
+  applications on one page; and the reason the loader could not run in Node at all, where `window` does not exist. It
+  does now: `loadModule` works in a plain Node process, and `import()` takes `file:` and `data:` URLs there.
+- Also removed: the half of Module Federation that was in there. `container.get(export)` was called,
+  `container.init(shareScope)` never — so a real remote could not have worked, and `SPEC.md` §2 excludes Module
+  Federation from the scope anyway.
+- A handed-over container is kept for `reloadModule()`, so a module with no fetchable URL restarts on the same code;
+  the cache buster is only applied where there is a URL. `unloadModule()` lets go of it. The test suite dropped its
+  `globalThis.window` fakes in the process — 10 files' worth, plus a window proxy that only existed to survive the
+  unload.
 - **New example `examples/wiring`** (`npm run example:wiring`): the resolution computed from manifests alone, with
   nothing loaded — a capability that is not a service (`demo.theme` with attributes), a requirement selecting on it by
   filter and `versionRange`, `cardinality: 'multiple'` wiring to every match, and side by side the two cases only the

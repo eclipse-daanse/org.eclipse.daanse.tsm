@@ -1,6 +1,7 @@
 import 'reflect-metadata'
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { ModuleLoader } from '../ModuleLoader'
+import { containers, resetContainers, testLoader } from './helpers/moduleContainers'
 import { ConfigurationAdmin } from '../ConfigurationAdmin'
 import { MetatypeRegistry, METATYPE_SERVICE_ID, objectClass } from '../Metatype'
 import { activate, component } from '../decorators'
@@ -11,8 +12,6 @@ import type { ComponentContext, ModuleManifest } from '../types'
  * declared and applies the declared defaults, and a registry handed to Config
  * Admin refuses values that do not fit.
  */
-interface GlobalWithWindow { window?: Record<string, unknown> }
-const globalRef = globalThis as GlobalWithWindow
 
 const tileSchema = objectClass({
   id: 'demo.tiles',
@@ -36,23 +35,20 @@ function manifest(id: string, extra: Partial<ModuleManifest> = {}): ModuleManife
 }
 
 describe('metatype and the loader', () => {
-  let savedWindow: Record<string, unknown> | undefined
   let metatype: MetatypeRegistry
   let admin: ConfigurationAdmin
 
   beforeEach(() => {
-    savedWindow = globalRef.window
-    globalRef.window = {}
+    resetContainers()
     metatype = new MetatypeRegistry()
     admin = new ConfigurationAdmin({ metatype })
   })
 
   afterEach(() => {
-    globalRef.window = savedWindow
   })
 
   function loaderWith(): ModuleLoader {
-    return new ModuleLoader({ configurationAdmin: admin, metatype })
+    return testLoader({ configurationAdmin: admin, metatype })
   }
 
   describe('designation', () => {
@@ -61,7 +57,7 @@ describe('metatype and the loader', () => {
       class RasterTiles {}
 
       const loader = loaderWith()
-      globalRef.window!.tiles = { RasterTiles }
+      containers.tiles = { RasterTiles }
 
       await loader.loadModule(manifest('tiles'))
 
@@ -78,7 +74,7 @@ describe('metatype and the loader', () => {
       class TileSource {}
 
       const loader = loaderWith()
-      globalRef.window!.sources = { TileSource }
+      containers.sources = { TileSource }
 
       await loader.loadModule(manifest('sources'))
 
@@ -95,7 +91,7 @@ describe('metatype and the loader', () => {
       class RasterTiles {}
 
       const loader = loaderWith()
-      globalRef.window!.tiles = { RasterTiles }
+      containers.tiles = { RasterTiles }
 
       await loader.loadModule(manifest('tiles'))
 
@@ -107,7 +103,7 @@ describe('metatype and the loader', () => {
       class RasterTiles {}
 
       const loader = loaderWith()
-      globalRef.window!.tiles = { RasterTiles }
+      containers.tiles = { RasterTiles }
 
       await loader.loadModule(manifest('tiles'))
 
@@ -119,7 +115,7 @@ describe('metatype and the loader', () => {
       class RasterTiles {}
 
       const loader = loaderWith()
-      globalRef.window!.tiles = { RasterTiles }
+      containers.tiles = { RasterTiles }
       await loader.loadModule(manifest('tiles'))
 
       await loader.unloadModule('tiles')
@@ -146,7 +142,7 @@ describe('metatype and the loader', () => {
       }
 
       const loader = loaderWith()
-      globalRef.window!.tiles = { RasterTiles }
+      containers.tiles = { RasterTiles }
 
       await loader.loadModule(manifest('tiles'))
 
@@ -166,7 +162,7 @@ describe('metatype and the loader', () => {
 
       await admin.getConfiguration('demo.tiles').update({ zoom: 3 })
       const loader = loaderWith()
-      globalRef.window!.tiles = { RasterTiles }
+      containers.tiles = { RasterTiles }
 
       await loader.loadModule(manifest('tiles'))
 
@@ -182,7 +178,7 @@ describe('metatype and the loader', () => {
       class RasterTiles {}
 
       const loader = loaderWith()
-      globalRef.window!.tiles = { RasterTiles }
+      containers.tiles = { RasterTiles }
 
       await loader.loadModule(manifest('tiles'))
 
@@ -216,7 +212,7 @@ describe('metatype and the loader', () => {
       }
 
       const loader = loaderWith()
-      globalRef.window!.tiles = { RasterTiles }
+      containers.tiles = { RasterTiles }
 
       await loader.loadModule(manifest('tiles'))
 
@@ -238,7 +234,7 @@ describe('metatype and the loader', () => {
       @component({ configurationPid: 'demo.tiles', configurationSchema: other })
       class VectorTiles {}
 
-      const loader = new ModuleLoader({
+      const loader = testLoader({
         configurationAdmin: admin,
         metatype,
         logger: {
@@ -246,7 +242,7 @@ describe('metatype and the loader', () => {
           warn: message => warnings.push(message)
         }
       })
-      globalRef.window!.tiles = { RasterTiles, VectorTiles }
+      containers.tiles = { RasterTiles, VectorTiles }
 
       await loader.loadModule(manifest('tiles'))
 
@@ -265,7 +261,7 @@ describe('metatype and the loader', () => {
       class RasterTiles {}
 
       const loader = loaderWith()
-      globalRef.window!.tiles = { RasterTiles }
+      containers.tiles = { RasterTiles }
 
       await loader.loadModule(manifest('tiles'))
 

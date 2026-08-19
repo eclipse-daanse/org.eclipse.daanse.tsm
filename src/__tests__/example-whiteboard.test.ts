@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { ModuleLoader } from '../ModuleLoader'
+import { containers, resetContainers, testLoader } from './helpers/moduleContainers'
 import { UI_SERVICE, type DemoUi } from '../../examples/whiteboard/src/contracts'
 import { lateWidget, manifests } from '../../examples/whiteboard/src/manifests'
 import * as chartWidget from '../../examples/whiteboard/modules/chart-widget'
@@ -16,19 +17,17 @@ import * as tableWidget from '../../examples/whiteboard/modules/table-widget'
  * where loadEntry() looks, so the wiring the example demonstrates is checked
  * rather than described.
  */
-interface GlobalWithWindow { window?: Record<string, unknown> }
-const globalRef = globalThis as GlobalWithWindow
 
 describe('examples/whiteboard', () => {
-  let savedWindow: Record<string, unknown> | undefined
   let shownPalette: Array<{ label: string; kind: string; providedBy: string }>
   let shownGreeting: string
 
   function setup(): ModuleLoader {
-    const loader = new ModuleLoader()
+    const loader = testLoader()
 
     // The same modules the dev server would import, minus the network
-    globalRef.window = {
+    resetContainers()
+    Object.assign(containers, {
       palette,
       greeter,
       'never-satisfied': neverSatisfied,
@@ -37,7 +36,7 @@ describe('examples/whiteboard', () => {
       'greeting-basic': greetingBasic,
       'greeting-premium': greetingPremium,
       'late-widget': lateWidgetModule
-    }
+    })
 
     const ui: DemoUi = {
       setPalette(widgets) { shownPalette = widgets },
@@ -50,13 +49,11 @@ describe('examples/whiteboard', () => {
   }
 
   beforeEach(() => {
-    savedWindow = globalRef.window
     shownPalette = []
     shownGreeting = ''
   })
 
   afterEach(() => {
-    globalRef.window = savedWindow
   })
 
   it('should activate every module whose services exist', async () => {

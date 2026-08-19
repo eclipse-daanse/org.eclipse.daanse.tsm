@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ModuleLoader } from '../ModuleLoader'
+import { containers, resetContainers, testLoader } from './helpers/moduleContainers'
 import type {
   ModuleContext,
   ModuleEvent,
@@ -9,8 +10,6 @@ import type {
   ServiceRegistryEvent
 } from '../types'
 
-interface GlobalWithWindow { window?: Record<string, unknown> }
-const globalRef = globalThis as GlobalWithWindow
 
 interface StubOptions {
   requires?: Array<{
@@ -51,7 +50,7 @@ function stub(loader: ModuleLoader, id: string, options: StubOptions = {}): Modu
     dependencies: options.dependencies
   }
 
-  globalRef.window![id] = {
+  containers[id] = {
     activate: (context: ModuleContext) => { options.onActivate?.(context.services) },
     deactivate: (context: ModuleContext) => { options.onDeactivate?.(context.services) },
     onServiceBound: (_context: ModuleContext, serviceId: string) => {
@@ -74,20 +73,17 @@ function collectEvents(loader: ModuleLoader): ModuleEvent[] {
 }
 
 describe('ModuleLoader - satisfaction lifecycle', () => {
-  let savedWindow: Record<string, unknown> | undefined
 
   beforeEach(() => {
-    savedWindow = globalRef.window
-    globalRef.window = {}
+    resetContainers()
   })
 
   afterEach(() => {
-    globalRef.window = savedWindow
   })
 
   describe('parking instead of failing', () => {
     it('should park a module whose required service is missing', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const events = collectEvents(loader)
       const manifest = stub(loader, 'map-module', { requires: [{ id: 'geo.service' }] })
 
@@ -106,7 +102,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should not run the activate hook of a parked module', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const onActivate = vi.fn()
       const manifest = stub(loader, 'map-module', {
         requires: [{ id: 'geo.service' }],
@@ -120,7 +116,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should activate the module once the service appears', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const registry = loader.getServiceRegistry()
       const onActivate = vi.fn()
       const manifest = stub(loader, 'map-module', {
@@ -140,7 +136,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should ignore missing optional services', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const manifest = stub(loader, 'map-module', {
         requires: [{ id: 'geo.service', optional: true }]
       })
@@ -152,7 +148,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should still fail fast with strictRequirements', async () => {
-      const loader = new ModuleLoader({ strictRequirements: true })
+      const loader = testLoader({ strictRequirements: true })
       const manifest = stub(loader, 'map-module', { requires: [{ id: 'geo.service' }] })
 
       await expect(loader.loadModule(manifest)).rejects.toThrow(
@@ -162,7 +158,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should be idempotent for a parked module', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const onActivate = vi.fn()
       const manifest = stub(loader, 'map-module', {
         requires: [{ id: 'geo.service' }],
@@ -180,7 +176,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
 
   describe('withdrawal', () => {
     it('should deactivate and park an active module when its service goes away', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const registry = loader.getServiceRegistry()
       registry.register('geo.service', { locate: () => 'here' })
 
@@ -201,7 +197,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should bring the module back when the service returns', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const registry = loader.getServiceRegistry()
       registry.register('geo.service', {})
 
@@ -225,7 +221,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should keep a module active when only an optional service goes away', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const registry = loader.getServiceRegistry()
       registry.register('geo.service', {})
 
@@ -242,7 +238,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should withdraw the services of a module it tears down', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const registry = loader.getServiceRegistry()
       registry.register('geo.service', {})
 
@@ -265,7 +261,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
 
   describe('cascade', () => {
     async function threeLevelSetup() {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const registry = loader.getServiceRegistry()
 
       // Registered back to front on purpose: provider -> middle -> consumer is
@@ -320,7 +316,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should park a module whose dependency is parked', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const registry = loader.getServiceRegistry()
 
       stub(loader, 'base', { requires: [{ id: 'geo.service' }] })
@@ -342,7 +338,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
 
   describe('diagnostics', () => {
     it('should report what each waiting module waits for', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
 
       stub(loader, 'base', { requires: [{ id: 'geo.service' }] })
       stub(loader, 'feature', { dependencies: ['base'] })
@@ -358,7 +354,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should leave a settled state behind after loadAll', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const registry = loader.getServiceRegistry()
       registry.register('s1', {})
 
@@ -379,7 +375,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
 
   describe('unloading and reloading', () => {
     it('should keep a dependent parked after its dependency is unloaded', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const registry = loader.getServiceRegistry()
 
       stub(loader, 'base', { requires: [{ id: 'geo.service' }] })
@@ -401,7 +397,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should park consumers when an unloaded module took its services with it', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
 
       stub(loader, 'provider', {
         provides: ['s1'],
@@ -418,7 +414,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should refuse to unload a module that active modules depend on', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
 
       stub(loader, 'base', {})
       stub(loader, 'feature', { dependencies: ['base'] })
@@ -430,7 +426,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should bring a parked dependent back when the dependency returns', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const registry = loader.getServiceRegistry()
 
       // base waits for a service, so feature waits for base
@@ -455,7 +451,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
 
   describe('dependency cycles', () => {
     it('should park mutually dependent modules instead of overflowing the stack', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
 
       stub(loader, 'a', { dependencies: ['b'] })
       stub(loader, 'b', { dependencies: ['a'] })
@@ -473,7 +469,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should not report an error for a dependency cycle', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const events = collectEvents(loader)
 
       stub(loader, 'a', { dependencies: ['b'] })
@@ -487,7 +483,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
 
   describe('asynchronous hooks', () => {
     it('should serialize activations that await inside the hook', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const registry = loader.getServiceRegistry()
       const sequence: string[] = []
 
@@ -501,7 +497,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
           requiresService: requires.map(serviceId => ({ id: serviceId })),
           provides: provides ? [{ id: provides }] : undefined
         }
-        globalRef.window![id] = {
+        containers[id] = {
           activate: async (context: ModuleContext) => {
             sequence.push(`${id}:start`)
             await new Promise(resolve => setTimeout(resolve, 5))
@@ -542,7 +538,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should settle a cascade triggered while another load is in flight', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const registry = loader.getServiceRegistry()
 
       const slow: ModuleManifest = {
@@ -550,7 +546,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
         entry: 'http://localhost/slow/remoteEntry.js', exports: {},
         requiresService: [{ id: 'late.service' }]
       }
-      globalRef.window!['slow'] = {
+      containers['slow'] = {
         activate: async () => { await new Promise(resolve => setTimeout(resolve, 10)) }
       }
       loader.register([slow])
@@ -569,7 +565,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
 
   describe('dynamic policy', () => {
     it('should keep the module active and notify it when the service goes away', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const registry = loader.getServiceRegistry()
       registry.register('geo.service', {})
 
@@ -592,7 +588,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should notify when the service comes back', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const registry = loader.getServiceRegistry()
       registry.register('geo.service', {})
 
@@ -616,7 +612,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should still require a mandatory dynamic service to activate', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const registry = loader.getServiceRegistry()
 
       const manifest = stub(loader, 'map-module', {
@@ -634,7 +630,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should tear down for a static requirement even when a dynamic one is fine', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const registry = loader.getServiceRegistry()
       registry.register('static.service', {})
       registry.register('dynamic.service', {})
@@ -658,7 +654,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should keep the module active when a dynamic hook throws', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const registry = loader.getServiceRegistry()
       registry.register('geo.service', {})
 
@@ -678,7 +674,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
 
   describe('observing the registry from inside a module', () => {
     it('should let a module react to services it did not declare', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const registry = loader.getServiceRegistry()
       const seen: string[] = []
 
@@ -703,7 +699,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should drop the listener when the module is deactivated', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const registry = loader.getServiceRegistry()
       const seen: string[] = []
 
@@ -729,7 +725,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
 
   describe('several providers for one service', () => {
     it('should keep the consumer active when a stand-in takes over', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const registry = loader.getServiceRegistry()
       const onDeactivate = vi.fn()
 
@@ -757,7 +753,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should apply the ranking declared in the manifest', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const registry = loader.getServiceRegistry()
 
       stub(loader, 'strong', {
@@ -776,7 +772,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should only withdraw its own registration when a module is torn down', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const registry = loader.getServiceRegistry()
 
       stub(loader, 'a', {
@@ -797,7 +793,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should tear the consumer down only when the last provider is gone', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
 
       stub(loader, 'a', {
         provides: ['widget.chart'],
@@ -818,7 +814,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should not require a provider for 0..n', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
 
       stub(loader, 'palette', { requires: [{ id: 'widget.chart', cardinality: '0..n' }] })
       await loader.loadAll()
@@ -827,7 +823,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should notify a dynamic collector when the set grows or shrinks', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const bound: string[] = []
       const unbound: string[] = []
 
@@ -862,7 +858,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should let a collector enumerate providers without instantiating them', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const built: string[] = []
       let collected: string[] = []
 
@@ -896,7 +892,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
 
   describe('reluctant and greedy', () => {
     async function withDefaultProvider(consumer: StubOptions) {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       stub(loader, 'default-geo', {
         provides: ['geo.service'],
         onActivate: services => { services.register('geo.service', { tag: 'default' }) }
@@ -1001,7 +997,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
 
   describe('target filters', () => {
     it('should wait for a provider that matches the filter', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
 
       stub(loader, 'table-widget', {
         provides: [{ id: 'widget', properties: { kind: 'table' } }],
@@ -1028,7 +1024,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should collect only matching providers for 0..n', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       let collected: string[] = []
 
       stub(loader, 'chart', {
@@ -1055,7 +1051,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should stay active when a non-matching provider goes away', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
 
       stub(loader, 'chart', {
         provides: [{ id: 'widget', properties: { kind: 'chart' } }],
@@ -1076,7 +1072,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should park when the matching provider goes away', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
 
       stub(loader, 'chart', {
         provides: [{ id: 'widget', properties: { kind: 'chart' } }],
@@ -1102,7 +1098,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
 
   describe('declaration drift', () => {
     it('should report services a module declared but never registered', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const events = collectEvents(loader)
 
       // Declares two, registers one
@@ -1126,7 +1122,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should report nothing when the manifest is truthful', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
 
       stub(loader, 'search', {
         provides: ['ui.search'],
@@ -1139,7 +1135,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should forget a mismatch once the module is unloaded', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
 
       stub(loader, 'search', { provides: ['ui.search'] })
       await loader.loadAll()
@@ -1174,10 +1170,10 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
         requiresService: [{ id: 'geo.service' }]
       }
 
-      globalRef.window!['provider'] = {
+      containers['provider'] = {
         activate: (context: ModuleContext) => { context.services.register('geo.service', {}) }
       }
-      globalRef.window!['consumer'] = {
+      containers['consumer'] = {
         activate: async () => { await new Promise(resolve => setTimeout(resolve, 20)) }
       }
       loader.register([provider, consumer])
@@ -1186,7 +1182,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     }
 
     it('should leave the cascade running by default', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const { provider, consumer } = slowChain(loader)
       await loader.loadModule(consumer)
 
@@ -1200,7 +1196,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should wait for the cascade when asked to', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const { provider, consumer } = slowChain(loader)
       await loader.loadModule(consumer)
 
@@ -1212,7 +1208,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should be harmless when nothing is waiting', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const manifest = stub(loader, 'solo', {})
 
       const loaded = await loader.loadModule(manifest, { awaitCascade: true })
@@ -1221,7 +1217,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should also wait when the module itself is parked', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const manifest = stub(loader, 'waiting', { requires: [{ id: 'absent.service' }] })
 
       const loaded = await loader.loadModule(manifest, { awaitCascade: true })
@@ -1235,12 +1231,12 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
 
   describe('loading a manifest that was never registered', () => {
     it('should make it known to the loader', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const manifest: ModuleManifest = {
         id: 'ad-hoc', name: 'ad-hoc', version: '1.0.0',
         entry: 'http://localhost/ad-hoc/remoteEntry.js', exports: {}
       }
-      globalRef.window!['ad-hoc'] = { activate: vi.fn() }
+      containers['ad-hoc'] = { activate: vi.fn() }
 
       await loader.loadModule(manifest)
 
@@ -1249,14 +1245,14 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should apply properties and ranking declared in that manifest', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const registry = loader.getServiceRegistry()
       const manifest: ModuleManifest = {
         id: 'ad-hoc', name: 'ad-hoc', version: '1.0.0',
         entry: 'http://localhost/ad-hoc/remoteEntry.js', exports: {},
         provides: [{ id: 'ui.component', ranking: 7, properties: { region: 'main' } }]
       }
-      globalRef.window!['ad-hoc'] = {
+      containers['ad-hoc'] = {
         activate: (context: ModuleContext) => { context.services.register('ui.component', {}) }
       }
 
@@ -1270,7 +1266,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
 
   describe('disable and enable', () => {
     it('should stop a module and keep it stopped', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const onDeactivate = vi.fn()
       stub(loader, 'alpha', { onDeactivate })
       await loader.loadAll()
@@ -1284,7 +1280,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should not let a reconcile bring a disabled module back', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const registry = loader.getServiceRegistry()
       registry.register('geo.service', {})
       const onActivate = vi.fn()
@@ -1304,7 +1300,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should park consumers when a disabled module took its service along', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       stub(loader, 'provider', {
         provides: ['geo.service'],
         onActivate: services => { services.register('geo.service', {}) }
@@ -1319,7 +1315,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should activate a module again on enable', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const onActivate = vi.fn()
       stub(loader, 'alpha', { onActivate })
       await loader.loadAll()
@@ -1333,7 +1329,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should leave an enabled module waiting when its service is gone', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const registry = loader.getServiceRegistry()
       registry.register('geo.service', {})
       stub(loader, 'alpha', { requires: [{ id: 'geo.service' }] })
@@ -1351,7 +1347,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should restore the whole chain on enable', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       stub(loader, 'provider', {
         provides: ['geo.service'],
         onActivate: services => { services.register('geo.service', {}) }
@@ -1367,7 +1363,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should skip a disabled module in loadAll instead of failing', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const onActivate = vi.fn()
       stub(loader, 'alpha', { onActivate })
       stub(loader, 'beta', {})
@@ -1381,7 +1377,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should reject loading a module that was disabled before it ever ran', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const manifest = stub(loader, 'alpha', {})
       await loader.disableModule('alpha')
 
@@ -1389,7 +1385,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should load a module that is enabled before it ever ran', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const onActivate = vi.fn()
       stub(loader, 'alpha', { onActivate })
       await loader.disableModule('alpha')
@@ -1402,7 +1398,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should refuse to load a disabled module', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const manifest = stub(loader, 'alpha', {})
       await loader.loadAll()
       await loader.disableModule('alpha')
@@ -1413,7 +1409,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should report an unknown module and a module that was not disabled', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       stub(loader, 'alpha', {})
 
       expect(await loader.disableModule('ghost')).toBe(false)
@@ -1421,7 +1417,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should forget the flag when the module is unloaded', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       stub(loader, 'alpha', {})
       await loader.loadAll()
       await loader.disableModule('alpha')
@@ -1434,7 +1430,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
 
   describe('getServiceConsumers', () => {
     it('should name the modules that asked for a service', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       stub(loader, 'map', { requires: [{ id: 'geo.service' }] })
       stub(loader, 'chart', {
         requires: [{ id: 'geo.service', optional: true, policy: 'dynamic' }]
@@ -1450,7 +1446,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should include modules that were never loaded', () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       stub(loader, 'map', { requires: [{ id: 'geo.service' }] })
 
       expect(loader.getServiceConsumers('geo.service')).toEqual([
@@ -1459,32 +1455,19 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should return nothing for a service nobody declared', () => {
-      expect(new ModuleLoader().getServiceConsumers('nothing')).toEqual([])
+      expect(testLoader().getServiceConsumers('nothing')).toEqual([])
     })
   })
 
   describe('hot reload', () => {
     /**
-     * unloadModule() removes the container from window, and loadEntry() would
-     * then try a real import. A proxy that survives the delete stands in for a
-     * browser, where re-importing yields a module again.
+     * No stand-in for a browser needed any more: reloadModule() keeps a
+     * handed-over container across the unload, so a module with no fetchable URL
+     * restarts on the same code. That used to require a window proxy surviving
+     * the delete.
      */
-    function persistentWindow() {
-      const containers = new Map<string, unknown>()
-      globalRef.window = new Proxy({}, {
-        get: (_target, property) => containers.get(String(property)),
-        set: (_target, property, value) => {
-          containers.set(String(property), value)
-          return true
-        },
-        deleteProperty: () => true,
-        has: (_target, property) => containers.has(String(property))
-      }) as Record<string, unknown>
-    }
-
     it('should reload the whole dependent chain, not just the first level', async () => {
-      persistentWindow()
-      const loader = new ModuleLoader({ hotReload: true })
+      const loader = testLoader({ hotReload: true })
       const activations: string[] = []
 
       const base = stub(loader, 'base', { onActivate: () => { activations.push('base') } })
@@ -1508,12 +1491,13 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
         'base', 'middle', 'leaf'
       ])
       expect(loader.getModule('leaf')?.state).toBe('active')
-      expect(base.entry).toContain('?t=')
+      // No cache buster: this module was handed over, so there is no URL to
+      // re-fetch and changing the manifest would say something untrue
+      expect(base.entry).not.toContain('?t=')
     })
 
     it('should include a parked dependent in the reload', async () => {
-      persistentWindow()
-      const loader = new ModuleLoader({ hotReload: true })
+      const loader = testLoader({ hotReload: true })
       const registry = loader.getServiceRegistry()
       const activations: string[] = []
 
@@ -1544,8 +1528,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should refuse to reload without hot reload enabled', async () => {
-      persistentWindow()
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       stub(loader, 'base', {})
       await loader.loadAll()
 
@@ -1553,8 +1536,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
     })
 
     it('should leave a settled state behind', async () => {
-      persistentWindow()
-      const loader = new ModuleLoader({ hotReload: true })
+      const loader = testLoader({ hotReload: true })
 
       stub(loader, 'provider', {
         provides: ['s1'],
@@ -1573,7 +1555,7 @@ describe('ModuleLoader - satisfaction lifecycle', () => {
 
   describe('loop protection', () => {
     it('should give up on a module that keeps flipping within one cascade', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const registry = loader.getServiceRegistry()
       registry.register('flip.service', {})
 
