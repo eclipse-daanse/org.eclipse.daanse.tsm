@@ -1,9 +1,19 @@
 # OSGi specifications
 
-Local copies of the chapters tsm is modelled on, so a question about intended
-behaviour can be answered by reading rather than by guessing.
+The chapters tsm is modelled on, so a question about intended behaviour can be
+answered by reading rather than by guessing.
 
-**Release 8**, downloaded from <https://docs.osgi.org/specification/>. Open the
+```bash
+npm run docs:osgi              # fetches what is missing
+npm run docs:osgi -- --force   # fetches again
+```
+
+The documents themselves are **not in the repository** — 6.5 MB of material nobody
+here wrote, which the licence permits copying but not modifying, so there is
+nothing to maintain and no reason to carry it in the history. This table is ours
+and stays.
+
+**Release 8**, from <https://docs.osgi.org/specification/>. Once fetched, open the
 `.html` files directly; each is self-contained.
 
 | File | Chapter | What tsm takes from it |
@@ -24,7 +34,8 @@ departs on purpose; the departures are named there rather than left implicit.
 
 These documents are published under the **Eclipse Foundation Specification
 License – v1.0**, which permits copying and distribution provided the notices
-below travel with them. The full text is in [`LICENSE.html`](LICENSE.html).
+below travel with them — which is why the script fetches `LICENSE.html` alongside
+the chapters.
 
 > Copyright © 2020 Eclipse Foundation, Inc.
 > <https://www.eclipse.org/legal/efsl.php>
@@ -34,6 +45,6 @@ Originals:
 - <https://docs.osgi.org/specification/osgi.core/8.0.0/>
 - <https://docs.osgi.org/specification/osgi.cmpn/8.0.0/>
 
-The licence grants no right to create modified versions of these documents, so
-they are kept here verbatim. Anything tsm has to say about them belongs in
+The licence grants no right to create modified versions, so the script downloads
+them verbatim and changes nothing. Anything tsm has to say about them belongs in
 `SPEC.md`.

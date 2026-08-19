@@ -31,3 +31,9 @@ npm-debug.log*
 
 # Feature requests
 feature_requests/
+
+# OSGi specifications: downloaded with `npm run docs:osgi`, not kept here.
+# Their licence permits copying but not modification, so there is nothing to
+# maintain — and 6.5 MB of material nobody here wrote does not belong in the
+# history. docs/osgi/README.md stays, since it is ours.
+docs/osgi/*.html
