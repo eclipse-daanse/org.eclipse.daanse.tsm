@@ -31,6 +31,7 @@
     "dev": "tsc --watch",
     "demo": "vite",
     "example:config": "vite examples/config",
+    "example:shared": "npm run build && npm --prefix examples/shared-libraries/plugin run build && vite examples/shared-libraries/app",
     "example:graph": "vite examples/graph",
     "example:whiteboard": "vite examples/whiteboard",
     "example:workbench": "vite examples/workbench",

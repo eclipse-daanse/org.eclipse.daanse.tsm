@@ -460,10 +460,17 @@ export interface CreateExternalsOptions {
   libraryProviders?: string[]
 
   /**
-   * Packages to externalize on top of the manifest's `sharedDependencies`.
+   * Packages to externalize **in addition** to the manifest's
+   * `sharedDependencies` and to tsm itself.
    *
-   * Defaults to the tsm package itself, which the host always supplies. Anything
-   * else belongs in the manifest, where the loader can see it too.
+   * For the transitive ones a module never imports by name but a bundler may pull
+   * in anyway: with `vue` shared, `@vue/runtime-core` is the same library under
+   * another package name, and bundling it would produce the second instance that
+   * sharing exists to avoid. A scope prefix covers its packages:
+   * `['@vue', '@primevue']`.
+   *
+   * (With a module id instead of a manifest this replaces the default list, as
+   * it did before.)
    */
   alwaysExternal?: string[]
 
@@ -546,9 +553,12 @@ export function createTsmExternals(
     id === packageName || id.startsWith(`${packageName}/`)
 
   if (typeof source !== 'string') {
+    // Additive, not replacing: tsm itself must stay external whatever else is
+    // listed, and forgetting to repeat it would be a silent trap
     const external = [
       ...(source.sharedDependencies ?? []).map(dependency => dependency.id),
-      ...(options.alwaysExternal ?? ALWAYS_EXTERNAL)
+      ...ALWAYS_EXTERNAL,
+      ...(options.alwaysExternal ?? [])
     ]
     return (id: string): boolean => external.some(packageName => covers(packageName, id))
   }

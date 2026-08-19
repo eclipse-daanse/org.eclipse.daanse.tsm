@@ -59,6 +59,17 @@ describe('createTsmExternals', () => {
       expect(external('@eclipse-daanse/tsm/decorators')).toBe(true)
     })
 
+    it('should add to the defaults rather than replace them', () => {
+      // A transitive package under another name: with vue shared, bundling
+      // @vue/runtime-core would create the second instance sharing avoids
+      const external = createTsmExternals(manifest, { alwaysExternal: ['@vue'] })
+
+      expect(external('@vue/runtime-core')).toBe(true)
+      // And tsm stays external without having to be repeated
+      expect(external('@eclipse-daanse/tsm')).toBe(true)
+      expect(external('vue')).toBe(true)
+    })
+
     it('should let a library provider bundle what it provides', () => {
       // A provider does not list what it provides in its own sharedDependencies,
       // so it falls out of the external set by itself
