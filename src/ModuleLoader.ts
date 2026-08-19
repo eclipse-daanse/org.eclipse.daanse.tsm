@@ -49,44 +49,22 @@ import {
 import { METATYPE_SERVICE_ID, type MetatypeRegistry } from './Metatype.js'
 import { isTsmRuntimeAvailable, tsmRuntime } from './TsmRuntime.js'
 
-// Type for Module Federation containers
-declare global {
-  interface Window {
-    [key: string]: ModuleFederationContainer | undefined
-  }
-}
 
-interface ModuleFederationContainer {
-  get(module: string): Promise<() => unknown>
-  init(shareScope: unknown): Promise<void>
-}
 
 /**
- * Whether a global value can plausibly be a module container: a Module
- * Federation remote, or an ES module namespace with lifecycle hooks or exports.
+ * Reject what cannot be a module namespace.
  *
- * Needed because `window[moduleId]` is not a namespace of its own — an element
- * with a matching `id` lands there too.
+ * Only for containers handed over explicitly — and it says so out loud rather
+ * than silently falling through to the URL, because somebody who passes a
+ * container means it.
  */
-function isModuleContainer(value: unknown): boolean {
+function assertContainer(value: unknown, moduleId: string): void {
   if (value === null || (typeof value !== 'object' && typeof value !== 'function')) {
-    return false
+    throw new Error(
+      `Container for module '${moduleId}' is ${value === null ? 'null' : typeof value}; ` +
+      `expected a module namespace, as an import() resolves to`
+    )
   }
-
-  // A DOM node is never a container, however promising its shape
-  if (typeof (value as { nodeType?: unknown }).nodeType === 'number') {
-    return false
-  }
-
-  const candidate = value as Record<string, unknown>
-  if (typeof candidate.get === 'function' && typeof candidate.init === 'function') {
-    return true
-  }
-
-  return typeof candidate.activate === 'function'
-    || typeof candidate.deactivate === 'function'
-    || candidate.default !== undefined
-    || Object.keys(candidate).length > 0
 }
 
 /**
@@ -113,7 +91,8 @@ const DEFAULT_OPTIONS: Required<ModuleLoaderOptions> = {
   logger: undefined as unknown as ModuleLogger,
   configurationAdmin: undefined as unknown as ConfigurationAdmin,
   metatype: undefined as unknown as MetatypeRegistry,
-  sharedLibraries: 'runtime'
+  sharedLibraries: 'runtime',
+  entryResolver: undefined as unknown as (manifest: ModuleManifest) => unknown
 }
 
 /**
@@ -264,6 +243,11 @@ export class ModuleLoader {
   /** Where configuration schemas are collected, when the host supplied a registry */
   private metatype?: MetatypeRegistry
   private configurationListener?: { onConfigurationEvent(event: ConfigurationEvent): void }
+  /**
+   * Containers handed over instead of fetched, kept so a reload can restart a
+   * module that has no URL to fetch.
+   */
+  private preloaded = new Map<string, unknown>()
   /** Module-scoped registry facades, so a teardown can withdraw what a module registered */
   private scopes = new Map<string, ScopedServiceRegistry>()
   /** Serializes reactions to registry events; they are async, the events are not */
@@ -767,6 +751,7 @@ export class ModuleLoader {
     this.boundRegistrations.clear()
     this.declarationMismatches.clear()
     this.disabled.clear()
+    this.preloaded.clear()
     this.componentRuntimes.clear()
 
     if (this.configurationListener) {
@@ -962,10 +947,14 @@ export class ModuleLoader {
    *   set from a lifecycle hook: a hook runs inside the cascade it would then
    *   wait for. There is no timeout — the loader knows how many reactions are
    *   outstanding, so waiting is exact rather than a guess.
+   * @param options.container A module that is already imported, handed over
+   *   instead of fetched from `manifest.entry`. For an application still bundling
+   *   its modules with the host, and for tests, which then need no URL at all.
+   *   `ModuleLoaderOptions.entryResolver` does the same for many modules at once.
    */
   async loadModule(
     manifest: ModuleManifest,
-    options: { awaitCascade?: boolean } = {}
+    options: { awaitCascade?: boolean; container?: unknown } = {}
   ): Promise<LoadedModule> {
     // A manifest handed in directly becomes known, so the rest of the loader can
     // see it: the module scope reads declared properties and rankings from here,
@@ -1020,7 +1009,7 @@ export class ModuleLoader {
         timestamp: new Date()
       })
 
-      await this.doLoad(loadedModule)
+      await this.doLoad(loadedModule, options.container)
 
       loadedModule.state = 'activating'
       this.emit({
@@ -1160,11 +1149,10 @@ export class ModuleLoader {
   /**
    * Actually load the module entry point
    */
-  private async doLoad(loadedModule: LoadedModule): Promise<void> {
+  private async doLoad(loadedModule: LoadedModule, container?: unknown): Promise<void> {
     const { manifest } = loadedModule
 
-    // Dynamic import of the entry point
-    const entryModule = await this.loadEntry(manifest.id, manifest.entry)
+    const entryModule = await this.loadEntry(manifest, container)
 
     // Store container reference (raw ES module for require())
     loadedModule.container = entryModule
@@ -1207,56 +1195,42 @@ export class ModuleLoader {
   /**
    * Load module entry point via dynamic import
    */
-  private async loadEntry(moduleId: string, entryUrl: string): Promise<unknown> {
-    // Check if already loaded (for MF remotes)
-    const existing = window[moduleId]
-    if (existing !== undefined && isModuleContainer(existing)) {
-      return existing
-    }
+  /**
+   * Get hold of the module: from a container that was handed over, or by
+   * importing its entry.
+   *
+   * Order: the container passed to `loadModule`, then what `entryResolver`
+   * answers, then the URL. Nothing consults a global — a module used to be handed
+   * over through `window[moduleId]`, which cost collisions with DOM ids and made
+   * the loader unusable in Node, where `window` does not exist.
+   */
+  private async loadEntry(manifest: ModuleManifest, container?: unknown): Promise<unknown> {
+    // `??` would treat a passed null as "nothing given" and quietly fetch the URL
+    // instead, hiding the mistake behind a network error
+    const handed = container !== undefined
+      ? container
+      : this.preloaded.get(manifest.id) ?? this.options.entryResolver?.(manifest)
 
-    // Something else sits under this name — a DOM element with a matching id, or
-    // a built-in property. The browser exposes every id as a global, so this is
-    // reachable by accident, and treating it as a container would activate a
-    // module that never ran.
-    const nameTaken = existing !== undefined
-    if (nameTaken) {
-      this.logger.warn(
-        `Global name '${moduleId}' is taken by something that is not a module container ` +
-        `(an element id?). The module is imported, but Module Federation lookups by ` +
-        `this name will not work — consider renaming the module or the element.`
-      )
+    if (handed !== undefined) {
+      assertContainer(handed, manifest.id)
+      // Remembered so a reload can restart a module that has no URL to fetch
+      this.preloaded.set(manifest.id, handed)
+      return handed
     }
 
     try {
-      // Dynamic import
-      const module = await import(/* @vite-ignore */ entryUrl)
-      const container = module.default ?? module
-
-      // Store in window for MF compatibility, unless that would overwrite
-      // whatever already holds the name
-      if (!nameTaken) {
-        window[moduleId] = container as ModuleFederationContainer
-      }
-      return container
-
+      const module = await import(/* @vite-ignore */ manifest.entry)
+      return (module as { default?: unknown }).default ?? module
     } catch (error) {
-      throw new Error(`Failed to load module entry: ${entryUrl} - ${error}`)
+      throw new Error(`Failed to load module entry: ${manifest.entry} - ${error}`)
     }
   }
+
 
   /**
    * Load a specific export from a module
    */
   private async loadExport(moduleId: string, exportPath: string): Promise<unknown> {
-    const container = window[moduleId] as ModuleFederationContainer | undefined
-
-    if (container && typeof container.get === 'function') {
-      // Module Federation style
-      const factory = await container.get(exportPath)
-      return factory()
-    }
-
-    // Already loaded as regular module
     const loadedModule = this.modules.get(moduleId)
     if (loadedModule?.exports.has(exportPath)) {
       return loadedModule.exports.get(exportPath)
@@ -1957,7 +1931,9 @@ export class ModuleLoader {
     this.modules.delete(moduleId)
     this.scopes.delete(moduleId)
     this.disabled.delete(moduleId)
-    delete window[moduleId]
+    // Let go of a handed-over container: keeping it would hold the module object
+    // alive and hand the old one back on a later load
+    this.preloaded.delete(moduleId)
 
     this.emit({
       type: 'unloaded',
@@ -1990,6 +1966,16 @@ export class ModuleLoader {
 
     this.logger.info(`Reloading module ${moduleId}...`)
 
+    // Unloading lets go of a handed-over container, which is right when a module
+    // goes for good — but a reload has to restart the same code, and there may be
+    // no URL to fetch it from
+    const handedOver = new Map(
+      [moduleId, ...this.resolver
+        .getTransitiveDependents(moduleId, Array.from(this.manifests.values()))]
+        .filter(id => this.preloaded.has(id))
+        .map(id => [id, this.preloaded.get(id)] as const)
+    )
+
     // The whole chain, not just the first level: a module two steps away would
     // otherwise keep running against replaced code. Parked modules count too —
     // they hold the old container and would activate with it later.
@@ -2010,18 +1996,19 @@ export class ModuleLoader {
       throw new Error(`Cannot reload ${moduleId}: it could not be unloaded`)
     }
 
-    // Reload with cache bust
+    // Reload with cache bust — only relevant for a module that has a URL
     const manifest = this.manifests.get(moduleId)!
-    manifest.entry = `${manifest.entry.split('?')[0]}?t=${Date.now()}`
+    if (!handedOver.has(moduleId)) {
+      manifest.entry = `${manifest.entry.split('?')[0]}?t=${Date.now()}`
+    }
 
-    // Reload
-    await this.loadModule(manifest)
+    await this.loadModule(manifest, { container: handedOver.get(moduleId) })
 
-    // Reload the chain, nearest first
+    // Reload the chain, nearest first — each with its own container where it had one
     for (const dependentId of affected) {
       const dependentManifest = this.manifests.get(dependentId)
       if (dependentManifest) {
-        await this.loadModule(dependentManifest)
+        await this.loadModule(dependentManifest, { container: handedOver.get(dependentId) })
       }
     }
 

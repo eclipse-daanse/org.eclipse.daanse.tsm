@@ -1,6 +1,7 @@
 import 'reflect-metadata'
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { ModuleLoader } from '../ModuleLoader'
+import { containers, resetContainers, testLoader } from './helpers/moduleContainers'
 import { ConfigurationAdmin } from '../ConfigurationAdmin'
 import { MetatypeRegistry } from '../Metatype'
 import { bundles } from '../../examples/config/src/manifests'
@@ -25,24 +26,21 @@ import { DefaultServiceRegistry } from '../ServiceRegistry'
  * The configuration example, asserted rather than clicked: what the page shows is
  * what these expectations say.
  */
-interface GlobalWithWindow { window?: Record<string, unknown> }
-const globalRef = globalThis as GlobalWithWindow
 
 describe('examples/config', () => {
-  let savedWindow: Record<string, unknown> | undefined
   let admin: ConfigurationAdmin
   let services: DefaultServiceRegistry
   let loader: ModuleLoader
   let reported: string[]
 
   beforeEach(() => {
-    savedWindow = globalRef.window
-    globalRef.window = { tiles, clock, sources, map }
+    resetContainers()
+    Object.assign(containers, { tiles, clock, sources, map })
 
     const metatype = new MetatypeRegistry()
     admin = new ConfigurationAdmin({ metatype })
     services = new DefaultServiceRegistry()
-    loader = new ModuleLoader({
+    loader = testLoader({
       serviceRegistry: services,
       configurationAdmin: admin,
       metatype
@@ -55,7 +53,6 @@ describe('examples/config', () => {
   })
 
   afterEach(() => {
-    globalRef.window = savedWindow
   })
 
   it('should keep the bundle active while its component waits for configuration', async () => {

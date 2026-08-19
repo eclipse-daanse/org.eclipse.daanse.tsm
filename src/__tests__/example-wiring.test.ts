@@ -1,6 +1,7 @@
 import 'reflect-metadata'
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { ModuleLoader } from '../ModuleLoader'
+import { containers, resetContainers, testLoader } from './helpers/moduleContainers'
 import { DefaultServiceRegistry } from '../ServiceRegistry'
 import { resolveWiring } from '../capabilities'
 import { LOG_SERVICE, THEME_NAMESPACE, type Log } from '../../examples/wiring/src/contracts'
@@ -19,8 +20,6 @@ import type { ModuleManifest } from '../types'
  * The wiring example, asserted. Almost everything here needs no loader at all —
  * which is the example's point: resolution reads manifests.
  */
-interface GlobalWithWindow { window?: Record<string, unknown> }
-const globalRef = globalThis as GlobalWithWindow
 
 function report(manifests: ModuleManifest[], moduleId: string) {
   return resolveWiring(manifests).requirements.filter(entry => entry.moduleId === moduleId)
@@ -94,13 +93,12 @@ describe('examples/wiring', () => {
   })
 
   describe('and then loading', () => {
-    let savedWindow: Record<string, unknown> | undefined
     let reported: string[]
     let loader: ModuleLoader
 
     beforeEach(() => {
-      savedWindow = globalRef.window
-      globalRef.window = {
+      resetContainers()
+    Object.assign(containers, {
         'theme-dark': themeDark,
         'theme-light': themeLight,
         editor,
@@ -109,17 +107,16 @@ describe('examples/wiring', () => {
         exporter,
         workspace,
         pdf
-      }
+      })
       reported = []
       const services = new DefaultServiceRegistry()
-      loader = new ModuleLoader({ serviceRegistry: services })
+      loader = testLoader({ serviceRegistry: services })
       const log: Log = { write: (source, message) => reported.push(`${source}: ${message}`) }
       services.register(LOG_SERVICE, log, { providedBy: 'host' })
     })
 
     afterEach(() => {
-      globalRef.window = savedWindow
-    })
+      })
 
     it('should run everything that resolves', async () => {
       const resolution = resolveWiring(startup)

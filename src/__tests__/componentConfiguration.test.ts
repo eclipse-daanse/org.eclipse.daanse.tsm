@@ -1,6 +1,7 @@
 import 'reflect-metadata'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { ModuleLoader } from '../ModuleLoader'
+import { containers, resetContainers, testLoader } from './helpers/moduleContainers'
 import {
   ConfigurationAdmin,
   MemoryConfigurationStore,
@@ -16,8 +17,6 @@ import type { ComponentContext, ModuleManifest } from '../types'
  * and SCR; here it runs through one loader, which is why these tests watch the
  * module state as closely as the component's.
  */
-interface GlobalWithWindow { window?: Record<string, unknown> }
-const globalRef = globalThis as GlobalWithWindow
 
 function manifest(id: string, extra: Partial<ModuleManifest> = {}): ModuleManifest {
   return {
@@ -31,21 +30,18 @@ function manifest(id: string, extra: Partial<ModuleManifest> = {}): ModuleManife
 }
 
 describe('component configuration', () => {
-  let savedWindow: Record<string, unknown> | undefined
   let admin: ConfigurationAdmin
 
   beforeEach(() => {
-    savedWindow = globalRef.window
-    globalRef.window = {}
+    resetContainers()
     admin = new ConfigurationAdmin()
   })
 
   afterEach(() => {
-    globalRef.window = savedWindow
   })
 
   function loaderWith(admin?: ConfigurationAdmin): ModuleLoader {
-    return new ModuleLoader({ configurationAdmin: admin })
+    return testLoader({ configurationAdmin: admin })
   }
 
   describe('policy optional', () => {
@@ -60,7 +56,7 @@ describe('component configuration', () => {
       }
 
       const loader = loaderWith(admin)
-      globalRef.window!.tiles = { RasterTiles }
+      containers.tiles = { RasterTiles }
 
       await loader.loadModule(manifest('tiles'))
 
@@ -81,7 +77,7 @@ describe('component configuration', () => {
 
       await admin.getConfiguration('demo.tiles').update({ url: 'https://a/{z}', zoom: 12 })
       const loader = loaderWith(admin)
-      globalRef.window!.tiles = { RasterTiles }
+      containers.tiles = { RasterTiles }
 
       await loader.loadModule(manifest('tiles'))
 
@@ -100,7 +96,7 @@ describe('component configuration', () => {
 
       await admin.getConfiguration('RasterTiles').update({ url: 'by-class-name' })
       const loader = loaderWith(admin)
-      globalRef.window!.tiles = { RasterTiles }
+      containers.tiles = { RasterTiles }
 
       await loader.loadModule(manifest('tiles'))
 
@@ -120,7 +116,7 @@ describe('component configuration', () => {
       await admin.getConfiguration('demo.shared').update({ url: 'shared', retina: true })
       await admin.getConfiguration('demo.tiles').update({ url: 'specific' })
       const loader = loaderWith(admin)
-      globalRef.window!.tiles = { RasterTiles }
+      containers.tiles = { RasterTiles }
 
       await loader.loadModule(manifest('tiles'))
 
@@ -133,7 +129,7 @@ describe('component configuration', () => {
 
       await admin.getConfiguration('RasterTiles').update({ zone: 'main' })
       const loader = loaderWith(admin)
-      globalRef.window!.tiles = { RasterTiles }
+      containers.tiles = { RasterTiles }
 
       await loader.loadModule(manifest('tiles'))
 
@@ -147,7 +143,7 @@ describe('component configuration', () => {
 
       await admin.getConfiguration('RasterTiles').update({ kind: 'vector' })
       const loader = loaderWith(admin)
-      globalRef.window!.tiles = { RasterTiles }
+      containers.tiles = { RasterTiles }
 
       await loader.loadModule(manifest('tiles'))
 
@@ -167,7 +163,7 @@ describe('component configuration', () => {
 
       await admin.getConfiguration('RasterTiles').update({ url: 'a', '.token': 'secret' })
       const loader = loaderWith(admin)
-      globalRef.window!.tiles = { RasterTiles }
+      containers.tiles = { RasterTiles }
 
       await loader.loadModule(manifest('tiles'))
 
@@ -184,7 +180,7 @@ describe('component configuration', () => {
 
       await admin.getConfiguration('RasterTiles').update({ 'service.ranking': 50 })
       const loader = loaderWith(admin)
-      globalRef.window!.tiles = { RasterTiles }
+      containers.tiles = { RasterTiles }
 
       await loader.loadModule(manifest('tiles'))
 
@@ -202,7 +198,7 @@ describe('component configuration', () => {
       }
 
       const loader = loaderWith(admin)
-      globalRef.window!.tiles = { RasterTiles }
+      containers.tiles = { RasterTiles }
 
       await loader.loadModule(manifest('tiles'))
 
@@ -215,7 +211,7 @@ describe('component configuration', () => {
       class RasterTiles {}
 
       const loader = loaderWith(admin)
-      globalRef.window!.tiles = { RasterTiles }
+      containers.tiles = { RasterTiles }
 
       await loader.loadModule(manifest('tiles'))
 
@@ -230,7 +226,7 @@ describe('component configuration', () => {
       class RasterTiles {}
 
       const loader = loaderWith(admin)
-      globalRef.window!.tiles = { RasterTiles }
+      containers.tiles = { RasterTiles }
 
       await loader.loadModule(manifest('tiles'))
 
@@ -248,7 +244,7 @@ describe('component configuration', () => {
       }
 
       const loader = loaderWith(admin)
-      globalRef.window!.tiles = { RasterTiles }
+      containers.tiles = { RasterTiles }
       await loader.loadModule(manifest('tiles'))
 
       await admin.getConfiguration('RasterTiles').update({ url: 'https://a/{z}' })
@@ -269,7 +265,7 @@ describe('component configuration', () => {
 
       await admin.getConfiguration('RasterTiles').update({ url: 'a' })
       const loader = loaderWith(admin)
-      globalRef.window!.tiles = { RasterTiles }
+      containers.tiles = { RasterTiles }
       await loader.loadModule(manifest('tiles'))
 
       await admin.getConfiguration('RasterTiles').delete()
@@ -285,7 +281,7 @@ describe('component configuration', () => {
       class RasterTiles {}
 
       const loader = loaderWith(undefined)
-      globalRef.window!.tiles = { RasterTiles }
+      containers.tiles = { RasterTiles }
 
       await loader.loadModule(manifest('tiles'))
 
@@ -299,7 +295,7 @@ describe('component configuration', () => {
       class RasterTiles {}
 
       const loader = loaderWith(admin)
-      globalRef.window!.tiles = { RasterTiles }
+      containers.tiles = { RasterTiles }
 
       await loader.loadModule(manifest('tiles', {
         provides: [{ id: 'demo.tiles', type: 'service' }]
@@ -317,8 +313,8 @@ describe('component configuration', () => {
       class Map2D {}
 
       const loader = loaderWith(admin)
-      globalRef.window!.tiles = { RasterTiles }
-      globalRef.window!.map = { Map2D }
+      containers.tiles = { RasterTiles }
+      containers.map = { Map2D }
       loader.register([
         manifest('tiles', { provides: [{ id: 'demo.tiles', type: 'service' }] }),
         manifest('map', { requiresService: [{ id: 'demo.tiles' }] })
@@ -348,7 +344,7 @@ describe('component configuration', () => {
 
       await admin.getConfiguration('RasterTiles').update({ url: 'ignored' })
       const loader = loaderWith(admin)
-      globalRef.window!.tiles = { RasterTiles }
+      containers.tiles = { RasterTiles }
 
       await loader.loadModule(manifest('tiles'))
 
@@ -365,7 +361,7 @@ describe('component configuration', () => {
       }
 
       const loader = loaderWith(admin)
-      globalRef.window!.tiles = { RasterTiles }
+      containers.tiles = { RasterTiles }
       await loader.loadModule(manifest('tiles'))
 
       await admin.getConfiguration('RasterTiles').update({ url: 'a' })
@@ -389,7 +385,7 @@ describe('component configuration', () => {
 
       await admin.getConfiguration('RasterTiles').update({ url: 'first' })
       const loader = loaderWith(admin)
-      globalRef.window!.tiles = { RasterTiles }
+      containers.tiles = { RasterTiles }
       await loader.loadModule(manifest('tiles'))
       const before = instances[0]
 
@@ -411,7 +407,7 @@ describe('component configuration', () => {
 
       await admin.getConfiguration('RasterTiles').update({ url: 'first' })
       const loader = loaderWith(admin)
-      globalRef.window!.tiles = { RasterTiles }
+      containers.tiles = { RasterTiles }
       await loader.loadModule(manifest('tiles'))
 
       await admin.getConfiguration('RasterTiles').update({ url: 'second' })
@@ -430,7 +426,7 @@ describe('component configuration', () => {
 
       await admin.getConfiguration('RasterTiles').update({ kind: 'raster' })
       const loader = loaderWith(admin)
-      globalRef.window!.tiles = { RasterTiles }
+      containers.tiles = { RasterTiles }
       await loader.loadModule(manifest('tiles'))
 
       await admin.getConfiguration('RasterTiles').update({ kind: 'vector' })
@@ -453,7 +449,7 @@ describe('component configuration', () => {
 
       await admin.getConfiguration('RasterTiles').update({ kind: 'raster' })
       const loader = loaderWith(admin)
-      globalRef.window!.tiles = { RasterTiles }
+      containers.tiles = { RasterTiles }
       await loader.loadModule(manifest('tiles'))
 
       await admin.getConfiguration('RasterTiles').update({ kind: 'vector' })
@@ -477,7 +473,7 @@ describe('component configuration', () => {
 
       await admin.getConfiguration('RasterTiles').update({ kind: 'raster' })
       const loader = loaderWith(admin)
-      globalRef.window!.tiles = { RasterTiles }
+      containers.tiles = { RasterTiles }
       await loader.loadModule(manifest('tiles'))
       loader.getServiceRegistry().get('demo.tiles')
       expect(built).toHaveLength(1)
@@ -504,7 +500,7 @@ describe('component configuration', () => {
       }
 
       const loader = loaderWith(admin)
-      globalRef.window!.tiles = { RasterTiles }
+      containers.tiles = { RasterTiles }
       await loader.loadModule(manifest('tiles'))
 
       await admin.getConfiguration('RasterTiles').update({ url: 'a' })
@@ -527,7 +523,7 @@ describe('component configuration', () => {
 
       await admin.getConfiguration('RasterTiles').update({ url: 'a' })
       const loader = loaderWith(admin)
-      globalRef.window!.tiles = { RasterTiles }
+      containers.tiles = { RasterTiles }
       await loader.loadModule(manifest('tiles'))
 
       await admin.getConfiguration('RasterTiles').delete()
@@ -555,7 +551,7 @@ describe('component configuration', () => {
       }
 
       const loader = loaderWith(admin)
-      globalRef.window!.clock = { SteadyClock, RestartingClock }
+      containers.clock = { SteadyClock, RestartingClock }
       await loader.loadModule(manifest('clock'))
       events.length = 0
 
@@ -576,7 +572,7 @@ describe('component configuration', () => {
 
       await admin.getConfiguration('RasterTiles').update({ url: 'a' })
       const loader = loaderWith(admin)
-      globalRef.window!.tiles = { RasterTiles }
+      containers.tiles = { RasterTiles }
       await loader.loadModule(manifest('tiles'))
 
       await admin.getConfiguration('RasterTiles').update()
@@ -600,7 +596,7 @@ describe('component configuration', () => {
       await admin.getFactoryConfiguration('demo.tile-source', 'osm').update({ name: 'osm' })
       await admin.getFactoryConfiguration('demo.tile-source', 'sat').update({ name: 'sat' })
       const loader = loaderWith(admin)
-      globalRef.window!.tiles = { TileSource }
+      containers.tiles = { TileSource }
 
       await loader.loadModule(manifest('tiles'))
 
@@ -615,7 +611,7 @@ describe('component configuration', () => {
       await admin.getFactoryConfiguration('demo.tile-source', 'osm').update({ name: 'osm' })
       await admin.getFactoryConfiguration('demo.tile-source', 'sat').update({ name: 'sat' })
       const loader = loaderWith(admin)
-      globalRef.window!.tiles = { TileSource }
+      containers.tiles = { TileSource }
       await loader.loadModule(manifest('tiles'))
 
       const registry = loader.getServiceRegistry()
@@ -629,7 +625,7 @@ describe('component configuration', () => {
       await admin.getFactoryConfiguration('demo.tile-source', 'osm').update({ name: 'osm' })
       await admin.getFactoryConfiguration('demo.tile-source', 'sat').update({ name: 'sat' })
       const loader = loaderWith(admin)
-      globalRef.window!.tiles = { TileSource }
+      containers.tiles = { TileSource }
       await loader.loadModule(manifest('tiles'))
 
       const [declaration] = loader.getComponents('tiles')
@@ -644,7 +640,7 @@ describe('component configuration', () => {
 
       await admin.getFactoryConfiguration('demo.tile-source', 'osm').update({ name: 'osm' })
       const loader = loaderWith(admin)
-      globalRef.window!.tiles = { TileSource }
+      containers.tiles = { TileSource }
       await loader.loadModule(manifest('tiles'))
 
       await admin.getFactoryConfiguration('demo.tile-source', 'sat').update({ name: 'sat' })
@@ -668,7 +664,7 @@ describe('component configuration', () => {
       await admin.getFactoryConfiguration('demo.tile-source', 'osm').update({ name: 'osm' })
       await admin.getFactoryConfiguration('demo.tile-source', 'sat').update({ name: 'sat' })
       const loader = loaderWith(admin)
-      globalRef.window!.tiles = { TileSource }
+      containers.tiles = { TileSource }
       await loader.loadModule(manifest('tiles'))
 
       await admin.findConfiguration('demo.tile-source~osm')?.delete()
@@ -690,7 +686,7 @@ describe('component configuration', () => {
       await admin.getFactoryConfiguration('demo.tile-source', 'osm').update({ name: 'osm' })
       await admin.getFactoryConfiguration('demo.tile-source', 'sat').update({ name: 'sat' })
       const loader = loaderWith(admin)
-      globalRef.window!.tiles = { TileSource }
+      containers.tiles = { TileSource }
       await loader.loadModule(manifest('tiles'))
 
       // Both under the interface as well, not just under the primary ID
@@ -710,7 +706,7 @@ describe('component configuration', () => {
       await admin.getConfiguration('demo.shared').update({ retina: true, name: 'default' })
       await admin.getFactoryConfiguration('demo.tile-source', 'osm').update({ name: 'osm' })
       const loader = loaderWith(admin)
-      globalRef.window!.tiles = { TileSource }
+      containers.tiles = { TileSource }
 
       await loader.loadModule(manifest('tiles'))
 
@@ -726,7 +722,7 @@ describe('component configuration', () => {
       class TileSource {}
 
       const loader = loaderWith(admin)
-      globalRef.window!.tiles = { TileSource }
+      containers.tiles = { TileSource }
       await loader.loadModule(manifest('tiles'))
       expect(loader.getServiceRegistry().has('demo.tiles')).toBe(false)
 
@@ -765,8 +761,8 @@ describe('component configuration', () => {
           { pid: 'RasterTiles', properties: { url: 'from-store' }, changeCount: 1 }
         ])
       })
-      const loader = new ModuleLoader({ configurationAdmin: stored })
-      globalRef.window!.tiles = { RasterTiles }
+      const loader = testLoader({ configurationAdmin: stored })
+      containers.tiles = { RasterTiles }
       loader.register([manifest('tiles')])
 
       await loader.loadAll()
@@ -792,7 +788,7 @@ describe('component configuration', () => {
       await admin.getFactoryConfiguration('demo.tile-source', 'osm').update({ name: 'osm' })
       await admin.getFactoryConfiguration('demo.tile-source', 'sat').update({ name: 'sat' })
       const loader = loaderWith(admin)
-      globalRef.window!.tiles = { TileSource }
+      containers.tiles = { TileSource }
       await loader.loadModule(manifest('tiles'))
 
       await loader.unloadModule('tiles')
@@ -810,7 +806,7 @@ describe('component configuration', () => {
       }
 
       const loader = loaderWith(admin)
-      globalRef.window!.tiles = { RasterTiles }
+      containers.tiles = { RasterTiles }
       await loader.loadModule(manifest('tiles'))
       await loader.unloadModule('tiles')
 

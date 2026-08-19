@@ -52,8 +52,6 @@ describe('examples/workbench', () => {
     document.body.append(regions.toolbar, regions.sidebar, regions.main)
     activity = []
 
-    const loader = new ModuleLoader()
-
     const containers: Record<string, unknown> = {
       shell: shellModule,
       clock: clockModule,
@@ -63,9 +61,9 @@ describe('examples/workbench', () => {
       'search-box': searchBox,
       metrics
     }
-    for (const [id, container] of Object.entries(containers)) {
-      (window as unknown as Record<string, unknown>)[id] = container
-    }
+    // The bundles are already imported here; handing them over is the same path a
+    // host uses while its modules still live in its own bundle
+    const loader = new ModuleLoader({ entryResolver: manifest => containers[manifest.id] })
 
     const root: WorkbenchRoot = {
       region: name => regions[name],

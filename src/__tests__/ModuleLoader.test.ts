@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ModuleLoader } from '../ModuleLoader'
+import { containers, resetContainers, testLoader } from './helpers/moduleContainers'
 import type { ModuleManifest, ModuleLifecycle, ModuleEventListener } from '../types'
 
 // Mock window for Module Federation containers
@@ -38,7 +39,7 @@ describe('ModuleLoader', () => {
 
   describe('register', () => {
     it('should register module manifests', () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const manifest = createManifest('test-module')
 
       loader.register([manifest])
@@ -48,7 +49,7 @@ describe('ModuleLoader', () => {
     })
 
     it('should emit registering event', () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const manifest = createManifest('test-module')
       const listener: ModuleEventListener = {
         onModuleEvent: vi.fn()
@@ -68,7 +69,7 @@ describe('ModuleLoader', () => {
 
   describe('isLoaded', () => {
     it('should return false for unloaded module', () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
 
       expect(loader.isLoaded('unknown-module')).toBe(false)
     })
@@ -76,7 +77,7 @@ describe('ModuleLoader', () => {
 
   describe('getModule', () => {
     it('should return undefined for unknown module', () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
 
       expect(loader.getModule('unknown')).toBeUndefined()
     })
@@ -84,7 +85,7 @@ describe('ModuleLoader', () => {
 
   describe('getLoadedModuleIds', () => {
     it('should return empty array initially', () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
 
       expect(loader.getLoadedModuleIds()).toEqual([])
     })
@@ -92,7 +93,7 @@ describe('ModuleLoader', () => {
 
   describe('getServiceRegistry', () => {
     it('should return the service registry', () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
 
       const registry = loader.getServiceRegistry()
 
@@ -104,7 +105,7 @@ describe('ModuleLoader', () => {
 
   describe('event listeners', () => {
     it('should add and remove event listeners', () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const listener: ModuleEventListener = {
         onModuleEvent: vi.fn()
       }
@@ -120,7 +121,7 @@ describe('ModuleLoader', () => {
     })
 
     it('should handle listener errors gracefully', () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
       const badListener: ModuleEventListener = {
         onModuleEvent: vi.fn(() => {
           throw new Error('Listener error')
@@ -135,12 +136,10 @@ describe('ModuleLoader', () => {
 
   describe('lifecycle integration', () => {
     it('should call the lifecycle hooks of a module', async () => {
-      const globalRef = globalThis as { window?: Record<string, unknown> }
-      const savedWindow = globalRef.window
-      globalRef.window = {}
+      resetContainers()
 
-      try {
-        const loader = new ModuleLoader()
+      {
+        const loader = testLoader()
         const activateFn = vi.fn()
         const deactivateFn = vi.fn()
         const lifecycle: ModuleLifecycle = {
@@ -148,8 +147,8 @@ describe('ModuleLoader', () => {
           deactivate: deactivateFn
         }
 
-        // loadEntry() takes the container from window instead of importing
-        globalRef.window['lifecycle-module'] = lifecycle as unknown as Record<string, unknown>
+        // Handed over, so loadEntry() does not go near the entry URL
+        containers['lifecycle-module'] = lifecycle
         const manifest = createManifest('lifecycle-module')
         loader.register([manifest])
 
@@ -159,8 +158,6 @@ describe('ModuleLoader', () => {
 
         await loader.unloadModule('lifecycle-module')
         expect(deactivateFn).toHaveBeenCalledTimes(1)
-      } finally {
-        globalRef.window = savedWindow
       }
     })
   })
@@ -174,7 +171,7 @@ describe('ModuleLoader', () => {
         error: vi.fn()
       }
 
-      const loader = new ModuleLoader({
+      const loader = testLoader({
         loadTimeout: 5000,
         continueOnError: false,
         hotReload: true,
@@ -190,7 +187,7 @@ describe('ModuleLoader', () => {
 
   describe('reloadModule', () => {
     it('should throw if hot reload is disabled', async () => {
-      const loader = new ModuleLoader({ hotReload: false })
+      const loader = testLoader({ hotReload: false })
 
       await expect(loader.reloadModule('test'))
         .rejects
@@ -198,7 +195,7 @@ describe('ModuleLoader', () => {
     })
 
     it('should throw for unknown module', async () => {
-      const loader = new ModuleLoader({ hotReload: true })
+      const loader = testLoader({ hotReload: true })
 
       await expect(loader.reloadModule('unknown'))
         .rejects
@@ -208,7 +205,7 @@ describe('ModuleLoader', () => {
 
   describe('unloadModule', () => {
     it('should return false for unknown module', async () => {
-      const loader = new ModuleLoader()
+      const loader = testLoader()
 
       const result = await loader.unloadModule('unknown')
 
@@ -217,65 +214,52 @@ describe('ModuleLoader', () => {
   })
 })
 
-describe('ModuleLoader - global name collisions', () => {
-  interface GlobalWithWindow { window?: Record<string, unknown> }
-  const globalRef = globalThis as GlobalWithWindow
-  let savedWindow: Record<string, unknown> | undefined
-
+describe('ModuleLoader - no global namespace', () => {
   beforeEach(() => {
-    savedWindow = globalRef.window
-    globalRef.window = {}
+    resetContainers()
   })
 
-  afterEach(() => {
-    globalRef.window = savedWindow
-  })
-
-  it('should not mistake a DOM element for a module container', async () => {
+  it('should not find a module by name anywhere', async () => {
     const loader = new ModuleLoader()
-    const manifest = createManifest('palette')
 
     // What a browser does for <ul id="palette">: the element becomes a global.
-    // It even carries properties, so a shape check alone would accept it.
-    globalRef.window!.palette = { nodeType: 1, id: 'palette', activate: undefined }
-
-    // No container to fall back on, so the import fails — the point is that it
-    // was attempted instead of activating an element
-    await expect(loader.loadModule(manifest)).rejects.toThrow('Failed to load module entry')
-  })
-
-  it('should accept a Module Federation remote', async () => {
-    const loader = new ModuleLoader()
-    const manifest = createManifest('remote-module')
-    globalRef.window!['remote-module'] = {
-      get: async () => () => ({}),
-      init: async () => {}
+    // It used to be picked up as that module's container — a collision reachable
+    // by accident. Nothing is looked up by name any more, so the entry is what
+    // is left, and there is none to fetch here.
+    ;(globalThis as { window?: Record<string, unknown> }).window = {
+      palette: { nodeType: 1, id: 'palette' }
     }
 
-    const loaded = await loader.loadModule(manifest)
-
-    expect(loaded.state).toBe('active')
+    try {
+      await expect(loader.loadModule(createManifest('palette')))
+        .rejects.toThrow('Failed to load module entry')
+    } finally {
+      delete (globalThis as { window?: unknown }).window
+    }
   })
 
-  it('should accept a module namespace with lifecycle hooks', async () => {
-    const loader = new ModuleLoader()
-    const manifest = createManifest('plain-module')
-    globalRef.window!['plain-module'] = { activate: vi.fn() }
+  it('should keep two loaders apart', async () => {
+    // Two applications on one page used to share window, and therefore the
+    // module namespace. Each loader now has its own source.
+    const first = new ModuleLoader({
+      entryResolver: () => ({ activate: () => {} })
+    })
+    const second = new ModuleLoader()
 
-    const loaded = await loader.loadModule(manifest)
+    await first.loadModule(createManifest('shared-name'))
 
-    expect(loaded.state).toBe('active')
-    expect(globalRef.window!['plain-module']).toBeDefined()
+    expect(first.isLoaded('shared-name')).toBe(true)
+    await expect(second.loadModule(createManifest('shared-name')))
+      .rejects.toThrow('Failed to load module entry')
   })
 
-  it('should not overwrite a taken global name', async () => {
-    const loader = new ModuleLoader()
-    const element = { nodeType: 1, id: 'taken' }
-    globalRef.window!.taken = element
+  it('should accept a namespace with lifecycle hooks', async () => {
+    const loader = testLoader()
+    containers['plain-module'] = { activate: vi.fn() }
 
-    await expect(loader.loadModule(createManifest('taken'))).rejects.toThrow()
+    const loaded = await loader.loadModule(createManifest('plain-module'))
 
-    expect(globalRef.window!.taken).toBe(element)
+    expect(loaded.state).toBe('active')
   })
 })
 
@@ -284,7 +268,7 @@ describe('ModuleLoader integration', () => {
   // and Module Federation containers
 
   it('should create loader with default service registry', () => {
-    const loader = new ModuleLoader()
+    const loader = testLoader()
     const registry = loader.getServiceRegistry()
 
     // Should be a working registry
@@ -301,24 +285,15 @@ describe('ModuleLoader integration', () => {
       unregister: vi.fn()
     }
 
-    const loader = new ModuleLoader({ serviceRegistry: customRegistry })
+    const loader = testLoader({ serviceRegistry: customRegistry })
     const registry = loader.getServiceRegistry()
 
     expect(registry).toBe(customRegistry)
   })
 })
 describe('ModuleLoader - service withdrawal observation', () => {
-  interface GlobalWithWindow { window?: Record<string, unknown> }
-  const globalRef = globalThis as GlobalWithWindow
-  let savedWindow: Record<string, unknown> | undefined
-
   beforeEach(() => {
-    savedWindow = globalRef.window
-    globalRef.window = {}
-  })
-
-  afterEach(() => {
-    globalRef.window = savedWindow
+    resetContainers()
   })
 
   function requiringManifest(id: string, serviceIds: string[]): ModuleManifest {
@@ -334,7 +309,7 @@ describe('ModuleLoader - service withdrawal observation', () => {
 
   async function loadActive(loader: ModuleLoader, manifest: ModuleManifest): Promise<void> {
     // loadEntry() short-circuits on an existing window entry, so no import happens
-    globalRef.window![manifest.id] = { activate: vi.fn(), deactivate: vi.fn() }
+    containers[manifest.id] = { activate: vi.fn(), deactivate: vi.fn() }
     loader.register([manifest])
     const loaded = await loader.loadModule(manifest)
     await loader.settle()
@@ -342,7 +317,7 @@ describe('ModuleLoader - service withdrawal observation', () => {
   }
 
   it('should emit service-withdrawn when a required service disappears', async () => {
-    const loader = new ModuleLoader()
+    const loader = testLoader()
     const registry = loader.getServiceRegistry()
     registry.register('geo.service', { locate: () => 'here' })
 
@@ -364,7 +339,7 @@ describe('ModuleLoader - service withdrawal observation', () => {
   })
 
   it('should not emit for services no active module requires', async () => {
-    const loader = new ModuleLoader()
+    const loader = testLoader()
     const registry = loader.getServiceRegistry()
     registry.register('geo.service', { locate: () => 'here' })
     registry.register('unrelated.service', {})
@@ -381,7 +356,7 @@ describe('ModuleLoader - service withdrawal observation', () => {
   })
 
   it('should stop reporting once the module is unloaded', async () => {
-    const loader = new ModuleLoader()
+    const loader = testLoader()
     const registry = loader.getServiceRegistry()
     registry.register('geo.service', { locate: () => 'here' })
 
@@ -399,7 +374,7 @@ describe('ModuleLoader - service withdrawal observation', () => {
   })
 
   it('should detach from the registry on dispose', async () => {
-    const loader = new ModuleLoader()
+    const loader = testLoader()
     const registry = loader.getServiceRegistry()
     registry.register('geo.service', { locate: () => 'here' })
 
@@ -425,7 +400,7 @@ describe('ModuleLoader - service withdrawal observation', () => {
     }
 
     expect(() => {
-      const loader = new ModuleLoader({ serviceRegistry: plainRegistry })
+      const loader = testLoader({ serviceRegistry: plainRegistry })
       loader.dispose()
     }).not.toThrow()
   })
