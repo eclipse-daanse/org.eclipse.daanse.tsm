@@ -177,6 +177,130 @@ export interface ModuleManifest {
    * e.g., vue, vue-router, primevue
    */
   sharedDependencies?: SharedDependency[]
+
+  /**
+   * What this module offers to the resolution, beyond what is derived from the
+   * rest of the manifest (Core 3.3.3).
+   *
+   * Every module automatically has an `osgi.identity` capability, and each entry
+   * in `provides` becomes an `osgi.service` capability — so this is for anything
+   * else: an extender, an implementation of a contract, a theme, a data format.
+   */
+  capabilities?: Capability[]
+
+  /**
+   * What this module needs in order to resolve (Core 3.3.6).
+   *
+   * `dependencies` and `requiresService` are expressed as requirements too, so
+   * this is the general form rather than a fourth mechanism.
+   */
+  requirements?: Requirement[]
+}
+
+/**
+ * Something a module offers to the resolution, in a namespace (Core 3.3.3).
+ *
+ * The generic form of what `provides` and a module's identity say: a namespace
+ * decides what a match *means*, the attributes are what a requirement's filter is
+ * asserted against.
+ */
+export interface Capability {
+  /** What kind of thing this is — see the `NAMESPACE` constants */
+  namespace: string
+
+  /**
+   * What a requirement filters on. An attribute named `version` is compared as a
+   * version, not as text, so `1.10.0` outranks `1.9.0`.
+   */
+  attributes?: CapabilityAttributes
+
+  /** Free-form directives; `effective` is the one the resolver reads */
+  directives?: CapabilityDirectives
+}
+
+export type CapabilityAttributes = Record<string, ServicePropertyValue>
+
+export interface CapabilityDirectives {
+  /**
+   * When this capability counts. Only `resolve` (the default) is considered by
+   * the resolver; anything else is left to another agent, as in OSGi.
+   */
+  effective?: string
+
+  [directive: string]: string | undefined
+}
+
+/**
+ * An assertion that some capability exists (Core 3.3.6).
+ *
+ * Resolution is static: it works on manifests and answers whether a module
+ * *could* run, before anything is loaded. That a promised service is actually
+ * registered at runtime is a different question, and `requiresService` is the one
+ * that asks it — the specification draws the same line for `osgi.service`, where
+ * a capability "is a promise" at resolve time.
+ */
+export interface Requirement {
+  namespace: string
+
+  /**
+   * LDAP filter over the attributes of capabilities in the same namespace,
+   * matched against **one capability at a time**. Without a filter, any
+   * capability in the namespace satisfies it.
+   *
+   * Attribute names are matched case sensitively here, unlike service properties.
+   */
+  filter?: string
+
+  /**
+   * Semver range checked against the capability's `version` attribute.
+   *
+   * A departure from OSGi, which expresses versions inside the filter: a filter
+   * compares text, so `(version>=1.9.0)` would accept `1.10.0` only by accident.
+   * This is the correct comparison, and it composes with `filter`.
+   */
+  versionRange?: string
+
+  /** `mandatory` (default) refuses to resolve without it; `optional` allows it */
+  resolution?: 'mandatory' | 'optional'
+
+  /** `single` (default) wires once, `multiple` wires to every match */
+  cardinality?: 'single' | 'multiple'
+
+  /** As on a capability: only `resolve` is considered by the resolver */
+  effective?: string
+}
+
+/** One requirement, satisfied by one capability of one module */
+export interface Wire {
+  /** The module whose requirement this is */
+  requirer: string
+  requirement: Requirement
+  /** The module providing the capability */
+  provider: string
+  capability: Capability
+}
+
+/** Why a module cannot be resolved */
+export interface UnresolvedRequirement {
+  moduleId: string
+  requirement: Requirement
+  /** What was in the way: nothing in the namespace, or nothing matching */
+  reason: 'no-capability' | 'no-match'
+}
+
+/**
+ * What the capability resolution found.
+ *
+ * Separate from `DependencyResolution`, which answers a different question: load
+ * order. This one answers whether a module can run at all.
+ */
+export interface WiringResolution {
+  /** Every wire, in the order the requirements were declared */
+  wires: Wire[]
+  /** Modules that cannot resolve, with the requirement that stopped them */
+  unresolved: UnresolvedRequirement[]
+  /** Module IDs that resolve — including those whose only failures were optional */
+  resolved: string[]
 }
 
 /**

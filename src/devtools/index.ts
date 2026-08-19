@@ -32,6 +32,7 @@ import {
   type ConfigurationAdmin
 } from '../ConfigurationAdmin.js'
 import { METATYPE_SERVICE_ID, type MetatypeRegistry } from '../Metatype.js'
+import { capabilitiesOf } from '../capabilities.js'
 
 import { consoleOutput, css, type DevtoolsOutput } from './output.js'
 
@@ -101,6 +102,13 @@ export interface TsmDevtools {
 
   /** The `@component()` classes of the loaded modules, as DS shows with scr:list */
   components(moduleId?: string): ComponentInfo[]
+
+  /** What every module offers to the resolution, by namespace */
+  capabilities(namespace?: string): void
+  /** What a module is wired to and what is wired to it — Gogo's `inspect` */
+  wiring(moduleId: string): void
+  /** Requirements no manifest can satisfy: modules waiting in vain */
+  unresolved(): void
 
   /** Configurations that have values, or the values of one PID */
   config(pid?: string): void
@@ -476,6 +484,75 @@ export function installDevtools(options: DevtoolsOptions): TsmDevtools {
       return declarations
     },
 
+    capabilities(namespace) {
+      const manifests = loader.getManifests()
+      if (manifests.length === 0) {
+        out.log('%cNo modules registered', css('muted'))
+        return
+      }
+
+      out.log(`%cCapabilities${namespace ? ` in ${namespace}` : ''}`, css('heading'))
+      for (const manifest of manifests) {
+        const offered = capabilitiesOf(manifest)
+          .filter(capability => namespace === undefined || capability.namespace === namespace)
+        if (offered.length === 0) continue
+
+        out.log(`  %c${manifest.id}`, css('name'))
+        for (const capability of offered) {
+          const attributes = Object.entries(capability.attributes ?? {})
+            .map(([key, value]) => `${key}=${Array.isArray(value) ? value.join(',') : String(value)}`)
+            .join(' ')
+          out.log(`    %c${capability.namespace}%c ${attributes}`, css('ok'), css('muted'))
+        }
+      }
+    },
+
+    wiring(moduleId) {
+      const { requires, provides } = loader.getModuleWiring(moduleId)
+      if (requires.length === 0 && provides.length === 0) {
+        out.log(`%c${moduleId} is wired to nothing`, css('muted'))
+        return
+      }
+
+      out.log(`%cWiring of ${moduleId}`, css('heading'))
+      for (const wire of requires) {
+        out.log(
+          `  %crequires%c ${wire.requirement.namespace}` +
+          `${wire.requirement.filter ? ` ${wire.requirement.filter}` : ''} → ${wire.provider}`,
+          css('name'),
+          css('muted')
+        )
+      }
+      for (const wire of provides) {
+        out.log(
+          `  %cprovides%c ${wire.capability.namespace} → ${wire.requirer}`,
+          css('ok'),
+          css('muted')
+        )
+      }
+    },
+
+    unresolved() {
+      const failing = loader.getUnresolvedModules()
+      if (failing.length === 0) {
+        out.log('%cEvery module can resolve', css('ok'))
+        return
+      }
+
+      // Not the same as unsatisfied(): this is waiting in vain, because no
+      // manifest even promises what the module needs
+      out.log('%cModules that can never resolve', css('heading'))
+      for (const entry of failing) {
+        const what = entry.requirement.filter ?? entry.requirement.namespace
+        out.log(
+          `  %c${entry.moduleId}%c needs ${entry.requirement.namespace} ${what}` +
+          ` — ${entry.reason === 'no-capability' ? 'nothing in that namespace' : 'nothing matches'}`,
+          css('name'),
+          css('bad')
+        )
+      }
+    },
+
     config(pid) {
       const admin = configurationAdmin()
       if (!admin) return
@@ -762,7 +839,10 @@ export function installDevtools(options: DevtoolsOptions): TsmDevtools {
         ]],
         ['Diagnosis', [
           'unsatisfied()        what is waiting, and for what',
-          'mismatches()         declared in provides but never registered'
+          'unresolved()         what waits in vain — nothing promises it',
+          'mismatches()         declared in provides but never registered',
+          'capabilities(ns?)    what each module offers to the resolution',
+          'wiring(id)           what a module is wired to, both ways'
         ]],
         ['Services', [
           'services()           every service with its provider',

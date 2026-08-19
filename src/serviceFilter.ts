@@ -34,7 +34,10 @@ export type ServiceFilter = (properties: ServiceProperties) => boolean
 class FilterParser {
   private position = 0
 
-  constructor(private readonly source: string) {}
+  constructor(
+    private readonly source: string,
+    private readonly read: PropertyLookup
+  ) {}
 
   parse(): ServiceFilter {
     const filter = this.parseFilter()
@@ -105,7 +108,7 @@ class FilterParser {
     if (operator === '~=') {
       const approximate = approximately(parts.join(''))
       return properties => matches(
-        readProperty(properties, attribute),
+        this.read(properties, attribute),
         actual => typeof actual === 'string' || typeof actual === 'number'
           ? approximately(String(actual)) === approximate
           : false
@@ -115,12 +118,12 @@ class FilterParser {
     if (operator === '=' && wildcards) {
       // (attr=*) asks whether the property is there at all
       if (parts.every(part => part.length === 0)) {
-        return properties => readProperty(properties, attribute) !== undefined
+        return properties => this.read(properties, attribute) !== undefined
       }
 
       const pattern = substringPattern(parts)
       return properties => matches(
-        readProperty(properties, attribute),
+        this.read(properties, attribute),
         // A wildcard is a string operation: OSGi does not apply it to numbers
         // or booleans, so (intvalue=100*) does not match 1000
         actual => typeof actual === 'string' && pattern.test(actual)
@@ -130,13 +133,13 @@ class FilterParser {
     const value = parts.join('')
     if (operator === '=') {
       return properties => matches(
-        readProperty(properties, attribute),
+        this.read(properties, attribute),
         actual => equals(actual, value)
       )
     }
 
     return properties => matches(
-      readProperty(properties, attribute),
+      this.read(properties, attribute),
       actual => compare(actual, value, operator)
     )
   }
@@ -246,13 +249,20 @@ type FilterOperator = '=' | '>=' | '<=' | '~='
 type ScalarValue = string | number | boolean
 
 /**
- * Look a property up by name, ignoring case — `(CN=x)` and `(cn=x)` address the
- * same attribute, as in OSGi.
+ * How a filter looks an attribute up.
+ *
+ * Two ways, because the specifications differ: service properties are matched
+ * ignoring case (Core 5.8, and Config Admin keys are case insensitive too), while
+ * a requirement's filter locates capability attributes "in a case sensitive
+ * manner" (Core 3.3.6).
  */
-function readProperty(
+type PropertyLookup = (
   properties: ServiceProperties,
   attribute: string
-): ServicePropertyValue | undefined {
+) => ServicePropertyValue | undefined
+
+/** `(CN=x)` and `(cn=x)` address the same service property, as in OSGi */
+const ignoringCase: PropertyLookup = (properties, attribute) => {
   const direct = properties[attribute]
   if (direct !== undefined) return direct
 
@@ -262,6 +272,9 @@ function readProperty(
   }
   return undefined
 }
+
+/** For capability attributes, where Core 3.3.6 asks for exact names */
+const exactly: PropertyLookup = (properties, attribute) => properties[attribute]
 
 /**
  * Apply a test to a property value. An array matches when any element does.
@@ -323,6 +336,19 @@ function approximately(value: string): string {
  * Parse a filter expression. Throws on invalid syntax, naming the position —
  * a silently non-matching filter would be worse than a rejected one.
  */
-export function createServiceFilter(expression: string): ServiceFilter {
-  return new FilterParser(expression).parse()
+/**
+ * Parse an LDAP-style filter (Core 3.2.7).
+ *
+ * @param options.caseSensitive Match attribute names exactly, as a requirement's
+ *   filter does against capability attributes. Off by default, which is what
+ *   service properties call for.
+ */
+export function createServiceFilter(
+  expression: string,
+  options: { caseSensitive?: boolean } = {}
+): ServiceFilter {
+  return new FilterParser(
+    expression,
+    options.caseSensitive === true ? exactly : ignoringCase
+  ).parse()
 }
