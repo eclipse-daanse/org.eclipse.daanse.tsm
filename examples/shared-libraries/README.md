@@ -1,5 +1,17 @@
 # Shared Libraries Example
 
+> **Build the package first.** Unlike the other examples, this one installs tsm as
+> a dependency (`"tsm": "file:../../.."`) and therefore uses the **built** package
+> from `dist/`, not the sources. After changing anything in `src/`, run
+> `npm run build` in the repository root — otherwise the plugin and loader here are
+> the previous version. `examples/graph`, `config`, `whiteboard` and `workbench` map
+> `@eclipse-daanse/tsm` onto `src/` with a Vite alias and always see current code.
+>
+> What decides which libraries stay external is `manifest.json`:
+> `createTsmExternals(manifest)` reads its `sharedDependencies`, and
+> `tsmPlugin({ manifest })` fails the build if one of them is bundled anyway — that
+> would give this plugin its own copy of Vue, and nothing at runtime would notice.
+
 ## Architektur
 
 ```
