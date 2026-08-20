@@ -219,8 +219,56 @@ interface ModuleLifecycle {
 
   /** Called when module is deactivated */
   deactivate?(context: ModuleContext): Promise<void> | void
+
+  /** Ein `policy: 'dynamic'`-Service ist erschienen, während das Modul läuft */
+  onServiceBound?(context: ModuleContext, serviceId: string): Promise<void> | void
+
+  /** Ein `policy: 'dynamic'`-Service ist verschwunden — das Modul läuft weiter */
+  onServiceUnbound?(context: ModuleContext, serviceId: string): Promise<void> | void
 }
 ```
+
+#### Statisch oder dynamisch
+
+`requiresService` sagt mit zwei getrennten Feldern, was ein Service für ein Modul
+bedeutet — und die Trennung ist wichtig, weil sie oft verwechselt wird:
+
+| | |
+| --- | --- |
+| `cardinality` | ob das Modul **starten** darf. `1..1` (Default) und `1..n` verlangen einen Provider, `0..1` und `0..n` nicht |
+| `policy` | was ein **späterer Wegfall** tut. `static` (Default) baut das Modul ab, `dynamic` lässt es laufen und benachrichtigt es |
+
+Auch ein `dynamic`-Requirement muss also zum Start erfüllt sein; wer einen Service
+möchte, der nie existieren muss, schreibt `cardinality: '0..1'`.
+
+```json
+{ "requiresService": [{ "id": "demo.traffic", "policy": "dynamic", "cardinality": "0..n" }] }
+```
+
+```typescript
+export function onServiceBound(context: ModuleContext, serviceId: string) {
+  // Erneut sammeln — die Referenzen können sich geändert haben
+  refresh(context.services.getServiceReferences('demo.traffic'))
+}
+
+export function onServiceUnbound(context: ModuleContext, serviceId: string) {
+  // Referenz fallen lassen; das Modul wird nicht abgebaut
+}
+```
+
+Eine Sammlung (`0..n` / `1..n`) hört von **jedem** Provider, der kommt oder geht,
+weil das die Menge verändert. Ein einwertiges Requirement hört nur von
+An- und Abwesenheit: dass ein zweiter Provider auf der Bank sitzt, ist nicht seine
+Sache — und ein Wechsel zum besseren ist `policyOption: 'greedy'`.
+
+Ein Fehler in einem der beiden Hooks bricht die Kaskade nicht ab und wird
+protokolliert: das Modul bleibt aktiv, denn genau das verspricht `dynamic`.
+
+**Abweichung von DS:** Dort ist die Policy eine Eigenschaft der *Referenz einer
+Component* (112.3.7), und die bind/unbind-Methoden gehören der Component. Hier ist
+sie eine Eigenschaft eines Requirements des **Moduls**, und die Hooks sind die des
+Moduls. Component-Referenzen mit eigenen bind/unbind-Methoden fehlen — siehe die
+Lückenliste in [`docs/CONFORMANCE.md`](docs/CONFORMANCE.md).
 
 ### 3.6 ModuleContext
 

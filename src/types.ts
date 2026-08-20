@@ -116,10 +116,23 @@ export interface ServiceRequirement {
 
   /**
    * What happens when the service is withdrawn while the module is active
-   * - static (default): the module is deactivated and waits for the service to return
-   * - dynamic: the module stays active and is notified
+   * - static (default): the module is deactivated and waits for the service to
+   *   return, then activates again
+   * - dynamic: the module keeps running and is told, through `onServiceBound` and
+   *   `onServiceUnbound` on its lifecycle export. Dropping the reference is then
+   *   the module's own business — that is what the contract says.
    *
-   * Only 'static' is implemented; 'dynamic' is accepted and behaves as 'static'.
+   * Either way the service has to be there for the module to *start*: cardinality
+   * decides whether it may activate, policy only decides what a later withdrawal
+   * does. Use `cardinality: '0..1'` for something that need not exist at all.
+   *
+   * A collection (`0..n` / `1..n`) hears about every provider joining or leaving;
+   * a single-valued requirement only hears about presence, since a second
+   * provider waiting on the bench is none of its business.
+   *
+   * The DS counterpart is a reference's policy (112.3.7), which is declared per
+   * *reference of a component*. Here it is declared per requirement of a
+   * **module**, and the hooks are the module's — see `docs/CONFORMANCE.md`.
    */
   policy?: 'static' | 'dynamic'
 }
