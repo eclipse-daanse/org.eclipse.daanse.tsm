@@ -176,11 +176,13 @@ describe('DefaultServiceRegistry', () => {
 
       registry.register('test.service', service)
 
-      expect(listener.onServiceEvent).toHaveBeenCalledWith({
-        type: 'registered',
-        serviceId: 'test.service',
-        service
-      })
+      expect(listener.onServiceEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'registered',
+          serviceId: 'test.service',
+          service
+        })
+      )
     })
 
     it('should notify with "updated" type on overwrite', () => {
@@ -209,11 +211,13 @@ describe('DefaultServiceRegistry', () => {
 
       registry.unregister('test.service')
 
-      expect(listener.onServiceEvent).toHaveBeenCalledWith({
-        type: 'unregistered',
-        serviceId: 'test.service',
-        service
-      })
+      expect(listener.onServiceEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'unregistered',
+          serviceId: 'test.service',
+          service
+        })
+      )
     })
 
     it('should stop notifying after removeListener', () => {

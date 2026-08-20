@@ -29,6 +29,50 @@ export const CONFIGURATION_ADMIN_SERVICE_ID = 'tsm.configuration.admin'
 /** Separator between factory PID and instance name, as in OSGi CM 1.6 */
 export const FACTORY_PID_SEPARATOR = '~'
 
+/**
+ * Separator between a PID and the module it is targeted at, as in OSGi CM 104.3.2.
+ *
+ * A *targeted* PID names who it is for: `demo.tiles|map-plugin|2.1.0` configures
+ * that PID only for version 2.1.0 of `map-plugin`. The point is a rollout — a new
+ * version can be given its own configuration while the old one keeps running on
+ * the untargeted one.
+ */
+export const TARGETED_PID_SEPARATOR = '|'
+
+/**
+ * Who a targeted PID lookup is on behalf of.
+ *
+ * OSGi allows four segments — `pid|bsn|version|location`. The first three have
+ * counterparts here; a module has no install location, so that segment is left
+ * out rather than faked.
+ */
+export interface ConfigurationTarget {
+  /** Module id, OSGi's bundle symbolic name */
+  id: string
+  version?: string
+}
+
+/**
+ * The targeted PIDs to try for a module, most specific first.
+ *
+ * The order is the whole of the mechanism: the first configuration that exists
+ * wins, so a version-specific configuration beats a module-specific one, which
+ * beats the plain PID. Exported because the loader and the tests both need to
+ * agree on it, and a second copy of this order would be a bug waiting to happen.
+ */
+export function targetedPids(pid: string, target?: ConfigurationTarget): string[] {
+  if (!target) return [pid]
+
+  const candidates = [pid + TARGETED_PID_SEPARATOR + target.id]
+  if (target.version !== undefined) {
+    candidates.unshift(
+      pid + TARGETED_PID_SEPARATOR + target.id + TARGETED_PID_SEPARATOR + target.version
+    )
+  }
+  candidates.push(pid)
+  return candidates
+}
+
 /** The service property carrying a configuration's PID, named as in OSGi */
 export const SERVICE_PID = 'service.pid'
 
@@ -365,6 +409,47 @@ export class ConfigurationAdmin {
   findConfiguration(pid: string): Configuration | undefined {
     const entry = this.entries.get(pid)
     return entry ? this.handleFor(entry) : undefined
+  }
+
+  /**
+   * The configuration for a PID as seen by one module, following the targeted
+   * PID chain: most specific first, and the first one that has values wins.
+   *
+   * Without a target this is `findConfiguration`. With one it is what lets a
+   * single PID mean different things to two versions of a module — the reason
+   * targeted PIDs exist (CM 104.3.2).
+   */
+  findTargetedConfiguration(
+    pid: string,
+    target?: ConfigurationTarget
+  ): Configuration | undefined {
+    for (const candidate of targetedPids(pid, target)) {
+      const entry = this.entries.get(candidate)
+      // A PID that exists but was never given values does not end the search:
+      // `getConfiguration()` creates empty entries, and one of those must not
+      // shadow a less specific configuration that actually has values
+      if (entry?.properties !== undefined) return this.handleFor(entry)
+    }
+    return undefined
+  }
+
+  /**
+   * The factory configurations of a PID as seen by one module.
+   *
+   * The chain works as for a single configuration, but stops at the first
+   * targeted factory PID that has *any* configuration: a more specific factory
+   * PID replaces the less specific set rather than adding to it, since a merge
+   * would give the module instances it was targeted away from.
+   */
+  listTargetedFactoryConfigurations(
+    pid: string,
+    target?: ConfigurationTarget
+  ): Configuration[] {
+    for (const candidate of targetedPids(pid, target)) {
+      const configurations = this.listFactoryConfigurations(candidate)
+      if (configurations.length > 0) return configurations
+    }
+    return []
   }
 
   /**

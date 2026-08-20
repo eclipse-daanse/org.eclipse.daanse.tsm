@@ -48,7 +48,9 @@ import {
 import {
   CONFIGURATION_ADMIN_SERVICE_ID,
   type ConfigurationAdmin,
-  type ConfigurationEvent
+  type ConfigurationEvent,
+  type ConfigurationTarget,
+  targetedPids
 } from './ConfigurationAdmin.js'
 import { METATYPE_SERVICE_ID, type MetatypeRegistry } from './Metatype.js'
 import { isTsmRuntimeAvailable, tsmRuntime } from './TsmRuntime.js'
@@ -136,6 +138,14 @@ interface ComponentRuntime {
   ctor: InjectableConstructor<unknown>
   options: ComponentOptions
   className: string
+  /**
+   * The module this component belongs to, as a configuration target.
+   *
+   * Carried on the runtime rather than looked up: the targeted PID chain is
+   * walked on every reconciliation, and the manifest is the only place the
+   * version lives.
+   */
+  target: ConfigurationTarget
   /** What it injects — DS calls these the component's references (112.3) */
   references: Array<{ serviceId: string; optional: boolean }>
   /** Effective configuration PIDs, defaulting to the class name */
@@ -1378,10 +1388,16 @@ export class ModuleLoader {
     const components = this.findComponents(loadedModule)
     if (components.length === 0) return
 
+    const target: ConfigurationTarget = {
+      id: loadedModule.manifest.id,
+      version: loadedModule.manifest.version
+    }
+
     const runtimes: ComponentRuntime[] = components.map(({ ctor, options }) => ({
       ctor,
       options,
       className: ctor.name,
+      target,
       references: referencesOf(ctor),
       pids: this.pidsOf(ctor, options),
       policy: options.configurationPolicy ?? 'optional',
@@ -1527,10 +1543,19 @@ export class ModuleLoader {
     let values: ConfigurationProperties = { ...defaults }
     let pid: string | undefined
     for (const candidate of runtime.pids) {
-      const properties = this.configurations.findConfiguration(candidate)?.getProperties()
+      // Targeted first: a configuration written for this module, or for this
+      // version of it, beats the plain PID — which is what makes a rollout able
+      // to configure the new version without touching the old one
+      const configuration = this.configurations.findTargetedConfiguration(
+        candidate, runtime.target
+      )
+      const properties = configuration?.getProperties()
       if (!properties) continue
       values = { ...values, ...properties }
-      pid ??= candidate
+      // The PID the instance reports is the one that was found, targeted or not:
+      // a component reading `context.configurationPid` should see what actually
+      // configured it
+      pid ??= configuration!.pid
     }
 
     // Whether the PID is a factory PID can be declared, and otherwise follows
@@ -1540,7 +1565,9 @@ export class ModuleLoader {
 
     if (declaredFactory !== false) {
       for (const candidate of runtime.pids) {
-        const factoryConfigurations = this.configurations.listFactoryConfigurations(candidate)
+        const factoryConfigurations = this.configurations.listTargetedFactoryConfigurations(
+          candidate, runtime.target
+        )
         if (factoryConfigurations.length === 0) continue
 
         // One instance per configuration of the factory, the singleton values
@@ -1916,8 +1943,18 @@ export class ModuleLoader {
   private affects(runtime: ComponentRuntime, event: ConfigurationEvent): boolean {
     if (runtime.policy === 'ignore') return false
 
-    return runtime.pids.includes(event.pid) ||
-      (event.factoryPid !== undefined && runtime.pids.includes(event.factoryPid))
+    // Every PID that could configure this component, targeted forms included —
+    // comparing the plain PIDs alone would miss a configuration written for this
+    // module, so the component would keep running on the untargeted values while
+    // a more specific configuration sat there unnoticed.
+    // The chain is per module, so a PID targeted at a *different* module does not
+    // match, which is the other half of what makes targeting work
+    const candidates = new Set(
+      runtime.pids.flatMap(pid => targetedPids(pid, runtime.target))
+    )
+
+    return candidates.has(event.pid) ||
+      (event.factoryPid !== undefined && candidates.has(event.factoryPid))
   }
 
   private async reconcileComponent(

@@ -4,7 +4,7 @@
  */
 
 import 'reflect-metadata'
-import type { ComponentOptions } from './types.js'
+import type { ComponentOptions, ServiceScope } from './types.js'
 
 /**
  * Metadata keys, taken from the global symbol registry rather than created here.
@@ -95,6 +95,23 @@ export function inject(serviceId: string, options?: { optional?: boolean }): Par
 export function singleton(): ClassDecorator {
   return (target) => {
     Reflect.defineMetadata(SCOPE_KEY, 'singleton', target)
+  }
+}
+
+/**
+ * Declares the default scope of a class as one instance per consuming module —
+ * OSGi's `bundle` scope, under the name tsm uses for a bundle.
+ *
+ * For a service that keeps state *about* whoever uses it: a per-module cache, a
+ * session, an undo stack. A singleton would mix two modules' state into one
+ * object; `transient()` would lose it between two calls.
+ *
+ * The instance is created on that module's first resolution and dropped when the
+ * module is deactivated — with `dispose()` called on it if it has one.
+ */
+export function perModule(): ClassDecorator {
+  return (target) => {
+    Reflect.defineMetadata(SCOPE_KEY, 'module', target)
   }
 }
 
@@ -296,6 +313,6 @@ export function isInjectable(target: MetadataTarget): boolean {
  * Reads the scope metadata from a class (set by @singleton() or @transient()).
  * Returns undefined if no scope decorator was used.
  */
-export function getScopeMetadata(target: MetadataTarget): 'singleton' | 'transient' | undefined {
+export function getScopeMetadata(target: MetadataTarget): ServiceScope | undefined {
   return Reflect.getOwnMetadata(SCOPE_KEY, target)
 }
