@@ -485,11 +485,9 @@ export function installDevtools(options: DevtoolsOptions): TsmDevtools {
     },
 
     capabilities(namespace) {
-      const manifests = loader.getManifests()
-      if (manifests.length === 0) {
-        out.log('%cNo modules registered', css('muted'))
-        return
-      }
+      // With the system bundle: it is where the environment's capabilities hang,
+      // and leaving it out would make a wire point at nothing visible
+      const manifests = [...loader.getManifests(), loader.getSystemBundle()]
 
       out.log(`%cCapabilities${namespace ? ` in ${namespace}` : ''}`, css('heading'))
       for (const manifest of manifests) {

@@ -4,7 +4,6 @@
  */
 
 import type {
-  Capability,
   UnresolvedRequirement,
   Wire,
   WiringResolution,
@@ -35,7 +34,7 @@ import { DependencyResolver } from './DependencyResolver.js'
 import { DefaultServiceRegistry } from './ServiceRegistry.js'
 import { ScopedServiceRegistry } from './ScopedServiceRegistry.js'
 import { collectsMany } from './cardinality.js'
-import { libraryCapabilities, resolveWiring, wiringOf } from './capabilities.js'
+import { SYSTEM_BUNDLE_ID, resolveWiring, systemBundle, wiringOf } from './capabilities.js'
 import {
   getActivateMethod,
   getComponentMetadata,
@@ -92,6 +91,7 @@ const DEFAULT_OPTIONS: Required<ModuleLoaderOptions> = {
   logger: undefined as unknown as ModuleLogger,
   configurationAdmin: undefined as unknown as ConfigurationAdmin,
   metatype: undefined as unknown as MetatypeRegistry,
+  systemCapabilities: [],
   sharedLibraries: 'runtime',
   entryResolver: undefined as unknown as (manifest: ModuleManifest) => unknown
 }
@@ -957,6 +957,14 @@ export class ModuleLoader {
     manifest: ModuleManifest,
     options: { awaitCascade?: boolean; container?: unknown } = {}
   ): Promise<LoadedModule> {
+    // The system bundle stands for the runtime; there is nothing to fetch, and in
+    // OSGi its start() does nothing for the same reason
+    if (manifest.id === SYSTEM_BUNDLE_ID) {
+      throw new Error(
+        `'${SYSTEM_BUNDLE_ID}' stands for the runtime itself and cannot be loaded`
+      )
+    }
+
     // A manifest handed in directly becomes known, so the rest of the loader can
     // see it: the module scope reads declared properties and rankings from here,
     // and a listing that does not know the module cannot show it.
@@ -2161,26 +2169,35 @@ export class ModuleLoader {
    * is kept is what `requiresService` checks at runtime.
    */
   getWiring(): WiringResolution {
-    return resolveWiring(this.getManifests(), { offered: this.environmentCapabilities() })
+    // The system bundle takes part like any other module, which is the whole
+    // reason it exists — no second argument, no special case in the resolver
+    return resolveWiring([...this.getManifests(), this.getSystemBundle()])
   }
 
   /**
-   * What the environment brings, as capabilities.
+   * The module standing for the runtime itself, as OSGi's system bundle does.
    *
-   * The shared libraries the host registered: a module declaring
-   * `sharedDependencies` would otherwise never resolve, since the requirement is
-   * derived from its manifest while the library lives outside the model.
+   * It carries what the environment brings: the shared libraries the host
+   * registered, plus whatever `systemCapabilities` declares. Without it a module
+   * with `sharedDependencies` could never resolve — its requirement comes from its
+   * manifest while the library lives outside the model.
    *
-   * With `sharedLibraries: 'import-map'` there is nothing to ask — the browser
-   * resolves those specifiers, and `generateImportMap()` is where they are checked
-   * against the manifests. Pass them to `resolveWiring()` directly if the
-   * resolution should account for them.
+   * Not part of `getManifests()`: that answers what was registered, and this was
+   * not. It is not loadable either.
+   *
+   * With `sharedLibraries: 'import-map'` the libraries are missing from it, since
+   * the browser resolves those specifiers and the loader is never told which ones
+   * exist; `generateImportMap()` checks them instead.
    */
-  private environmentCapabilities(): Capability[] {
-    if (this.options.sharedLibraries === 'import-map') return []
-    if (!isTsmRuntimeAvailable()) return []
+  getSystemBundle(): ModuleManifest {
+    const libraries = this.options.sharedLibraries !== 'import-map' && isTsmRuntimeAvailable()
+      ? tsmRuntime.getRegistered()
+      : undefined
 
-    return libraryCapabilities(tsmRuntime.getRegistered())
+    return systemBundle({
+      libraries,
+      capabilities: this.options.systemCapabilities
+    })
   }
 
   /**

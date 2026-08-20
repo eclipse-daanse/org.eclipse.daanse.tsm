@@ -76,7 +76,7 @@ The **Art** column says what kind of difference it is:
 | 4.4.14 | Access to Resources | none | ✗ | Plattform — a module is not an archive |
 | 4.5 | The Bundle Context | `ModuleContext`: scoped registry, logger, module access | ✅ | |
 | 4.5.2 | Persistent Storage | none | ✗ | Plattform |
-| 4.6 | The System Bundle | none | ✗ | Absicht |
+| 4.6 | The System Bundle | `system.bundle` with the fixed `System Bundle` location, taking part in the resolution, refusing to be loaded | ◐ | Modell — the capability side is there and the name is the one OSGi requires as an alias; what is absent is the lifecycle side, where `stop()` shuts the framework down. A loader is a library, not a runtime to shut down |
 | 4.7.1 | Listeners | `ModuleEventListener`, `ServiceRegistryListener` | ✅ | |
 | 4.7.2 | Delivering Events | synchronous listeners; reactions run in a serialised queue | ◐ | Laufzeit — `import()` is async, so a reaction cannot run inside the event |
 | 4.7.3 | Synchronization Pitfalls | the queue, `settle()`, and a cascade budget | ◐ | Laufzeit |
@@ -134,7 +134,7 @@ The **Art** column says what kind of difference it is:
 | 3.3.6 | `filter` matched per capability | one capability must satisfy the whole filter | ✅ | |
 | 3.3.6 | Case sensitive attribute names | `createServiceFilter(expr, { caseSensitive: true })` | ✅ | the distinction from service properties is kept |
 | 3.3.6 | Version constraints in the filter | `versionRange`, a semver range beside the filter | ◐ | Absicht — a filter compares text, so `(version>=1.9.0)` would accept `1.10.0` only by accident |
-| 3.3.5 | System Bundle Capabilities | `resolveWiring(manifests, { offered })`, and `libraryCapabilities()` from what the host registered; the wires name `environment` as the provider | ◐ | the mechanism is the same one — the specification has the framework parse `system.capabilities.extra` and resolve against it "as if provided by the system bundle". What is missing is only the synthetic bundle 0 to hang it on |
+| 3.3.5 | System Bundle Capabilities | `getSystemBundle()` — a manifest for the runtime, carrying the registered libraries and `systemCapabilities` | ✅ | including the `.extra` route for what a deployer adds; the specification's own screen example works verbatim |
 | 4.2.2 | `system.packages.extra` — packages the environment exports | `sharedDependencies` wires to a `tsm.library` capability the host offers | ◐ | Plattform — the same construction (the specification has the framework "export the JRE packages as system packages"), with a library where OSGi has a Java package |
 | 3.2.5/3.2.6 | Version, Version Ranges | semver instead of OSGi's four-part version | ◐ | Sprache — the ecosystem's convention, and `semver` is already a dependency |
 | 3.4 | Execution Environment (`osgi.ee`) | none | ✗ | Plattform — no JVM profile to assert |
@@ -195,8 +195,8 @@ The **Art** column says what kind of difference it is:
 
 ## What this adds up to
 
-Counted over the 123 rows above: **50 conform**, **48 present but different**,
-**25 absent**. Of the 73 departures, the large majority are **not choices**:
+Counted over the 123 rows above: **51 conform**, **48 present but different**,
+**24 absent**. Of the 72 departures, the large majority are **not choices**:
 
 - **Sprache** (17 rows) — Java's `Dictionary`, checked exceptions, class names as
   service identity, overload resolution, reference counting, eight numeric types.
@@ -209,14 +209,14 @@ Counted over the 123 rows above: **50 conform**, **48 present but different**,
 - **Laufzeit** (2 rows) — `import()` is asynchronous, so reactions to events run in
   a queue rather than inside the event. This is why `settle()` exists and OSGi
   needs no equivalent.
-- **Modell** (9 rows) — tsm settles satisfaction per module where DS settles it
+- **Modell** (10 rows) — tsm settles satisfaction per module where DS settles it
   per component, and the loader is framework and SCR in one. Configuration already
   works per component (112.7.1); services do not.
 
 Core 3.3 — the generic requirement/capability model — is implemented as of the
 section above; what remains absent from Core 3 is everything resting on a class
 loader.
-- **Absicht** (16 rows) — named and argued in `SPEC.md`: no whiteboard for
+- **Absicht** (15 rows) — named and argued in `SPEC.md`: no whiteboard for
   ManagedService or MetaTypeProvider, no XML, no ConfigurationPlugin, validation at
   the source instead of in the UI, `[]` instead of `null`.
 

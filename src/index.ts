@@ -47,7 +47,9 @@ export {
   SERVICE_NAMESPACE,
   LIBRARY_NAMESPACE,
   MODULE_TYPE,
-  ENVIRONMENT
+  ENVIRONMENT,
+  SYSTEM_BUNDLE_ID,
+  systemBundle
 } from './capabilities.js'
 
 // Metatype - what a configuration looks like

@@ -1367,23 +1367,50 @@ Zwei Abweichungen, beide bewusst:
   nur zufällig richtig. `versionRange` ist ein Semver-Range und wird gegen das
   Attribut `version` geprüft — der Filter bleibt daneben gültig.
 
-#### Was die Umgebung mitbringt
+#### Das System Bundle
 
-Nicht jede Capability kommt aus einem Manifest. Die geteilten Bibliotheken
-registriert der Host (§6.2), also muss er sie auch ins Modell einspeisen —
-sonst hätte ein Modul mit `sharedDependencies` ein Requirement, das niemand
-erfüllt:
+Nicht jede Capability kommt aus einem Modul, das jemand geschrieben hat: die
+geteilten Bibliotheken registriert der Host (§6.2), und die Umgebung bringt
+möglicherweise mehr mit. OSGi löst das, indem es der Umgebung die Gestalt eines
+Moduls gibt — *„In addition to normal bundles, the Framework itself is
+represented as a bundle"* (Core 4.6). Damit braucht der Resolver keinen
+Sonderfall: er kennt Module mit Capabilities, und eines davon ist die Laufzeit.
+
+tsm hat dasselbe:
 
 ```typescript
-resolveWiring(manifests, { offered: libraryCapabilities(tsmRuntime.getRegistered()) })
+loader.getSystemBundle()
+// { id: 'system.bundle', entry: 'System Bundle', capabilities: [ … ] }
 ```
 
-`loader.getWiring()` macht das selbst. Die Wires nennen dann `environment` als
-Anbieter — was OSGi an ein synthetisches Bundle 0 hängt und über die
-Launch-Properties `org.osgi.framework.system.capabilities.extra` bzw.
-`system.packages.extra` einspeist: Capabilities und Packages, die die Umgebung
-mitbringt, ohne ein Bundle zu sein. Der Resolver behandelt sie dort „as if
-provided by the system bundle" (Core 3.3.5). Mit `sharedLibraries: 'import-map'` entfällt es: dort weiß der Loader
+Darauf hängen die registrierten Bibliotheken als `tsm.library`-Capabilities, und
+was der Host sonst zusagt:
+
+```typescript
+new ModuleLoader({
+  systemCapabilities: [
+    { namespace: 'acme.screen', attributes: { width: 640, height: 480, card: 'GeForce' } }
+  ]
+})
+```
+
+Das ist die Entsprechung zu `org.osgi.framework.system.capabilities.extra` — das
+Beispiel ist wörtlich das der Spezifikation. Ein Modul kann darauf ein Requirement
+stellen wie auf jedes andere, und die Auflösung urteilt, bevor es geladen wird.
+
+| | |
+| --- | --- |
+| `id` | `system.bundle`, was OSGi als Alias des implementierungseigenen Namens verlangt |
+| `entry` | der feste String `System Bundle`, wie `getLocation()` dort zurückgibt |
+| ladbar | nein — `loadModule()` weist es ab, so wie `start()` dort nichts tut |
+| in `getManifests()` | nein: die Methode beantwortet, was registriert wurde, und das wurde es nicht |
+
+`getWiring()` nimmt es von selbst hinzu, `tsm.capabilities()` zeigt es. Mit
+`sharedLibraries: 'import-map'` fehlen die Bibliotheken darin, weil der Loader
+nicht erfährt, welche die Map bereitstellt — dort prüft `generateImportMap()`.
+
+Wer ohne System Bundle auflösen will, kann Capabilities direkt übergeben:
+`resolveWiring(manifests, { offered })`, mit `environment` als Anbietername. Mit `sharedLibraries: 'import-map'` entfällt es: dort weiß der Loader
 nichts über die verfügbaren Bibliotheken, und `generateImportMap()` ist die
 Stelle, an der geprüft wird.
 
@@ -1424,9 +1451,9 @@ Abweichung: **Sprache** (folgt aus TypeScript statt Java), **Plattform** (Browse
 statt JVM), **Laufzeit** (asynchrones Modul-Laden), **Modell** (Satisfaction pro
 Modul statt pro Component), **Absicht** oder **Lücke**.
 
-Von 123 verglichenen Punkten sind 50 konform, 48 anders und 25 nicht vorhanden.
-Von den 73 Abweichungen sind die meisten keine Wahl: 17 folgen aus der Sprache,
-15 aus der Plattform, 2 aus dem Laufzeitmodell, 9 aus dem Modulschnitt, 16 sind
+Von 123 verglichenen Punkten sind 51 konform, 48 anders und 24 nicht vorhanden.
+Von den 72 Abweichungen sind die meisten keine Wahl: 17 folgen aus der Sprache,
+15 aus der Plattform, 2 aus dem Laufzeitmodell, 10 aus dem Modulschnitt, 15 sind
 begründete Entscheidungen — und **7 sind echte Lücken**.
 
 ### 11.6 Die Spezifikationen zum Nachlesen

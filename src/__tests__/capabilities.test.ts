@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
   ENVIRONMENT,
+  SYSTEM_BUNDLE_ID,
+  systemBundle,
   IDENTITY_NAMESPACE,
   LIBRARY_NAMESPACE,
   libraryCapabilities,
@@ -463,7 +465,10 @@ describe('the loader', () => {
     expect(unresolved.map(entry => entry.moduleId)).toEqual(['atlas'])
     expect(unresolved[0].reason).toBe('no-match')
     // map is resolvable, so it is merely waiting — which getUnsatisfiedModules says
-    expect(loader.getWiring().resolved.sort()).toEqual(['map', 'tiles'])
+    // The system bundle takes part in the resolution like any other module, which
+    // is what having one is for
+    expect(loader.getWiring().resolved.sort())
+      .toEqual(['map', SYSTEM_BUNDLE_ID, 'tiles'])
   })
 
   it('should report what a module is wired to in both directions', async () => {
@@ -495,5 +500,105 @@ describe('the loader', () => {
 
     expect(loader.getUnresolvedModules()).toEqual([])
     expect(loader.getModuleWiring('app').requires[0].provider).toBe('dark')
+  })
+})
+
+describe('the system bundle', () => {
+  it('should stand for the runtime, with the location OSGi gives it', () => {
+    const manifest = systemBundle()
+
+    expect(manifest.id).toBe(SYSTEM_BUNDLE_ID)
+    // getLocation() returns the fixed string "System Bundle" in OSGi
+    expect(manifest.entry).toBe('System Bundle')
+    expect(manifest.capabilities).toEqual([])
+  })
+
+  it('should carry the libraries the host registered', () => {
+    const manifest = systemBundle({ libraries: { vue: '3.5.13' } })
+
+    expect(manifest.capabilities).toEqual([
+      { namespace: LIBRARY_NAMESPACE, attributes: { library: 'vue', version: '3.5.13' } }
+    ])
+  })
+
+  it('should carry whatever else the environment brings', () => {
+    // The specification's own example for system.capabilities.extra
+    const screen = {
+      namespace: 'acme.screen',
+      attributes: { width: 640, height: 480, card: 'GeForce' }
+    }
+
+    const manifest = systemBundle({ capabilities: [screen] })
+
+    expect(manifest.capabilities).toEqual([screen])
+  })
+
+  it('should satisfy a requirement like any other module', () => {
+    const resolution = resolveWiring([
+      systemBundle({ capabilities: [{ namespace: 'acme.screen', attributes: { width: 640 } }] }),
+      bundle('viewer', { requirements: [{ namespace: 'acme.screen', filter: '(width>=480)' }] })
+    ])
+
+    expect(resolution.unresolved).toEqual([])
+    expect(resolution.wires[0]).toMatchObject({
+      requirer: 'viewer',
+      provider: SYSTEM_BUNDLE_ID
+    })
+  })
+
+  it('should let a shared dependency resolve against it', () => {
+    const resolution = resolveWiring([
+      systemBundle({ libraries: { vue: '3.5.13' } }),
+      bundle('ui', { sharedDependencies: [{ id: 'vue', versionRange: '^3.4.0' }] })
+    ])
+
+    expect(resolution.unresolved).toEqual([])
+    expect(resolution.wires[0].provider).toBe(SYSTEM_BUNDLE_ID)
+  })
+})
+
+describe('the loader and the system bundle', () => {
+  it('should build one from what the host declared', async () => {
+    const { ModuleLoader } = await import('../ModuleLoader')
+    const loader = new ModuleLoader({
+      systemCapabilities: [{ namespace: 'acme.screen', attributes: { width: 640 } }]
+    })
+
+    const manifest = loader.getSystemBundle()
+
+    expect(manifest.id).toBe(SYSTEM_BUNDLE_ID)
+    expect(manifest.capabilities).toEqual([
+      { namespace: 'acme.screen', attributes: { width: 640 } }
+    ])
+  })
+
+  it('should resolve a module against it', async () => {
+    const { ModuleLoader } = await import('../ModuleLoader')
+    const loader = new ModuleLoader({
+      systemCapabilities: [{ namespace: 'acme.screen', attributes: { width: 640 } }]
+    })
+    loader.register([
+      bundle('viewer', { requirements: [{ namespace: 'acme.screen', filter: '(width>=480)' }] })
+    ])
+
+    expect(loader.getUnresolvedModules()).toEqual([])
+    expect(loader.getModuleWiring('viewer').requires[0].provider).toBe(SYSTEM_BUNDLE_ID)
+  })
+
+  it('should keep it out of the registered manifests', async () => {
+    const { ModuleLoader } = await import('../ModuleLoader')
+    const loader = new ModuleLoader()
+    loader.register([bundle('one')])
+
+    // getManifests() answers what was registered, and this was not
+    expect(loader.getManifests().map(entry => entry.id)).toEqual(['one'])
+  })
+
+  it('should refuse to be loaded, as its start() does nothing in OSGi', async () => {
+    const { ModuleLoader } = await import('../ModuleLoader')
+    const loader = new ModuleLoader()
+
+    await expect(loader.loadModule(loader.getSystemBundle()))
+      .rejects.toThrow(/stands for the runtime itself/)
   })
 })

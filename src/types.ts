@@ -991,6 +991,23 @@ export interface ModuleLoaderOptions {
   sharedLibraries?: 'runtime' | 'import-map'
 
   /**
+   * What the environment brings, beyond the shared libraries it registered.
+   *
+   * These hang on the system bundle — the counterpart to OSGi's
+   * `org.osgi.framework.system.capabilities.extra`, whose own example is a screen:
+   *
+   * ```typescript
+   * systemCapabilities: [
+   *   { namespace: 'acme.screen', attributes: { width: 640, height: 480, card: 'GeForce' } }
+   * ]
+   * ```
+   *
+   * A module can then require them like anything else, and the resolution says so
+   * before the module is fetched.
+   */
+  systemCapabilities?: Capability[]
+
+  /**
    * Where component configuration schemas are collected.
    *
    * The loader registers what each `@component()` declared as

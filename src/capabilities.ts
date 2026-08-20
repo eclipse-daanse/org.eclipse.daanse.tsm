@@ -49,7 +49,24 @@ export const MODULE_TYPE = 'tsm.module'
 /** Only capabilities and requirements effective at resolve time are considered */
 const RESOLVE = 'resolve'
 
-/** Named as the provider of capabilities that come from no manifest */
+/**
+ * The module that stands for the runtime itself — OSGi's system bundle.
+ *
+ * "In addition to normal bundles, the Framework itself is represented as a
+ * bundle" (Core 4.6). The point is that nothing else needs a special case: the
+ * resolver knows modules with capabilities, and one of them happens to be the
+ * environment. What the host provides — shared libraries, anything it declares —
+ * hangs on this one, the way `system.capabilities.extra` does in OSGi.
+ *
+ * OSGi requires `system.bundle` to be recognised as an alias for the
+ * implementation's own name; here it *is* the name.
+ */
+export const SYSTEM_BUNDLE_ID = 'system.bundle'
+
+/**
+ * Kept as the provider name for capabilities passed straight to
+ * `resolveWiring({ offered })`, without a system bundle around them.
+ */
 export const ENVIRONMENT = 'environment'
 
 function isEffectiveAtResolve(effective: string | undefined): boolean {
@@ -196,6 +213,37 @@ export function libraryCapabilities(
     namespace: LIBRARY_NAMESPACE,
     attributes: { library, version }
   }))
+}
+
+/**
+ * The manifest for the runtime itself.
+ *
+ * Not loadable — its `entry` is the fixed string `System Bundle`, as
+ * `getLocation()` returns in OSGi, and the loader never fetches it. It exists so
+ * that what the environment brings is a module like any other rather than an
+ * argument threaded through the resolution.
+ *
+ * @param options.libraries Shared libraries the host registered
+ * @param options.capabilities Anything else the environment brings — the
+ *   counterpart to `org.osgi.framework.system.capabilities.extra`, whose own
+ *   example in the specification is a screen with width, height and card
+ */
+export function systemBundle(options: {
+  version?: string
+  libraries?: Map<string, { version: string; providedBy?: string }> | Record<string, string>
+  capabilities?: Capability[]
+} = {}): ModuleManifest {
+  return {
+    id: SYSTEM_BUNDLE_ID,
+    name: 'System Bundle',
+    version: options.version ?? '0.0.0',
+    entry: 'System Bundle',
+    exports: {},
+    capabilities: [
+      ...(options.libraries ? libraryCapabilities(options.libraries) : []),
+      ...(options.capabilities ?? [])
+    ]
+  }
 }
 
 /**

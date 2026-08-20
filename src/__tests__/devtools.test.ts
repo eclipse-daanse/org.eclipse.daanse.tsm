@@ -693,6 +693,13 @@ describe('installDevtools - capabilities and wiring', () => {
     expect(text).toContain('demo.theme')
   })
 
+  it('should show the system bundle, where the environment hangs', () => {
+    withWiring().capabilities()
+
+    // A wire may point at it, so leaving it out would point at nothing visible
+    expect(out.lines.join('\n')).toContain('system.bundle')
+  })
+
   it('should narrow to one namespace', () => {
     withWiring().capabilities('demo.theme')
 

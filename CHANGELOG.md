@@ -422,6 +422,14 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
   installed. `scopes` are deliberately not generated: they could hand two modules different versions, which is the
   problem sharing exists to avoid.
 - Documentation fix: the README showed `createTsmExternals(['vue', 'primevue'])`, an array the signature never took.
+- **A system bundle** (`getSystemBundle()`, `systemCapabilities`), which is how OSGi answers the same question:
+  *"In addition to normal bundles, the Framework itself is represented as a bundle"* (Core 4.6). The environment gets
+  the shape of a module, so the resolver needs no special case — it knows modules with capabilities, and one of them is
+  the runtime. It carries the registered shared libraries and whatever the host declares, which is the counterpart to
+  `org.osgi.framework.system.capabilities.extra`; the specification's own screen example works verbatim. Its id is
+  `system.bundle` and its entry the fixed string `System Bundle`, as `getLocation()` returns there. It takes part in
+  `getWiring()` by itself, appears in `tsm.capabilities()`, stays out of `getManifests()` — which answers what was
+  registered — and refuses to be loaded, the way its `start()` does nothing in OSGi.
 - **Fixed:** a module declaring `sharedDependencies` could never resolve. The requirement is derived from its
   manifest, but the library is registered with the runtime — outside the model — so nothing offered the `tsm.library`
   capability and `getUnresolvedModules()` reported the module as unable to ever run. `resolveWiring(manifests,
