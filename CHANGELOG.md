@@ -422,6 +422,12 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
   installed. `scopes` are deliberately not generated: they could hand two modules different versions, which is the
   problem sharing exists to avoid.
 - Documentation fix: the README showed `createTsmExternals(['vue', 'primevue'])`, an array the signature never took.
+- **Fixed:** a module declaring `sharedDependencies` could never resolve. The requirement is derived from its
+  manifest, but the library is registered with the runtime — outside the model — so nothing offered the `tsm.library`
+  capability and `getUnresolvedModules()` reported the module as unable to ever run. `resolveWiring(manifests,
+  { offered })` now takes capabilities that come from no manifest, `libraryCapabilities()` builds them from what the
+  runtime holds, and `getWiring()` supplies them itself. A library may equally be a module that declares the
+  capability, which is what a shared library is in OSGi — a bundle exporting a package.
 - **Requirements and capabilities** (OSGi Core 3.3): a module offers `capabilities` in a namespace and asserts
   `requirements` about them, with `filter`, `versionRange`, `resolution` and `cardinality`. What the manifest already
   said is derived into the same model rather than living beside it — every module has an `osgi.identity` capability,

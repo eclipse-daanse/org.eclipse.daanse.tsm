@@ -38,6 +38,7 @@ export {
 // Requirements and capabilities (Core 3.3)
 export {
   capabilitiesOf,
+  libraryCapabilities,
   requirementsOf,
   resolveWiring,
   satisfies,
@@ -45,7 +46,8 @@ export {
   IDENTITY_NAMESPACE,
   SERVICE_NAMESPACE,
   LIBRARY_NAMESPACE,
-  MODULE_TYPE
+  MODULE_TYPE,
+  ENVIRONMENT
 } from './capabilities.js'
 
 // Metatype - what a configuration looks like

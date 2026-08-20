@@ -1367,6 +1367,40 @@ Zwei Abweichungen, beide bewusst:
   nur zufällig richtig. `versionRange` ist ein Semver-Range und wird gegen das
   Attribut `version` geprüft — der Filter bleibt daneben gültig.
 
+#### Was die Umgebung mitbringt
+
+Nicht jede Capability kommt aus einem Manifest. Die geteilten Bibliotheken
+registriert der Host (§6.2), also muss er sie auch ins Modell einspeisen —
+sonst hätte ein Modul mit `sharedDependencies` ein Requirement, das niemand
+erfüllt:
+
+```typescript
+resolveWiring(manifests, { offered: libraryCapabilities(tsmRuntime.getRegistered()) })
+```
+
+`loader.getWiring()` macht das selbst. Die Wires nennen dann `environment` als
+Anbieter. Mit `sharedLibraries: 'import-map'` entfällt es: dort weiß der Loader
+nichts über die verfügbaren Bibliotheken, und `generateImportMap()` ist die
+Stelle, an der geprüft wird.
+
+**Eine Bibliothek kann stattdessen auch ein Modul sein**, das die Capability
+selbst deklariert:
+
+```json
+{
+  "id": "vue-bundle",
+  "capabilities": [
+    { "namespace": "tsm.library", "attributes": { "library": "vue", "version": "3.5.13" } }
+  ]
+}
+```
+
+Dann schließt sich die Kette ohne Host-Sonderweg — so wie eine geteilte
+Bibliothek in OSGi ein Bundle ist, das ein Package exportiert. Für den *Import*
+ändert das nichts: `import { ref } from 'vue'` löst der Bundler oder der Browser
+auf, nicht der Loader. Das Modul-Dasein betrifft die Deklaration und die
+Auflösung, nicht den Transportweg.
+
 #### Was fehlt, und warum
 
 Package-Wiring (`Import-Package`/`Export-Package`) hat kein Gegenstück: ES-Module
