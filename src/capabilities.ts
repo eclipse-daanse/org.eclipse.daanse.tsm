@@ -49,6 +49,9 @@ export const MODULE_TYPE = 'tsm.module'
 /** Only capabilities and requirements effective at resolve time are considered */
 const RESOLVE = 'resolve'
 
+/** Named as the provider of capabilities that come from no manifest */
+export const ENVIRONMENT = 'environment'
+
 function isEffectiveAtResolve(effective: string | undefined): boolean {
   return effective === undefined || effective === RESOLVE
 }
@@ -175,15 +178,46 @@ export function satisfies(requirement: Requirement, capability: Capability): boo
 }
 
 /**
+ * Capabilities for the libraries a host provides.
+ *
+ * Without these, a module declaring `sharedDependencies` could never resolve: the
+ * requirement is derived from the manifest, but the library itself is registered
+ * with the runtime, outside the model. This is how the environment says what it
+ * brings — the counterpart to a bundle that declares its own capability.
+ */
+export function libraryCapabilities(
+  libraries: Map<string, { version: string; providedBy?: string }> | Record<string, string>
+): Capability[] {
+  const entries = libraries instanceof Map
+    ? [...libraries].map(([library, entry]) => [library, entry.version] as const)
+    : Object.entries(libraries)
+
+  return entries.map(([library, version]) => ({
+    namespace: LIBRARY_NAMESPACE,
+    attributes: { library, version }
+  }))
+}
+
+/**
  * Wire the requirements of these modules to the capabilities among them.
  *
  * A module resolves when every mandatory requirement found a capability. An
  * optional one that found nothing is simply not wired — no error, as in OSGi.
+ *
+ * @param options.offered Capabilities that come from outside any manifest: the
+ *   libraries a host provides, or anything else the environment brings. Their
+ *   provider is named `environment` in the resulting wires.
  */
-export function resolveWiring(manifests: ModuleManifest[]): WiringResolution {
-  const offered = manifests.flatMap(manifest =>
-    capabilitiesOf(manifest).map(capability => ({ provider: manifest.id, capability }))
-  )
+export function resolveWiring(
+  manifests: ModuleManifest[],
+  options: { offered?: Capability[] } = {}
+): WiringResolution {
+  const offered = [
+    ...manifests.flatMap(manifest =>
+      capabilitiesOf(manifest).map(capability => ({ provider: manifest.id, capability }))
+    ),
+    ...(options.offered ?? []).map(capability => ({ provider: ENVIRONMENT, capability }))
+  ]
 
   const wires: Wire[] = []
   const unresolved: UnresolvedRequirement[] = []

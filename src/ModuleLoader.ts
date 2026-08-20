@@ -4,6 +4,7 @@
  */
 
 import type {
+  Capability,
   UnresolvedRequirement,
   Wire,
   WiringResolution,
@@ -34,7 +35,7 @@ import { DependencyResolver } from './DependencyResolver.js'
 import { DefaultServiceRegistry } from './ServiceRegistry.js'
 import { ScopedServiceRegistry } from './ScopedServiceRegistry.js'
 import { collectsMany } from './cardinality.js'
-import { resolveWiring, wiringOf } from './capabilities.js'
+import { libraryCapabilities, resolveWiring, wiringOf } from './capabilities.js'
 import {
   getActivateMethod,
   getComponentMetadata,
@@ -2160,7 +2161,26 @@ export class ModuleLoader {
    * is kept is what `requiresService` checks at runtime.
    */
   getWiring(): WiringResolution {
-    return resolveWiring(this.getManifests())
+    return resolveWiring(this.getManifests(), { offered: this.environmentCapabilities() })
+  }
+
+  /**
+   * What the environment brings, as capabilities.
+   *
+   * The shared libraries the host registered: a module declaring
+   * `sharedDependencies` would otherwise never resolve, since the requirement is
+   * derived from its manifest while the library lives outside the model.
+   *
+   * With `sharedLibraries: 'import-map'` there is nothing to ask — the browser
+   * resolves those specifiers, and `generateImportMap()` is where they are checked
+   * against the manifests. Pass them to `resolveWiring()` directly if the
+   * resolution should account for them.
+   */
+  private environmentCapabilities(): Capability[] {
+    if (this.options.sharedLibraries === 'import-map') return []
+    if (!isTsmRuntimeAvailable()) return []
+
+    return libraryCapabilities(tsmRuntime.getRegistered())
   }
 
   /**

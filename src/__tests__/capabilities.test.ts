@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import {
+  ENVIRONMENT,
   IDENTITY_NAMESPACE,
   LIBRARY_NAMESPACE,
+  libraryCapabilities,
   MODULE_TYPE,
   SERVICE_NAMESPACE,
   capabilitiesOf,
@@ -297,6 +299,67 @@ describe('resolveWiring', () => {
     ])
 
     expect(resolution.wires[0]).toMatchObject({ requirer: 'self', provider: 'self' })
+  })
+})
+
+describe('what the environment brings', () => {
+  it('should leave a shared dependency unresolvable on its own', () => {
+    // The requirement is derived from the manifest; the library lives outside the
+    // model, so without the environment saying so, nothing offers it
+    const resolution = resolveWiring([
+      bundle('ui', { sharedDependencies: [{ id: 'vue', versionRange: '^3.4.0' }] })
+    ])
+
+    expect(resolution.unresolved.map(entry => entry.reason)).toEqual(['no-capability'])
+  })
+
+  it('should resolve it once the host says what it provides', () => {
+    const resolution = resolveWiring(
+      [bundle('ui', { sharedDependencies: [{ id: 'vue', versionRange: '^3.4.0' }] })],
+      { offered: libraryCapabilities({ vue: '3.5.13' }) }
+    )
+
+    expect(resolution.unresolved).toEqual([])
+    expect(resolution.wires[0]).toMatchObject({ requirer: 'ui', provider: ENVIRONMENT })
+  })
+
+  it('should hold the version range against what the host has', () => {
+    const resolution = resolveWiring(
+      [bundle('ui', { sharedDependencies: [{ id: 'vue', versionRange: '^3.4.0' }] })],
+      { offered: libraryCapabilities({ vue: '3.2.0' }) }
+    )
+
+    // Present, but too old — the same judgement validateSharedDependencies makes
+    // at load time, here before anything is fetched
+    expect(resolution.unresolved.map(entry => entry.reason)).toEqual(['no-match'])
+  })
+
+  it('should take a registry of libraries as the runtime keeps it', () => {
+    const registered = new Map([
+      ['vue', { version: '3.5.13', providedBy: 'host' }],
+      ['d3', { version: '7.9.0' }]
+    ])
+
+    expect(libraryCapabilities(registered)).toEqual([
+      { namespace: LIBRARY_NAMESPACE, attributes: { library: 'vue', version: '3.5.13' } },
+      { namespace: LIBRARY_NAMESPACE, attributes: { library: 'd3', version: '7.9.0' } }
+    ])
+  })
+
+  it('should let a library be a module that offers the capability instead', () => {
+    // The other way to close the same gap: no host registry, just a manifest
+    const resolution = resolveWiring([
+      bundle('vue-bundle', {
+        capabilities: [{
+          namespace: LIBRARY_NAMESPACE,
+          attributes: { library: 'vue', version: '3.5.13' }
+        }]
+      }),
+      bundle('ui', { sharedDependencies: [{ id: 'vue', versionRange: '^3.4.0' }] })
+    ])
+
+    expect(resolution.unresolved).toEqual([])
+    expect(resolution.wires[0].provider).toBe('vue-bundle')
   })
 })
 
