@@ -139,6 +139,8 @@ The **Art** column says what kind of difference it is:
 | 3.4 | Execution Environment (`osgi.ee`) | none | ✗ | Plattform — no JVM profile to assert |
 | 3.7.10 | Provider Selection | highest `version` attribute wins, declaration order breaks a tie | ◐ | Absicht — a full constraint solver addresses problems that only package wiring creates |
 | — | Resolution timing | static, over manifests, before loading; `getUnresolvedModules()` reports what waits *in vain* | ✅ | the line the specification draws at Compendium 135.4: a service capability is a promise |
+| 3.6.4 | `Import-Package` — a library needed from elsewhere | `sharedDependencies`, expressed as a `tsm.library` requirement | ◐ | Plattform — the intent is the same, the mechanism is not: OSGi wires the import to an exporter and the class loader *enforces* one instance, while tsm checks that the host registered one and relies on there being a single registry. Hence no second version at a time, and hence the build check: where OSGi has a verifier, a bundled copy here would just behave subtly wrong |
+| 135.2-135.6 | Registered namespaces (`osgi.extender`, `osgi.contract`, `osgi.implementation`, …) | only `osgi.identity` and `osgi.service` are used; a shared library uses `tsm.library` | ◐ | Absicht — none of the registered namespaces means "the host supplies this library instance": `osgi.contract` is for specification contracts with discrete versioning. Core 3.3 provides for own namespaces, which makes this the conform way to say something the specification has no name for |
 
 ## Compendium 112 — Declarative Services
 
@@ -192,15 +194,15 @@ The **Art** column says what kind of difference it is:
 
 ## What this adds up to
 
-Counted over the 120 rows above: **50 conform**, **44 present but different**,
-**26 absent**. Of the 70 departures, the large majority are **not choices**:
+Counted over the 122 rows above: **50 conform**, **46 present but different**,
+**26 absent**. Of the 72 departures, the large majority are **not choices**:
 
 - **Sprache** (17 rows) — Java's `Dictionary`, checked exceptions, class names as
   service identity, overload resolution, reference counting, eight numeric types.
   Copying these would make tsm worse, not more conform. Two of them come out
   *better* in TypeScript: the schema that is also the type (105.9, 112.8.2), and
   decorator metadata that needs no descriptor generation (112.4).
-- **Plattform** (13 rows) — everything that rests on a class loader, a file system,
+- **Plattform** (14 rows) — everything that rests on a class loader, a file system,
   or a security boundary between bundles: lazy activation, persistent storage,
   permissions, location binding, targeted PIDs, multiple versions.
 - **Laufzeit** (2 rows) — `import()` is asynchronous, so reactions to events run in
@@ -213,7 +215,7 @@ Counted over the 120 rows above: **50 conform**, **44 present but different**,
 Core 3.3 — the generic requirement/capability model — is implemented as of the
 section above; what remains absent from Core 3 is everything resting on a class
 loader.
-- **Absicht** (16 rows) — named and argued in `SPEC.md`: no whiteboard for
+- **Absicht** (17 rows) — named and argued in `SPEC.md`: no whiteboard for
   ManagedService or MetaTypeProvider, no XML, no ConfigurationPlugin, validation at
   the source instead of in the UI, `[]` instead of `null`.
 
