@@ -473,10 +473,14 @@ export function installDevtools(options: DevtoolsOptions): TsmDevtools {
         )
 
         for (const instance of declaration.configurations) {
-          const pid = instance.pid ?? declaration.configurationPid.join(', ')
+          // What it waits for matters more than the PID when it is waiting
+          const detail = instance.waitingFor !== undefined
+            ? instance.waitingFor.join(', ')
+            : instance.pid ?? declaration.configurationPid.join(', ')
+
           out.log(
-            `    %c${instance.state}%c ${pid}`,
-            css(instance.state === 'unsatisfied-configuration' ? 'warn' : 'ok'),
+            `    %c${instance.state}%c ${detail}`,
+            css(instance.state.startsWith('unsatisfied') ? 'warn' : 'ok'),
             css('muted')
           )
         }

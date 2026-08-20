@@ -39,7 +39,9 @@ import {
   getActivateMethod,
   getComponentMetadata,
   getDeactivateMethod,
-  getModifiedMethod
+  getInjectMetadata,
+  getModifiedMethod,
+  getPropertyInjectMetadata
 } from './decorators.js'
 import {
   CONFIGURATION_ADMIN_SERVICE_ID,
@@ -132,6 +134,8 @@ interface ComponentRuntime {
   ctor: InjectableConstructor<unknown>
   options: ComponentOptions
   className: string
+  /** What it injects — DS calls these the component's references (112.3) */
+  references: Array<{ serviceId: string; optional: boolean }>
   /** Effective configuration PIDs, defaulting to the class name */
   pids: string[]
   policy: ConfigurationPolicy
@@ -163,6 +167,27 @@ interface WantedInstance {
    */
   factory: boolean
   values: ConfigurationProperties
+}
+
+/**
+ * What a component injects, from both places `@inject()` can sit.
+ *
+ * These are DS' references (112.3). A mandatory one decides whether the component
+ * may run at all — and only the component, not its module.
+ */
+function referencesOf(
+  ctor: InjectableConstructor<unknown>
+): Array<{ serviceId: string; optional: boolean }> {
+  return [
+    ...getInjectMetadata(ctor).map(entry => ({
+      serviceId: entry.serviceId,
+      optional: entry.optional
+    })),
+    ...getPropertyInjectMetadata(ctor).map(entry => ({
+      serviceId: entry.serviceId,
+      optional: entry.optional
+    }))
+  ]
 }
 
 /** Key for the one instance a component has when its PID is not a factory PID */
@@ -444,6 +469,9 @@ export class ModuleLoader {
     await this.rebindGreedyRequirements()
     await this.notifyDynamicChanges()
     await this.activateSatisfiedPending()
+    // After the module level, because a module activating here brings services
+    // that a component elsewhere may have been waiting for
+    await this.reconcileComponentReferences()
   }
 
   /**
@@ -874,13 +902,15 @@ export class ModuleLoader {
         properties: instance.properties
       }))
 
-    // No instance at all means the configuration it requires is missing: every
-    // other reason to hold a component back parks its whole module
     if (configurations.length === 0) {
-      configurations.push({
-        state: 'unsatisfied-configuration',
-        properties: {}
-      })
+      // Two reasons to have no instance, and DS distinguishes them: a service it
+      // injects is missing, or configuration it requires is
+      const missing = this.missingReferences(runtime)
+      configurations.push(
+        missing.length > 0
+          ? { state: 'unsatisfied-reference', waitingFor: missing, properties: {} }
+          : { state: 'unsatisfied-configuration', properties: {} }
+      )
     }
 
     return {
@@ -891,6 +921,7 @@ export class ModuleLoader {
       hasActivate: activateMethod !== undefined,
       hasDeactivate: getDeactivateMethod(runtime.ctor) !== undefined,
       hasModified: getModifiedMethod(runtime.ctor) !== undefined,
+      references: runtime.references,
       configurationPid: runtime.pids,
       configurationPolicy: runtime.policy,
       configurations
@@ -1329,6 +1360,7 @@ export class ModuleLoader {
       ctor,
       options,
       className: ctor.name,
+      references: referencesOf(ctor),
       pids: this.pidsOf(ctor, options),
       policy: options.configurationPolicy ?? 'optional',
       instances: new Map()
@@ -1343,19 +1375,43 @@ export class ModuleLoader {
     // component may inject a service another component of the same module
     // offers, and constructing it earlier would find nothing. DS separates the
     // two phases for the same reason.
-    for (const runtime of runtimes) {
-      for (const wanted of this.configurationsFor(runtime)) {
-        this.registerInstance(loadedModule, runtime, wanted)
-      }
-      if (runtime.instances.size === 0) {
-        this.logger.info(
-          `Component ${runtime.className} of ${loadedModule.manifest.id} waits for ` +
-          `configuration: ${runtime.pids.join(', ')}`
-        )
+    // In rounds, because one component may inject the service another offers and
+    // the order inside a module says nothing about which comes first. The same
+    // fixpoint the module level uses.
+    const registered: ComponentRuntime[] = []
+    let registeredSomething = true
+    while (registeredSomething) {
+      registeredSomething = false
+
+      for (const runtime of runtimes) {
+        if (runtime.instances.size > 0) continue
+        if (this.missingReferences(runtime).length > 0) continue
+
+        for (const wanted of this.configurationsFor(runtime)) {
+          this.registerInstance(loadedModule, runtime, wanted)
+          registeredSomething = true
+        }
+        if (runtime.instances.size > 0) registered.push(runtime)
       }
     }
 
     for (const runtime of runtimes) {
+      if (runtime.instances.size > 0) continue
+
+      const missing = this.missingReferences(runtime)
+      this.logger.info(
+        missing.length > 0
+          ? `Component ${runtime.className} of ${loadedModule.manifest.id} waits for ` +
+            `service(s): ${missing.join(', ')}`
+          : `Component ${runtime.className} of ${loadedModule.manifest.id} waits for ` +
+            `configuration: ${runtime.pids.join(', ')}`
+      )
+    }
+
+    // In the order they were registered, not the order they were declared: that
+    // order is the dependency order the rounds worked out, and activating a
+    // consumer first would leave the provider constructed but not yet started
+    for (const runtime of registered) {
       for (const instance of [...runtime.instances.values()]) {
         await this.activateInstance(loadedModule, runtime, instance)
       }
@@ -1517,6 +1573,55 @@ export class ModuleLoader {
   ): number | undefined {
     const configured = configuration['service.ranking']
     return typeof configured === 'number' ? configured : options.ranking
+  }
+
+  /**
+   * The mandatory references of a component that nothing provides.
+   *
+   * Empty means it may run. This is where the component level lives: a missing
+   * service used to throw and take the module's start with it — now the component
+   * waits and the module keeps running, as DS has it (112.5.2).
+   */
+  private missingReferences(runtime: ComponentRuntime): string[] {
+    return runtime.references
+      .filter(reference => !reference.optional && !this.services.has(reference.serviceId))
+      .map(reference => reference.serviceId)
+  }
+
+  /**
+   * Start components whose references arrived, stop those whose references left.
+   *
+   * Runs on every registry event, next to the module-level reconciliation. A
+   * component going down withdraws its own services, which is what carries the
+   * cascade on — and the queue keeps that in order.
+   */
+  private async reconcileComponentReferences(): Promise<void> {
+    for (const [moduleId, runtimes] of [...this.componentRuntimes]) {
+      const loadedModule = this.modules.get(moduleId)
+      if (!loadedModule || loadedModule.state !== 'active') continue
+
+      for (const runtime of runtimes) {
+        const missing = this.missingReferences(runtime)
+
+        if (missing.length > 0) {
+          for (const [key, instance] of [...runtime.instances]) {
+            this.logger.info(
+              `Component ${runtime.className} of ${moduleId} stops: ` +
+              `service(s) gone: ${missing.join(', ')}`
+            )
+            await this.stopInstance(loadedModule, runtime, key, instance)
+          }
+          continue
+        }
+
+        if (runtime.instances.size > 0) continue
+
+        for (const wanted of this.configurationsFor(runtime)) {
+          const created = this.registerInstance(loadedModule, runtime, wanted)
+          await this.activateInstance(loadedModule, runtime, created)
+        }
+      }
+    }
   }
 
   /** Register the services of one component instance, without creating it yet */
