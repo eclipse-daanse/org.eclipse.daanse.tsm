@@ -556,3 +556,110 @@ describe('tsmPlugin - shared libraries bundled by mistake', () => {
     expect(recorded.errors).toEqual([])
   })
 })
+
+describe("tsmPlugin - dependencies: 'derive'", () => {
+  const manifest = {
+    id: 'ui',
+    dependencies: ['stale-one'],
+    sharedDependencies: [{ id: 'vue', versionRange: '^3.0.0' }]
+  }
+
+  interface Recorded { errors: string[]; warnings: string[]; emitted: Array<{ fileName: string; source: string }> }
+
+  async function run(
+    files: Array<{ id: string; code: string }>,
+    options: Partial<Parameters<typeof tsmPlugin>[0]> = {}
+  ): Promise<Recorded> {
+    const plugin = tsmPlugin({ manifest, dependencies: 'derive', ...options })
+    const recorded: Recorded = { errors: [], warnings: [], emitted: [] }
+    const ctx = {
+      error(message: string) { recorded.errors.push(message); throw new Error(message) },
+      warn(message: string) { recorded.warnings.push(message) },
+      emitFile(file: { fileName: string; source: string }) { recorded.emitted.push(file) }
+    }
+    type Hook = (this: typeof ctx, ...args: unknown[]) => unknown
+
+    await (plugin.buildStart as Hook).call(ctx)
+    for (const file of files) {
+      try {
+        await (plugin.transform as Hook).call(ctx, file.code, file.id)
+      } catch { /* recorded */ }
+    }
+    await (plugin.buildEnd as Hook).call(ctx)
+    try {
+      await (plugin.generateBundle as Hook).call(ctx, {}, {})
+    } catch { /* recorded */ }
+    return recorded
+  }
+
+  function derived(recorded: Recorded): Record<string, unknown> {
+    const file = recorded.emitted.find(entry => entry.fileName === 'manifest.json')
+    if (!file) throw new Error('no manifest emitted')
+    return JSON.parse(file.source)
+  }
+
+  it('should write the modules the code imports', async () => {
+    const recorded = await run([
+      { id: 'src/a.ts', code: "import { X } from 'tsm:plugin-a'\nimport { Y } from 'tsm:plugin-b'" }
+    ])
+
+    expect(derived(recorded).dependencies).toEqual(['plugin-a', 'plugin-b'])
+  })
+
+  it('should replace a stale declaration rather than complain about it', async () => {
+    const recorded = await run([{ id: 'src/a.ts', code: "import { X } from 'tsm:plugin-a'" }])
+
+    // 'stale-one' is in the manifest and imported by nobody — deriving makes the
+    // manifest follow the code, so there is nothing to warn about
+    expect(derived(recorded).dependencies).toEqual(['plugin-a'])
+    expect(recorded.warnings).toEqual([])
+  })
+
+  it('should not hold an undeclared import against the code', async () => {
+    const recorded = await run([{ id: 'src/a.ts', code: "import { X } from 'tsm:nowhere'" }])
+
+    expect(recorded.errors).toEqual([])
+    expect(derived(recorded).dependencies).toEqual(['nowhere'])
+  })
+
+  it('should leave a shared library out', async () => {
+    const recorded = await run([
+      { id: 'src/a.ts', code: "import { ref } from 'tsm:vue'\nimport { X } from 'tsm:plugin-a'" }
+    ])
+
+    // The module depends on the host providing vue, which sharedDependencies says
+    expect(derived(recorded).dependencies).toEqual(['plugin-a'])
+    expect(derived(recorded).sharedDependencies).toEqual([{ id: 'vue', versionRange: '^3.0.0' }])
+  })
+
+  it('should leave a type-only import out', async () => {
+    const recorded = await run([
+      { id: 'src/a.ts', code: "import type { T } from 'tsm:types-only'\nimport { X } from 'tsm:plugin-a'" }
+    ])
+
+    expect(derived(recorded).dependencies).toEqual(['plugin-a'])
+  })
+
+  it('should emit one manifest when both are derived', async () => {
+    const recorded = await run(
+      [{
+        id: 'src/a.ts',
+        code: "import { X } from 'tsm:plugin-a'\n" +
+          "@component({ service: ['demo.thing'] })\nexport class Thing {}"
+      }],
+      { components: 'derive' }
+    )
+
+    // Two emits under one name would silently overwrite each other
+    expect(recorded.emitted.filter(entry => entry.fileName === 'manifest.json')).toHaveLength(1)
+    const result = derived(recorded)
+    expect(result.dependencies).toEqual(['plugin-a'])
+    expect(result.provides).toEqual([{ id: 'demo.thing' }])
+  })
+
+  it('should write an empty list when nothing is imported', async () => {
+    const recorded = await run([{ id: 'src/a.ts', code: 'export const x = 1' }])
+
+    expect(derived(recorded).dependencies).toEqual([])
+  })
+})

@@ -2,7 +2,7 @@ import 'reflect-metadata'
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { ModuleLoader } from '../ModuleLoader'
 import { DefaultServiceRegistry } from '../ServiceRegistry'
-import { activate, component, deactivate, inject } from '../decorators'
+import { activate, bind, component, deactivate, inject, unbind } from '../decorators'
 import type { ModuleManifest } from '../types'
 
 /**
@@ -234,5 +234,339 @@ describe('a component waiting for a service', () => {
 
     expect(loader.getComponents('map')[0].configurations[0].state)
       .toBe('unsatisfied-reference')
+  })
+})
+
+describe('a dynamic reference with @bind', () => {
+  let services: DefaultServiceRegistry
+  let loader: ModuleLoader
+
+  beforeEach(() => {
+    services = new DefaultServiceRegistry()
+    loader = new ModuleLoader({ serviceRegistry: services })
+  })
+
+  it('should hand the service over before activate runs', async () => {
+    const order: string[] = []
+
+    @component({ service: ['demo.map'] })
+    class Map2D {
+      @bind('demo.tiles') setTiles(): void { order.push('bind') }
+      @activate() start(): void { order.push('activate') }
+    }
+
+    services.register('demo.tiles', { name: 'tiles' })
+    await loader.loadModule(manifest('map'), { container: { Map2D } })
+
+    // DS orders it this way (112.5.10 before 112.5.11): activate should see what
+    // the component was given
+    expect(order).toEqual(['bind', 'activate'])
+  })
+
+  it('should pass the service itself', async () => {
+    let received: unknown
+
+    @component()
+    class Watcher {
+      @bind('demo.tiles') setTiles(tiles: unknown): void { received = tiles }
+    }
+
+    const tiles = { name: 'raster' }
+    services.register('demo.tiles', tiles)
+    await loader.loadModule(manifest('w'), { container: { Watcher } })
+
+    expect(received).toBe(tiles)
+  })
+
+  it('should keep the instance when the service is replaced', async () => {
+    const events: string[] = []
+
+    @component()
+    class Watcher {
+      @bind('demo.tiles', { optional: true }) setTiles(): void { events.push('bind') }
+      @unbind('demo.tiles') unsetTiles(): void { events.push('unbind') }
+      @activate() start(): void { events.push('activate') }
+      @deactivate() stop(): void { events.push('deactivate') }
+    }
+
+    const first = services.register('demo.tiles', { name: 'one' })
+    await loader.loadModule(manifest('w'), { container: { Watcher } })
+
+    first.unregister()
+    await loader.settle()
+    services.register('demo.tiles', { name: 'two' })
+    await loader.settle()
+
+    // The whole point: a method call instead of a rebuild — no deactivate anywhere
+    expect(events).toEqual(['bind', 'activate', 'unbind', 'bind'])
+  })
+
+  it('should count as a reference the component needs to start', async () => {
+    const bound = vi.fn()
+
+    @component({ service: ['demo.map'] })
+    class Map2D {
+      @bind('demo.tiles') setTiles(): void { bound() }
+    }
+
+    await loader.loadModule(manifest('map'), { container: { Map2D } })
+
+    expect(bound).not.toHaveBeenCalled()
+    expect(loader.getComponents('map')[0].configurations[0])
+      .toMatchObject({ state: 'unsatisfied-reference', waitingFor: ['demo.tiles'] })
+  })
+
+  it('should stop a mandatory reference that goes, after telling it', async () => {
+    const events: string[] = []
+
+    @component({ service: ['demo.map'] })
+    class Map2D {
+      @bind('demo.tiles') setTiles(): void { events.push('bind') }
+      @unbind('demo.tiles') unsetTiles(): void { events.push('unbind') }
+      @deactivate() stop(): void { events.push('deactivate') }
+    }
+
+    const registration = services.register('demo.tiles', {})
+    await loader.loadModule(manifest('map'), { container: { Map2D } })
+
+    registration.unregister()
+    await loader.settle()
+
+    // DS 112.5.18: mandatory and no replacement means the component goes — but it
+    // is told first
+    expect(events).toEqual(['bind', 'unbind', 'deactivate'])
+    expect(services.has('demo.map')).toBe(false)
+  })
+
+  it('should keep an optional reference alive when it goes', async () => {
+    const events: string[] = []
+
+    @component({ service: ['demo.map'] })
+    class Map2D {
+      @bind('demo.traffic', { optional: true }) setTraffic(): void { events.push('bind') }
+      @unbind('demo.traffic') unsetTraffic(): void { events.push('unbind') }
+      @activate() start(): void { events.push('activate') }
+      @deactivate() stop(): void { events.push('deactivate') }
+    }
+
+    const registration = services.register('demo.traffic', {})
+    await loader.loadModule(manifest('map'), { container: { Map2D } })
+
+    registration.unregister()
+    await loader.settle()
+
+    expect(events).toEqual(['bind', 'activate', 'unbind'])
+    expect(services.has('demo.map')).toBe(true)
+  })
+
+  it('should bind an optional reference that only arrives later', async () => {
+    const events: string[] = []
+
+    @component()
+    class Watcher {
+      @bind('demo.traffic', { optional: true }) setTraffic(): void { events.push('bind') }
+      @activate() start(): void { events.push('activate') }
+    }
+
+    await loader.loadModule(manifest('w'), { container: { Watcher } })
+    expect(events).toEqual(['activate'])
+
+    services.register('demo.traffic', {})
+    await loader.settle()
+
+    expect(events).toEqual(['activate', 'bind'])
+  })
+
+  it('should only report a loss an optional reference cannot hear about', async () => {
+    const events: string[] = []
+    const warnings: string[] = []
+
+    @component({ service: ['demo.map'] })
+    class Map2D {
+      @bind('demo.traffic', { optional: true }) setTraffic(): void { events.push('bind') }
+      @deactivate() stop(): void { events.push('deactivate') }
+    }
+
+    const quiet = new ModuleLoader({
+      serviceRegistry: services,
+      logger: {
+        debug: () => {}, info: () => {}, error: () => {},
+        warn: message => warnings.push(message)
+      }
+    })
+    const registration = services.register('demo.traffic', {})
+    await quiet.loadModule(manifest('map'), { container: { Map2D } })
+
+    registration.unregister()
+    await quiet.settle()
+
+    // Stopping it would turn an optional reference into a mandatory one, so the
+    // component stays — holding something stale, and told about it
+    expect(events).toEqual(['bind'])
+    expect(quiet.getComponents('map')[0].configurations[0].state).toBe('active')
+    expect(warnings.some(entry => entry.includes('no @unbind for demo.traffic'))).toBe(true)
+  })
+
+  it('should survive a failing bind method', async () => {
+    const events: string[] = []
+
+    @component({ service: ['demo.map'] })
+    class Map2D {
+      @bind('demo.tiles') setTiles(): void { throw new Error('boom') }
+      @activate() start(): void { events.push('activate') }
+    }
+
+    services.register('demo.tiles', {})
+    await loader.loadModule(manifest('map'), {
+      container: { Map2D }
+    })
+
+    // Logged, not thrown: the component stays as it is, which is the promise of a
+    // dynamic reference
+    expect(events).toEqual(['activate'])
+    expect(services.has('demo.map')).toBe(true)
+  })
+
+  it('should make a component with only @bind immediate', async () => {
+    const bound = vi.fn()
+
+    // No @activate, no service — it would be delayed and never hear anything
+    @component()
+    class Watcher {
+      @bind('demo.tiles') setTiles(): void { bound() }
+    }
+
+    services.register('demo.tiles', {})
+    await loader.loadModule(manifest('w'), { container: { Watcher } })
+
+    expect(bound).toHaveBeenCalled()
+  })
+})
+
+describe('switching a single component off', () => {
+  let services: DefaultServiceRegistry
+  let loader: ModuleLoader
+
+  beforeEach(() => {
+    services = new DefaultServiceRegistry()
+    loader = new ModuleLoader({ serviceRegistry: services })
+  })
+
+  async function twoComponents(events: string[] = []): Promise<string[]> {
+    @component({ service: ['demo.tiles'] })
+    class RasterTiles {
+      @activate() start(): void { events.push('tiles:start') }
+      @deactivate() stop(): void { events.push('tiles:stop') }
+    }
+
+    @component({ service: ['demo.clock'] })
+    class Clock {
+      @activate() start(): void { events.push('clock:start') }
+    }
+
+    await loader.loadModule(manifest('mod'), { container: { RasterTiles, Clock } })
+    return events
+  }
+
+  it('should stop it and leave its siblings alone', async () => {
+    const events = await twoComponents()
+
+    await loader.disableComponent('mod', 'RasterTiles')
+
+    expect(events).toEqual(['tiles:start', 'clock:start', 'tiles:stop'])
+    expect(services.has('demo.tiles')).toBe(false)
+    expect(services.has('demo.clock')).toBe(true)
+    expect(loader.getModule('mod')?.state).toBe('active')
+  })
+
+  it('should say it is off rather than waiting', async () => {
+    await twoComponents()
+    await loader.disableComponent('mod', 'RasterTiles')
+
+    const [tiles] = loader.getComponents('mod')
+    expect(tiles.disabled).toBe(true)
+    expect(loader.getDisabledComponents()).toEqual(['mod/RasterTiles'])
+  })
+
+  it('should not bring it back through a reconciliation', async () => {
+    const events = await twoComponents()
+    await loader.disableComponent('mod', 'RasterTiles')
+
+    // Anything at all happening in the registry
+    services.register('demo.unrelated', {})
+    await loader.settle()
+
+    // Off is off — a disabled module behaves the same way
+    expect(events.filter(entry => entry === 'tiles:start')).toHaveLength(1)
+    expect(services.has('demo.tiles')).toBe(false)
+  })
+
+  it('should let it run again', async () => {
+    const events = await twoComponents()
+    await loader.disableComponent('mod', 'RasterTiles')
+
+    await loader.enableComponent('mod', 'RasterTiles')
+
+    expect(events).toEqual(['tiles:start', 'clock:start', 'tiles:stop', 'tiles:start'])
+    expect(services.has('demo.tiles')).toBe(true)
+  })
+
+  it('should cascade to whatever consumed its service', async () => {
+    @component({ service: ['demo.tiles'] })
+    class RasterTiles {}
+
+    @component({ service: ['demo.map'] })
+    class Map2D {
+      constructor(@inject('demo.tiles') private tiles: unknown) {}
+      @activate() start(): void {}
+    }
+
+    await loader.loadModule(manifest('mod'), { container: { RasterTiles, Map2D } })
+    expect(services.has('demo.map')).toBe(true)
+
+    await loader.disableComponent('mod', 'RasterTiles')
+
+    // The map was not disabled — it lost what it injects
+    expect(services.has('demo.map')).toBe(false)
+    const map = loader.getComponents('mod').find(entry => entry.className === 'Map2D')!
+    expect(map.disabled).toBe(false)
+    expect(map.configurations[0].state).toBe('unsatisfied-reference')
+  })
+
+  it('should keep it off across a module reload', async () => {
+    const hot = new ModuleLoader({ serviceRegistry: services, hotReload: true })
+
+    @component({ service: ['demo.tiles'] })
+    class RasterTiles {}
+
+    await hot.loadModule(manifest('mod'), { container: { RasterTiles } })
+    await hot.disableComponent('mod', 'RasterTiles')
+
+    await hot.reloadModule('mod')
+
+    // The switch belongs to the deployment, not to the module instance
+    expect(services.has('demo.tiles')).toBe(false)
+    expect(hot.getComponents('mod')[0].disabled).toBe(true)
+  })
+
+  it('should refuse to enable what was never disabled', async () => {
+    await twoComponents()
+
+    expect(await loader.enableComponent('mod', 'RasterTiles')).toBe(false)
+  })
+
+  it('should remember the switch for a component it has never seen', async () => {
+    // Disabling before the module is loaded: the name is all that is needed
+    expect(await loader.disableComponent('later', 'NotYetLoaded')).toBe(false)
+    expect(loader.getDisabledComponents()).toEqual(['later/NotYetLoaded'])
+
+    @component({ service: ['demo.thing'] })
+    class NotYetLoaded {
+      @activate() start(): void {}
+    }
+    await loader.loadModule(manifest('later'), { container: { NotYetLoaded } })
+
+    expect(services.has('demo.thing')).toBe(false)
+    expect(loader.getComponents('later')[0].disabled).toBe(true)
   })
 })

@@ -422,6 +422,21 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
   installed. `scopes` are deliberately not generated: they could hand two modules different versions, which is the
   problem sharing exists to avoid.
 - Documentation fix: the README showed `createTsmExternals(['vue', 'primevue'])`, an array the signature never took.
+- **`@bind()` / `@unbind()`** make a reference dynamic (DS 112.3.2, 112.5.18): the component stays and is handed the
+  change, where an `@inject()` reference means a rebuild. The decorator names the method by sitting on it, rather than
+  in XML as DS must. Bind runs before `@activate` and in declaration order, receives the service and the
+  `ComponentContext`, and a failure is logged rather than thrown. A mandatory reference going means the component goes
+  — after being told; an optional one only gets the call. Without an `@unbind` the loss is reported and the component
+  keeps what it stored: stopping it would turn an optional reference into a mandatory one.
+- **`disableComponent()` / `enableComponent()`** (DS 112.5.1) switch one component off while its module and siblings
+  keep running — a dimension of its own at both levels, so no reconciliation brings it back. The switch survives a
+  `reloadModule()`, because it belongs to the deployment rather than the instance, and may be set before the module is
+  ever loaded. `getDisabledComponents()`, and `tsm.disableComponent(id, class)` in the console.
+- **`dependencies: 'derive'`** in the Vite plugin (the last point of #17): the manifest's dependencies are written from
+  the modules the code actually imports, so the declaration exists in one place. `tsm:` imports of shared libraries
+  are left out — the module depends on the host providing them, which `sharedDependencies` says — as are type-only
+  imports. With `components: 'derive'` both write **one** manifest; two emits under the same name would have
+  overwritten each other.
 - **Satisfaction per component** (DS 112.5.2): what a component injects with `@inject()` is now its own
   requirement. A missing service leaves it `unsatisfied-reference` — `getComponents()` names it in `waitingFor` —
   while the module keeps running; the service arriving starts it, the service leaving stops it through `@deactivate`

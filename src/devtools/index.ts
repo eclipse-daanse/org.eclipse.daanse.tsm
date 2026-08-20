@@ -103,6 +103,11 @@ export interface TsmDevtools {
   /** The `@component()` classes of the loaded modules, as DS shows with scr:list */
   components(moduleId?: string): ComponentInfo[]
 
+  /** Switch one component off, leaving its module and siblings running */
+  disableComponent(moduleId: string, className: string): Promise<void>
+  /** Let it run again */
+  enableComponent(moduleId: string, className: string): Promise<void>
+
   /** What every module offers to the resolution, by namespace */
   capabilities(namespace?: string): void
   /** What a module is wired to and what is wired to it — Gogo's `inspect` */
@@ -456,6 +461,7 @@ export function installDevtools(options: DevtoolsOptions): TsmDevtools {
       out.log(`%cComponents${moduleId ? ` of ${moduleId}` : ''}`, css('heading'))
       for (const declaration of declarations) {
         const traits = [
+          declaration.disabled ? 'DISABLED' : undefined,
           declaration.immediate ? 'immediate' : 'delayed',
           declaration.services.length > 0
             ? declaration.services.join(', ')
@@ -486,6 +492,25 @@ export function installDevtools(options: DevtoolsOptions): TsmDevtools {
         }
       }
       return declarations
+    },
+
+    async disableComponent(moduleId, className) {
+      if (await loader.disableComponent(moduleId, className)) {
+        out.log(`%c${className} of ${moduleId} disabled`, css('warn'))
+      } else {
+        out.log(
+          `%cNoted — ${className} of ${moduleId} will not run when its module loads`,
+          css('muted')
+        )
+      }
+    },
+
+    async enableComponent(moduleId, className) {
+      if (await loader.enableComponent(moduleId, className)) {
+        out.log(`%c${className} of ${moduleId} enabled`, css('ok'))
+      } else {
+        out.log(`%c${className} of ${moduleId} was not disabled`, css('muted'))
+      }
     },
 
     capabilities(namespace) {
@@ -855,6 +880,7 @@ export function installDevtools(options: DevtoolsOptions): TsmDevtools {
         ]],
         ['Components', [
           'components(id?)      declared components and their state',
+          'disableComponent(id, class) / enableComponent(id, class)',
           'config(pid?)         configurations, or the values of one',
           'describe(pid, loc?)  what a PID accepts, and what is wrong now',
           'configure(pid, v)    set values and let the components react',

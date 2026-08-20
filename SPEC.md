@@ -255,6 +255,58 @@ Das ist DS' Unterscheidung (112.5.2), und `getComponents()` benennt beide Gründ
 
 `@inject(id, { optional: true })` wartet nicht.
 
+#### Dynamische Referenzen: `@bind` und `@unbind`
+
+Eine `@inject()`-Referenz ist statisch: kommt oder geht der Service, wird die
+Component neu gebaut. Wer stattdessen benachrichtigt werden will, benennt die
+Methoden — und benennt sie, indem der Decorator auf ihnen steht:
+
+```typescript
+@component({ service: [MAP_VIEW] })
+export class Map2D {
+  private traffic?: TrafficService
+
+  @bind(TRAFFIC_SERVICE, { optional: true })
+  setTraffic(traffic: TrafficService, context: ComponentContext): void {
+    this.traffic = traffic
+  }
+
+  @unbind(TRAFFIC_SERVICE)
+  unsetTraffic(): void {
+    this.traffic = undefined
+  }
+
+  @activate() start(): void { /* … */ }
+}
+```
+
+| | |
+| --- | --- |
+| Reihenfolge | `@bind` läuft **vor** `@activate` und in Deklarationsreihenfolge, wie in DS (112.5.10 vor 112.5.11) — die Aktivierung soll sehen, was sie bekommen hat |
+| Argumente | der Service selbst, dann der `ComponentContext` |
+| mandatory (Default) | muss zum Start da sein; verschwindet er, läuft `@unbind` und die Component wird **gestoppt** — DS 112.5.18: kein Ersatz, keine Component |
+| `{ optional: true }` | muss nicht da sein; verschwindet er, läuft nur `@unbind` und die Component **bleibt** |
+| ohne `@unbind` | der Verlust wird nur protokolliert. Zu stoppen würde eine optionale Referenz in eine verpflichtende verwandeln, also entscheidet die Component |
+| Fehler in der Methode | wird protokolliert, nicht geworfen — die Component bleibt, wie sie ist |
+
+Eine Component mit `@bind` gilt als **immediate**, auch ohne `@activate`: ohne
+Instanz könnte sie nichts erfahren.
+
+#### Eine einzelne Component abschalten
+
+```typescript
+await loader.disableComponent('map', 'Map2D')
+await loader.enableComponent('map', 'Map2D')
+loader.getDisabledComponents()   // ['map/Map2D']
+```
+
+Wie bei `disableModule` eine eigene Dimension: die Component wartet nicht, sie ist
+aus — und wird von keiner Reconciliation zurückgeholt. Ihre Services werden
+abgemeldet, `@deactivate` läuft, und was davon abhing, reagiert wie auf jede andere
+Abmeldung. Der Schalter überlebt einen `reloadModule()`, weil er zur Installation
+gehört und nicht zur Instanz, und darf gesetzt werden, bevor das Modul überhaupt
+geladen ist. In der Konsole: `tsm.disableComponent(id, class)`.
+
 Innerhalb eines Moduls arbeitet der Loader in Runden, weil eine Component den
 Service einer anderen brauchen kann und die Reihenfolge im Modul darüber nichts
 sagt — derselbe Fixpunkt wie auf Modulebene. Aktiviert wird dann in der
@@ -1536,10 +1588,10 @@ Abweichung: **Sprache** (folgt aus TypeScript statt Java), **Plattform** (Browse
 statt JVM), **Laufzeit** (asynchrones Modul-Laden), **Modell** (Satisfaction pro
 Modul statt pro Component), **Absicht** oder **Lücke**.
 
-Von 123 verglichenen Punkten sind 52 konform, 47 anders und 24 nicht vorhanden.
-Von den 71 Abweichungen sind die meisten keine Wahl: 17 folgen aus der Sprache,
+Von 124 verglichenen Punkten sind 55 konform, 45 anders und 24 nicht vorhanden.
+Von den 69 Abweichungen sind die meisten keine Wahl: 17 folgen aus der Sprache,
 15 aus der Plattform, 2 aus dem Laufzeitmodell, 8 aus dem Modulschnitt, 15 sind
-begründete Entscheidungen — und **8 sind echte Lücken**.
+begründete Entscheidungen — und **6 sind echte Lücken**.
 
 ### 11.6 Die Spezifikationen zum Nachlesen
 
