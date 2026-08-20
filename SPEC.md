@@ -1379,7 +1379,11 @@ resolveWiring(manifests, { offered: libraryCapabilities(tsmRuntime.getRegistered
 ```
 
 `loader.getWiring()` macht das selbst. Die Wires nennen dann `environment` als
-Anbieter. Mit `sharedLibraries: 'import-map'` entfällt es: dort weiß der Loader
+Anbieter — was OSGi an ein synthetisches Bundle 0 hängt und über die
+Launch-Properties `org.osgi.framework.system.capabilities.extra` bzw.
+`system.packages.extra` einspeist: Capabilities und Packages, die die Umgebung
+mitbringt, ohne ein Bundle zu sein. Der Resolver behandelt sie dort „as if
+provided by the system bundle" (Core 3.3.5). Mit `sharedLibraries: 'import-map'` entfällt es: dort weiß der Loader
 nichts über die verfügbaren Bibliotheken, und `generateImportMap()` ist die
 Stelle, an der geprüft wird.
 
@@ -1420,9 +1424,9 @@ Abweichung: **Sprache** (folgt aus TypeScript statt Java), **Plattform** (Browse
 statt JVM), **Laufzeit** (asynchrones Modul-Laden), **Modell** (Satisfaction pro
 Modul statt pro Component), **Absicht** oder **Lücke**.
 
-Von 122 verglichenen Punkten sind 50 konform, 46 anders und 26 nicht vorhanden.
-Von den 72 Abweichungen sind die meisten keine Wahl: 17 folgen aus der Sprache,
-14 aus der Plattform, 2 aus dem Laufzeitmodell, 9 aus dem Modulschnitt, 17 sind
+Von 123 verglichenen Punkten sind 50 konform, 48 anders und 25 nicht vorhanden.
+Von den 73 Abweichungen sind die meisten keine Wahl: 17 folgen aus der Sprache,
+15 aus der Plattform, 2 aus dem Laufzeitmodell, 9 aus dem Modulschnitt, 16 sind
 begründete Entscheidungen — und **7 sind echte Lücken**.
 
 ### 11.6 Die Spezifikationen zum Nachlesen
