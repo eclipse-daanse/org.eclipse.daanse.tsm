@@ -1386,9 +1386,9 @@ Abweichung: **Sprache** (folgt aus TypeScript statt Java), **Plattform** (Browse
 statt JVM), **Laufzeit** (asynchrones Modul-Laden), **Modell** (Satisfaction pro
 Modul statt pro Component), **Absicht** oder **Lücke**.
 
-Von 120 verglichenen Punkten sind 50 konform, 44 anders und 26 nicht vorhanden.
-Von den 70 Abweichungen sind die meisten keine Wahl: 17 folgen aus der Sprache,
-13 aus der Plattform, 2 aus dem Laufzeitmodell, 9 aus dem Modulschnitt, 16 sind
+Von 122 verglichenen Punkten sind 50 konform, 46 anders und 26 nicht vorhanden.
+Von den 72 Abweichungen sind die meisten keine Wahl: 17 folgen aus der Sprache,
+14 aus der Plattform, 2 aus dem Laufzeitmodell, 9 aus dem Modulschnitt, 17 sind
 begründete Entscheidungen — und **7 sind echte Lücken**.
 
 ### 11.6 Die Spezifikationen zum Nachlesen
