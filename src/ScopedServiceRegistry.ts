@@ -5,7 +5,9 @@
 
 import type {
   ObservableServiceRegistry as IObservableServiceRegistry,
+  ModuleScopedServiceRegistry as IModuleScopedServiceRegistry,
   ServiceRegistry as IServiceRegistry,
+  ServiceScope,
   InjectableConstructor,
   BindClassOptions,
   ServiceQuery,
@@ -88,7 +90,7 @@ export class ScopedServiceRegistry implements IObservableServiceRegistry {
     id: string,
     factory: () => T,
     options: {
-      scope?: 'singleton' | 'transient'
+      scope?: ServiceScope
       providedBy?: string
       ranking?: number
       properties?: ServiceProperties
@@ -161,12 +163,28 @@ export class ScopedServiceRegistry implements IObservableServiceRegistry {
     return this.target.construct(ctor)
   }
 
+  /**
+   * Reads pass through, but no longer anonymously: the facade knows which module
+   * is asking, and that is the whole of what `module` scope needs.
+   *
+   * A target registry without `getFor` falls back to the plain read, where a
+   * `module`-scoped registration behaves as a singleton.
+   */
   get<T>(id: string): T | undefined {
-    return this.target.get<T>(id)
+    const target = this.target as Partial<IModuleScopedServiceRegistry>
+    return typeof target.getFor === 'function'
+      ? target.getFor<T>(this.moduleId, id)
+      : this.target.get<T>(id)
   }
 
   getRequired<T>(id: string): T {
-    return this.target.getRequired<T>(id)
+    const service = this.get<T>(id)
+    if (service === undefined) {
+      // Same message the shared registry would give, so the module sees no
+      // difference between asking it and asking through the facade
+      return this.target.getRequired<T>(id)
+    }
+    return service
   }
 
   getAll<T>(idPattern: string): T[] {
@@ -189,7 +207,10 @@ export class ScopedServiceRegistry implements IObservableServiceRegistry {
   }
 
   resolveReference<T>(reference: ServiceReference): T | undefined {
-    return this.target.resolveReference<T>(reference)
+    const target = this.target as Partial<IModuleScopedServiceRegistry>
+    return typeof target.resolveReferenceFor === 'function'
+      ? target.resolveReferenceFor<T>(this.moduleId, reference)
+      : this.target.resolveReference<T>(reference)
   }
 
   countProviders(id: string, target?: string): number {
@@ -219,7 +240,7 @@ export class ScopedServiceRegistry implements IObservableServiceRegistry {
     return mine.map(registration => registration.unregister()).some(removed => removed)
   }
 
-  getBindingInfo(id: string): { scope: 'singleton' | 'transient'; providedBy?: string } | undefined {
+  getBindingInfo(id: string): { scope: ServiceScope; providedBy?: string } | undefined {
     return this.target.getBindingInfo(id)
   }
 
@@ -236,7 +257,7 @@ export class ScopedServiceRegistry implements IObservableServiceRegistry {
    * Requires an observable target registry; a custom `ServiceRegistry` without
    * listener support cannot provide this.
    */
-  addListener(listener: ServiceRegistryListener): void {
+  addListener(listener: ServiceRegistryListener, options: { filter?: string } = {}): void {
     const target = this.target as Partial<IObservableServiceRegistry>
     if (typeof target.addListener !== 'function') {
       throw new Error(
@@ -244,7 +265,7 @@ export class ScopedServiceRegistry implements IObservableServiceRegistry {
       )
     }
     this.ownListeners.add(listener)
-    target.addListener(listener)
+    target.addListener(listener, options)
   }
 
   /**
@@ -281,7 +302,8 @@ export class ScopedServiceRegistry implements IObservableServiceRegistry {
    * Returns the IDs that were actually removed.
    */
   releaseAll(): string[] {
-    const target = this.target as Partial<IObservableServiceRegistry>
+    const target = this.target as
+      Partial<IObservableServiceRegistry> & Partial<IModuleScopedServiceRegistry>
     for (const listener of this.ownListeners) {
       target.removeListener?.(listener)
     }
@@ -295,6 +317,12 @@ export class ScopedServiceRegistry implements IObservableServiceRegistry {
       }
     }
     this.ownRegistrations = []
+
+    // What this module *held* under `module` scope goes too. Its own
+    // registrations are gone above; these are other modules' services that were
+    // instantiated for this one, and nothing else would ever drop them
+    target.releaseConsumer?.(this.moduleId)
+
     return released
   }
 }

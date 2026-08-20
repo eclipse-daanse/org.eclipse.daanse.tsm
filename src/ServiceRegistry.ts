@@ -4,7 +4,8 @@
  */
 
 import type {
-  ServiceRegistry as IServiceRegistry,
+  ModuleScopedServiceRegistry as IModuleScopedServiceRegistry,
+  ServiceScope,
   InjectableConstructor,
   BindClassOptions,
   ServiceQuery,
@@ -35,10 +36,17 @@ interface DependencyInfo {
 interface ServiceBinding {
   /** Factory function to create the service */
   factory?: (...args: unknown[]) => unknown
-  /** Singleton instance (if already created) */
+  /** Shared instance (if already created) — singleton scope */
   instance?: unknown
-  /** Scope: singleton (default) or transient */
-  scope: 'singleton' | 'transient'
+  /** Scope: singleton (default), module, or transient */
+  scope: ServiceScope
+  /**
+   * Instances held for `module` scope, by consuming module.
+   *
+   * Empty for every other scope, so the map costs nothing until the scope is
+   * actually used.
+   */
+  perConsumer?: Map<string, unknown>
   /** Module that provided this service */
   providedBy?: string
   /** Higher wins when several registrations share an ID */
@@ -104,10 +112,17 @@ function referenceKey(id: string, binding: ServiceBinding): string {
  * Supports singleton and transient scopes with factory functions
  * and decorator-based constructor injection
  */
-export class DefaultServiceRegistry implements IServiceRegistry {
+export class DefaultServiceRegistry implements IModuleScopedServiceRegistry {
   private services = new Map<string, unknown>()
   private bindings = new Map<string, ServiceBinding>()
   private listeners = new Set<ServiceRegistryListener>()
+  /**
+   * The filter a listener was added with, when it was added with one.
+   *
+   * Kept beside the set rather than wrapping the listener, so `removeListener`
+   * still works with the object the caller passed.
+   */
+  private listenerFilters = new Map<ServiceRegistryListener, ServiceFilter>()
   /** Reverse index: primary service ID -> alias IDs created for it */
   private aliasesOf = new Map<string, Set<string>>()
   /** Reverse index: service ID -> binding IDs that inject it (from bindClass) */
@@ -155,7 +170,8 @@ export class DefaultServiceRegistry implements IServiceRegistry {
       this.notify({
         type: previouslyKnown ? 'updated' : 'registered',
         serviceId: id,
-        service: binding.instance
+        service: binding.instance,
+        properties: propertiesOf(binding)
       })
     } else {
       // Outranked: kept as a stand-in, no change for readers
@@ -252,6 +268,10 @@ export class DefaultServiceRegistry implements IServiceRegistry {
     const live = this.registrationsOf(id).find(candidate => candidate.seq === binding.seq)
     if (!live) return false
 
+    // What a filter saw before the change. Needed to tell the end of a match
+    // from a change that keeps it — after the fact the old values are gone
+    const before = propertiesOf(live)
+
     const { ranking, propertiesById } = options
 
     const apply = (target: ServiceBinding, serviceId: string): void => {
@@ -276,9 +296,12 @@ export class DefaultServiceRegistry implements IServiceRegistry {
       this.reevaluateVisibility(id)
     }
 
+    const after = propertiesOf(live)
+
     // A property change is not a new service; consumers keep the object they
     // hold, which is the point of not going through unregister/register
-    this.notify({ type: 'updated', serviceId: id, service: live.instance })
+    this.notify({ type: 'updated', serviceId: id, service: live.instance, properties: after })
+    this.notifyEndMatch(id, live.instance, before, after)
     return true
   }
 
@@ -330,7 +353,8 @@ export class DefaultServiceRegistry implements IServiceRegistry {
     this.notify({
       type: 'updated',
       serviceId: id,
-      service: successor.instance
+      service: successor.instance,
+      properties: propertiesOf(successor)
     })
     return true
   }
@@ -364,7 +388,7 @@ export class DefaultServiceRegistry implements IServiceRegistry {
     id: string,
     factory: () => T,
     options: {
-      scope?: 'singleton' | 'transient'
+      scope?: ServiceScope
       providedBy?: string
       ranking?: number
       properties?: ServiceProperties
@@ -514,6 +538,22 @@ export class DefaultServiceRegistry implements IServiceRegistry {
   }
 
   get<T>(id: string, _resolving?: Set<string>): T | undefined {
+    return this.resolveFor<T>(undefined, id, _resolving)
+  }
+
+  /**
+   * Resolve a service on behalf of a module, so a `module`-scoped registration
+   * can hand that module its own instance.
+   */
+  getFor<T>(consumer: string, id: string): T | undefined {
+    return this.resolveFor<T>(consumer, id)
+  }
+
+  private resolveFor<T>(
+    consumer: string | undefined,
+    id: string,
+    resolving?: Set<string>
+  ): T | undefined {
     // Check direct instances first (for backwards compatibility)
     if (this.services.has(id)) {
       return this.services.get(id) as T
@@ -524,7 +564,47 @@ export class DefaultServiceRegistry implements IServiceRegistry {
       return undefined
     }
 
-    return this.instantiate<T>(id, binding, _resolving ?? new Set<string>())
+    return this.instantiate<T>(id, binding, resolving ?? new Set<string>(), consumer)
+  }
+
+  /** Resolve one reference on behalf of a module — see {@link getFor} */
+  resolveReferenceFor<T>(consumer: string, reference: ServiceReference): T | undefined {
+    const binding = this.registrationsOf(reference.serviceId)
+      .find(candidate => referenceKey(reference.serviceId, candidate) === reference.key)
+    if (!binding) return undefined
+    return this.instantiate<T>(reference.serviceId, binding, new Set(), consumer)
+  }
+
+  /**
+   * Drop what a module holds under `module` scope.
+   *
+   * A per-module instance whose module is gone is exactly the leak this scope
+   * would otherwise introduce, so the teardown has to reach it. An instance with
+   * a `dispose()` method is told, which is the counterpart of `ungetService`.
+   */
+  releaseConsumer(consumer: string): string[] {
+    const released: string[] = []
+
+    for (const [id, binding] of this.bindings) {
+      for (const candidate of [binding, ...(this.shadowed.get(id) ?? [])]) {
+        const held = candidate.perConsumer?.get(consumer)
+        if (held === undefined) continue
+
+        candidate.perConsumer!.delete(consumer)
+        released.push(id)
+
+        const disposable = held as { dispose?: () => void }
+        if (typeof disposable.dispose === 'function') {
+          try {
+            disposable.dispose()
+          } catch (error) {
+            console.error(`Disposing ${id} for ${consumer} failed:`, error)
+          }
+        }
+      }
+    }
+
+    return [...new Set(released)]
   }
 
   /**
@@ -537,16 +617,30 @@ export class DefaultServiceRegistry implements IServiceRegistry {
   private instantiate<T>(
     id: string,
     binding: ServiceBinding,
-    resolving: Set<string>
+    resolving: Set<string>,
+    consumer?: string
   ): T | undefined {
     if (binding.aliasOf) {
       const target = this.aliasTarget(binding)
       if (!target) return undefined
-      return this.instantiate<T>(binding.aliasOf, target, resolving)
+      return this.instantiate<T>(binding.aliasOf, target, resolving, consumer)
     }
 
-    if (binding.scope === 'singleton' && binding.instance !== undefined) {
+    // A `module`-scoped instance belongs to the module that asked. Without a
+    // consumer there is nobody to hold it for, so it shares one instance rather
+    // than building a new one per call: a registry used directly, outside any
+    // module, would otherwise silently behave as `transient` — a contract the
+    // registration never declared
+    const perConsumer = binding.scope === 'module' ? consumer : undefined
+    const shared = binding.scope === 'singleton' || (binding.scope === 'module' && !consumer)
+
+    if (shared && binding.instance !== undefined) {
       return binding.instance as T
+    }
+
+    if (perConsumer !== undefined) {
+      const held = binding.perConsumer?.get(perConsumer)
+      if (held !== undefined) return held as T
     }
 
     if (!binding.factory) {
@@ -560,9 +654,15 @@ export class DefaultServiceRegistry implements IServiceRegistry {
     }
     resolving.add(id)
 
+    // A service's own references are resolved on behalf of the module that
+    // provides it, not the one that asked for it: whose code runs decides whose
+    // instance it gets. Otherwise `module` scope would leak down the chain, and
+    // two consumers of one singleton would give it two different dependencies
+    const on = binding.providedBy ?? consumer
+
     // Resolve dependencies
     const args = (binding.deps ?? []).map(dep => {
-      const resolved = this.get(dep.serviceId, resolving)
+      const resolved = this.resolveFor(on, dep.serviceId, resolving)
       if (resolved === undefined && !dep.optional) {
         throw new Error(
           `Dependency '${dep.serviceId}' not found (required by '${id}')`
@@ -576,7 +676,7 @@ export class DefaultServiceRegistry implements IServiceRegistry {
     // Resolve property injections
     if (binding.propertyDeps) {
       for (const prop of binding.propertyDeps) {
-        const resolved = this.get(prop.serviceId, resolving)
+        const resolved = this.resolveFor(on, prop.serviceId, resolving)
         if (resolved === undefined && !prop.optional) {
           throw new Error(
             `Property dependency '${prop.serviceId}' not found (required by '${id}' on property '${String(prop.propertyKey)}')`
@@ -586,12 +686,17 @@ export class DefaultServiceRegistry implements IServiceRegistry {
       }
     }
 
-    if (binding.scope === 'singleton') {
+    if (shared) {
       binding.instance = instance
-      // The ID cache belongs to the visible registration only
-      if (this.bindings.get(id) === binding) {
+      // The ID cache belongs to the visible registration only — and only to a
+      // real singleton: caching a `module`-scoped service by ID would hand the
+      // consumerless instance to every module that asks afterwards
+      if (binding.scope === 'singleton' && this.bindings.get(id) === binding) {
         this.services.set(id, instance)
       }
+    } else if (perConsumer !== undefined) {
+      binding.perConsumer ??= new Map()
+      binding.perConsumer.set(perConsumer, instance)
     }
 
     return instance
@@ -793,7 +898,8 @@ export class DefaultServiceRegistry implements IServiceRegistry {
     this.notify({
       type: 'unregistered',
       serviceId: id,
-      service
+      service,
+      properties: binding ? propertiesOf(binding) : undefined
     })
 
     // Aliases pointing here would otherwise survive as dangling entries,
@@ -902,7 +1008,7 @@ export class DefaultServiceRegistry implements IServiceRegistry {
   /**
    * Get information about a binding
    */
-  getBindingInfo(id: string): { scope: 'singleton' | 'transient'; providedBy?: string } | undefined {
+  getBindingInfo(id: string): { scope: ServiceScope; providedBy?: string } | undefined {
     const binding = this.bindings.get(id)
     if (!binding) return undefined
     return {
@@ -971,10 +1077,17 @@ export class DefaultServiceRegistry implements IServiceRegistry {
   }
 
   /**
-   * Add a listener for service events
+   * Add a listener for service events, optionally narrowed by a filter over the
+   * services' properties.
+   *
+   * An invalid filter is rejected here rather than quietly matching nothing —
+   * the same choice `getServiceReferences` makes.
    */
-  addListener(listener: ServiceRegistryListener): void {
+  addListener(listener: ServiceRegistryListener, options: { filter?: string } = {}): void {
     this.listeners.add(listener)
+    if (options.filter !== undefined) {
+      this.listenerFilters.set(listener, this.filterFor(options.filter))
+    }
   }
 
   /**
@@ -982,15 +1095,54 @@ export class DefaultServiceRegistry implements IServiceRegistry {
    */
   removeListener(listener: ServiceRegistryListener): void {
     this.listeners.delete(listener)
+    this.listenerFilters.delete(listener)
   }
 
   private notify(event: ServiceRegistryEvent): void {
     for (const listener of this.listeners) {
-      try {
-        listener.onServiceEvent(event)
-      } catch (error) {
-        console.error('Service registry listener error:', error)
+      const filter = this.listenerFilters.get(listener)
+      // A listener without a filter hears everything, as before. One with a
+      // filter hears only what matches — and `modified-endmatch`, which is by
+      // definition about something that no longer does
+      if (filter && event.type !== 'modified-endmatch') {
+        if (!event.properties || !filter(event.properties)) continue
       }
+
+      this.deliver(listener, event)
+    }
+  }
+
+  private deliver(listener: ServiceRegistryListener, event: ServiceRegistryEvent): void {
+    try {
+      listener.onServiceEvent(event)
+    } catch (error) {
+      console.error('Service registry listener error:', error)
+    }
+  }
+
+  /**
+   * Tell filtering listeners that a property change ended their match.
+   *
+   * Only those whose filter matched the old properties and no longer matches the
+   * new ones: a listener that never accepted the service has nothing to
+   * withdraw, and one that still accepts it got `updated` already.
+   */
+  private notifyEndMatch(
+    id: string,
+    service: unknown,
+    before: ServiceProperties,
+    after: ServiceProperties
+  ): void {
+    for (const [listener, filter] of this.listenerFilters) {
+      if (!this.listeners.has(listener)) continue
+      if (!filter(before) || filter(after)) continue
+
+      this.deliver(listener, {
+        type: 'modified-endmatch',
+        serviceId: id,
+        service,
+        properties: after
+      })
     }
   }
 }

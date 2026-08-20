@@ -69,12 +69,25 @@ export interface ServiceDeclaration {
   description?: string
 
   /**
-   * Scope of the service
-   * - singleton: One instance shared across all consumers (default)
-   * - transient: New instance for each consumer
+   * Scope of the service. See {@link ServiceScope}.
    */
-  scope?: 'singleton' | 'transient'
+  scope?: ServiceScope
 }
+
+/**
+ * How many instances of a service exist, and who shares them.
+ *
+ * - `singleton` (default): one instance for the whole system
+ * - `module`: one instance per consuming module, created on that module's first
+ *   resolution and dropped when it is deactivated
+ * - `transient`: a new instance for every resolution
+ *
+ * `module` is OSGi's `bundle` scope under the name tsm uses for a bundle. It is
+ * the scope for a service that has to keep state *about* its consumer — a
+ * per-module cache, a session, an undo stack — where a singleton would mix two
+ * modules' state together and `transient` would lose it between two calls.
+ */
+export type ServiceScope = 'singleton' | 'module' | 'transient'
 
 /**
  * Service requirement - describes a service required by a module
@@ -458,7 +471,7 @@ export interface ComponentOptions {
   ranking?: number
 
   /** Scope of the registered service. Default: singleton */
-  scope?: 'singleton' | 'transient'
+  scope?: ServiceScope
 
   /**
    * Create the component when its module activates, even without an `@activate`
@@ -614,8 +627,8 @@ export interface ComponentConfigurationInfo {
  * Options for bindClass()
  */
 export interface BindClassOptions {
-  /** Override the scope declared by @singleton()/@transient() decorators */
-  scope?: 'singleton' | 'transient'
+  /** Override the scope declared by @singleton()/@perModule()/@transient() */
+  scope?: ServiceScope
   /** Module that provided this service */
   providedBy?: string
   /** Higher wins when several registrations share an ID */
@@ -739,7 +752,7 @@ export interface ServiceReference {
   readonly serviceId: string
   readonly providedBy?: string
   readonly ranking: number
-  readonly scope: 'singleton' | 'transient'
+  readonly scope: ServiceScope
 
   /**
    * Properties this registration was made with, plus `service.ranking` and
@@ -747,7 +760,7 @@ export interface ServiceReference {
    */
   readonly properties: Readonly<ServiceProperties>
 
-  /** Whether a singleton instance for this registration already exists */
+  /** Whether a shared instance for this registration already exists */
   readonly instantiated: boolean
 
   /** Opaque identity, used by resolveReference() */
@@ -797,13 +810,13 @@ export interface ServiceRegistry {
    * Bind a factory function for lazy instantiation
    * @param id Service identifier
    * @param factory Function that creates the service
-   * @param options Scope (singleton/transient) and provider info
+   * @param options Scope (see {@link ServiceScope}) and provider info
    */
   bind<T>(
     id: string,
     factory: () => T,
     options?: {
-      scope?: 'singleton' | 'transient'
+      scope?: ServiceScope
       providedBy?: string
       ranking?: number
       properties?: ServiceProperties
@@ -880,19 +893,67 @@ export interface ServiceRegistry {
   unregister(id: string): boolean
 
   /** Get information about a binding */
-  getBindingInfo(id: string): { scope: 'singleton' | 'transient'; providedBy?: string } | undefined
+  getBindingInfo(id: string): { scope: ServiceScope; providedBy?: string } | undefined
 
   /** Get all registered service IDs */
   getServiceIds(): string[]
 }
 
 /**
+ * A registry that can tell *who* is asking, and so can hold one instance per
+ * consuming module — `module` scope.
+ *
+ * Kept apart from `ServiceRegistry` for the same reason as
+ * `ObservableServiceRegistry`: a custom registry stays valid without it, and
+ * support is detected at runtime. Without it a `module`-scoped registration
+ * behaves as a singleton, which is the safe direction to degrade in.
+ */
+export interface ModuleScopedServiceRegistry extends ServiceRegistry {
+  /**
+   * Resolve a service on behalf of a module.
+   *
+   * For anything but `module` scope this is `get(id)`. For `module` scope it is
+   * what makes the instance the consumer's own.
+   */
+  getFor<T>(consumer: string, id: string): T | undefined
+
+  /** Resolve one reference on behalf of a module */
+  resolveReferenceFor<T>(consumer: string, reference: ServiceReference): T | undefined
+
+  /**
+   * Drop the instances held for a module, and tell them so.
+   *
+   * Called when the module is deactivated: a per-module instance outliving its
+   * module is the leak this scope would otherwise introduce. A held instance
+   * with a `dispose()` method has it called, as OSGi calls `ungetService`.
+   */
+  releaseConsumer(consumer: string): string[]
+}
+
+/**
  * Service registry event
  */
 export interface ServiceRegistryEvent {
-  type: 'registered' | 'updated' | 'unregistered'
+  /**
+   * What happened. `modified-endmatch` reaches only a listener that was added
+   * with a filter: the service's properties changed such that it *stopped*
+   * matching that filter. OSGi calls it MODIFIED_ENDMATCH (Core 5.6.1).
+   *
+   * Without it a filtering listener could not tell "no longer interesting" from
+   * "nothing happened" — a property change that ends the match looks like
+   * silence, and whatever the listener collected stays in its collection.
+   */
+  type: 'registered' | 'updated' | 'unregistered' | 'modified-endmatch'
   serviceId: string
   service: unknown
+
+  /**
+   * The properties the service now has, for a listener deciding what changed.
+   *
+   * On `modified-endmatch` these are the properties that no longer match — the
+   * ones that ended it, not the ones that used to match.
+   */
+  properties?: Readonly<ServiceProperties>
 }
 
 /**
@@ -909,7 +970,16 @@ export interface ServiceRegistryListener {
  * stays valid without it; consumers detect support at runtime.
  */
 export interface ObservableServiceRegistry extends ServiceRegistry {
-  addListener(listener: ServiceRegistryListener): void
+  /**
+   * Hear about registrations and withdrawals.
+   *
+   * With a `filter` the listener hears only about services whose properties
+   * match it — and, uniquely, about one that stops matching, as
+   * `modified-endmatch`. That is the difference between filtering inside the
+   * callback and filtering here: a listener that tests properties itself never
+   * learns that a service it had accepted no longer qualifies.
+   */
+  addListener(listener: ServiceRegistryListener, options?: { filter?: string }): void
   removeListener(listener: ServiceRegistryListener): void
 
   /**
