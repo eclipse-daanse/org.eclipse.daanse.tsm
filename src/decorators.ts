@@ -4,7 +4,7 @@
  */
 
 import 'reflect-metadata'
-import type { ComponentOptions, ServiceScope } from './types.js'
+import type { ComponentOptions, FieldOption, ServiceScope } from './types.js'
 
 /**
  * Metadata keys, taken from the global symbol registry rather than created here.
@@ -22,6 +22,7 @@ const COMPONENT_KEY = Symbol.for('tsm:component')
 const ACTIVATE_KEY = Symbol.for('tsm:component:activate')
 const DEACTIVATE_KEY = Symbol.for('tsm:component:deactivate')
 const MODIFIED_KEY = Symbol.for('tsm:component:modified')
+const INJECT_ALL_KEY = Symbol.for('tsm:inject:all')
 const BIND_KEY = Symbol.for('tsm:component:bind')
 const UNBIND_KEY = Symbol.for('tsm:component:unbind')
 
@@ -41,6 +42,58 @@ export interface PropertyInjectMetadata {
   propertyKey: string | symbol
   serviceId: string
   optional: boolean
+}
+
+/**
+ * Metadata for a collection injection — cardinality 0..n on a field.
+ */
+export interface InjectAllMetadata {
+  propertyKey: string | symbol
+  serviceId: string
+  /** LDAP-style filter narrowing which providers land in the collection */
+  target?: string
+  fieldOption: FieldOption
+}
+
+/**
+ * Marks a property that collects *every* provider of a service, not the best one.
+ *
+ * The collection is kept current while the component runs: a provider appearing
+ * or leaving changes it without the component being rebuilt. That is what makes
+ * this the reactive form of `getServiceReferences()`, and what the `fieldOption`
+ * is about.
+ *
+ * ```typescript
+ * @injectAll(TILE_SOURCE) private sources: TileSource[] = []
+ * ```
+ *
+ * @param options.target LDAP filter over the providers' properties
+ * @param options.fieldOption `replace` (default) assigns a new array on every
+ *   change, `update` mutates the one the component holds — see {@link FieldOption}
+ */
+export function injectAll(
+  serviceId: string,
+  options: { target?: string; fieldOption?: FieldOption } = {}
+): PropertyDecorator {
+  return (target: object, propertyKey: string | symbol) => {
+    const ctor = target.constructor
+    const existing: InjectAllMetadata[] = Reflect.getOwnMetadata(INJECT_ALL_KEY, ctor) ?? []
+    Reflect.defineMetadata(
+      INJECT_ALL_KEY,
+      [...existing, {
+        propertyKey,
+        serviceId,
+        target: options.target,
+        fieldOption: options.fieldOption ?? 'replace'
+      }],
+      ctor
+    )
+  }
+}
+
+/** The collection injections declared on a class */
+export function getInjectAllMetadata(target: MetadataTarget): InjectAllMetadata[] {
+  return Reflect.getOwnMetadata(INJECT_ALL_KEY, target) ?? []
 }
 
 /**

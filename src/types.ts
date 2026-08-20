@@ -519,9 +519,103 @@ export interface ComponentOptions {
    * instance before the first one exists. `@Designate(factory = true)` in OSGi.
    */
   configurationFactory?: boolean
+
+  /**
+   * A filter over condition services that has to be satisfied before this
+   * component runs — DS 1.5's `osgi.ds.satisfying.condition` (112.3.13).
+   *
+   * A condition is a service that carries no behaviour, only the statement that
+   * something is the case: `(condition.id=data.loaded)`. It is the way to say
+   * "not before" without inventing a service to depend on, and without the
+   * component knowing who decides.
+   *
+   * Treated as one more mandatory reference: while nothing matches, the component
+   * waits, and it starts when something does. `condition.id=true` is always
+   * registered, so a filter can be written against a baseline that exists.
+   */
+  satisfyingCondition?: string
+
+  /**
+   * Makes this component a template that somebody instantiates by asking, rather
+   * than one the loader instantiates from configuration — a **factory component**
+   * (DS 112.2.4).
+   *
+   * The value is the factory's name. Instead of registering the component's own
+   * services, the loader registers a {@link ComponentFactory} under
+   * {@link COMPONENT_FACTORY_SERVICE_ID} carrying that name, and every
+   * `newInstance()` builds one instance with the properties the caller passes.
+   *
+   * Not to be confused with a factory *configuration*, which tsm has had all
+   * along. The difference is who decides there should be another one: a factory
+   * configuration is data, so a management UI or a stored file creates instances;
+   * a factory component is a call, so code does — "one editor per open tab" is
+   * something only the code that opens tabs can know.
+   *
+   * `configurationPolicy: 'require'` is meaningless here, and the loader says so:
+   * these instances are configured by their caller, not by a PID.
+   */
+  factory?: string
+}
+
+/**
+ * What a factory component registers, so callers can build instances of it.
+ *
+ * OSGi's `ComponentFactory` (112.2.4). The properties given to `newInstance()`
+ * reach the instance as its configuration, over whatever the component declared.
+ */
+export interface ComponentFactory<C extends object = ConfigurationProperties> {
+  /** The factory name from `@component({ factory })` */
+  readonly name: string
+
+  /**
+   * Build one instance and start it.
+   *
+   * Its services are registered as any component's are, so the instance is
+   * reachable by anyone filtering on the properties passed here — not only by
+   * the caller.
+   */
+  newInstance(properties?: C): Promise<ComponentFactoryInstance>
+
+  /** The instances this factory built and that have not been disposed */
+  readonly instances: readonly ComponentFactoryInstance[]
+}
+
+/** One instance a {@link ComponentFactory} built */
+export interface ComponentFactoryInstance {
+  /** The component object itself */
+  readonly instance: unknown
+
+  /** The configuration it was built with */
+  readonly properties: Readonly<ConfigurationProperties>
+
+  /**
+   * Deactivate it and withdraw its services.
+   *
+   * Nothing else will: an instance nobody configured is not reclaimed by
+   * configuration going away, so its lifetime is the caller's business. Calling
+   * it twice is harmless.
+   */
+  dispose(): Promise<void>
 }
 
 export type ConfigurationPolicy = 'optional' | 'require' | 'ignore'
+
+/**
+ * What happens to a collection field when the set of providers changes —
+ * DS 112.3.9's field option.
+ *
+ * - `replace` (default): the field is assigned a new array. Safe, and what a
+ *   component that only reads it wants.
+ * - `update`: the array the component holds is mutated in place. Its identity
+ *   stays, which is what a reactive view bound to it needs — with `replace`, a
+ *   template holding the old array would never see the change, and one watching
+ *   the field re-renders everything on every arrival.
+ *
+ * `update` asks something of the component in return: the field has to be
+ *   initialised (`= []`), because there is nothing to mutate otherwise, and it
+ *   must not be handed out as if it were immutable.
+ */
+export type FieldOption = 'replace' | 'update'
 
 /**
  * Context handed to a component's `@activate`, `@modified` and `@deactivate`

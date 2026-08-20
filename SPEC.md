@@ -648,10 +648,31 @@ interface RegistryEvent {
 
 ```typescript
 interface ServiceRegistryEvent {
-  type: 'registered' | 'updated' | 'unregistered'
+  type: 'registered' | 'updated' | 'unregistered' | 'modified-endmatch'
   serviceId: string
   service: unknown
+  /** Die aktuellen Properties des Service */
+  properties?: Readonly<ServiceProperties>
 }
+```
+
+`addListener(listener, { filter })` verengt, was ein Listener hört — und nur ein
+filternder Listener bekommt `modified-endmatch`: die Properties haben sich so
+geändert, dass der Service den Filter **nicht mehr** erfüllt (OSGi Core 5.6.1,
+MODIFIED_ENDMATCH).
+
+Genau dafür gehört das Filtern hierher und nicht in den Callback. Ein Listener,
+der die Properties selbst prüft, erfährt nie, dass ein Service, den er
+akzeptiert hatte, aufgehört hat zu passen — was er gesammelt hat, wird still
+falsch.
+
+```typescript
+context.services.addListener(
+  { onServiceEvent: event => {
+      if (event.type === 'modified-endmatch') this.drop(event.serviceId)
+    } },
+  { filter: '(kind=chart)' }
+)
 ```
 
 ---
@@ -1580,18 +1601,158 @@ Package-Wiring nicht entstehen.
 
 In der Konsole: `tsm.capabilities(ns?)`, `tsm.wiring(id)`, `tsm.unresolved()`.
 
+### 11.4b Service-Scope: wer teilt sich eine Instanz
+
+```typescript
+type ServiceScope = 'singleton' | 'module' | 'transient'
+```
+
+- **`singleton`** (Standard): eine Instanz für das ganze System.
+- **`module`**: eine Instanz **pro konsumierendem Modul**, erzeugt bei dessen
+  erstem Zugriff und freigegeben, wenn das Modul deaktiviert wird — mit
+  `dispose()`, falls die Instanz eine solche Methode hat. Das ist OSGi's
+  `bundle`-Scope unter dem Namen, den tsm für ein Bundle verwendet.
+- **`transient`**: eine neue Instanz bei jedem Zugriff.
+
+`module` ist der Scope für einen Service, der Zustand **über** seinen Nutzer
+führt: ein Cache pro Modul, eine Session, ein Undo-Stack. Ein Singleton würde den
+Zustand zweier Module vermischen, `transient` würde ihn zwischen zwei Aufrufen
+verlieren.
+
+```typescript
+@perModule()
+@injectable()
+export class UndoStack { private entries: Change[] = [] }
+```
+
+Zwei Dinge sind dabei wichtiger als der Scope selbst:
+
+**Die eigenen Referenzen eines Service werden für das Modul aufgelöst, das ihn
+_anbietet_ — nicht für das, das gefragt hat.** Wessen Code läuft, entscheidet,
+wessen Instanz er bekommt. Sonst leckt der Scope die Abhängigkeitskette hinab, und
+ein Singleton hätte für zwei Konsumenten zwei verschiedene Abhängigkeiten unter
+sich.
+
+**Ohne Konsumenten teilt der Scope eine Instanz.** Wer die Registry direkt
+benutzt, außerhalb jedes Moduls, sieht Singleton-Verhalten — eine neue Instanz pro
+Aufruf wäre `transient`, ein Vertrag, den die Registrierung nicht deklariert hat.
+
+### 11.4c Collection-Referenzen: alle Anbieter statt des besten
+
+```typescript
+@component()
+export class Map2D {
+  @injectAll(TILE_SOURCE, { fieldOption: 'update' })
+  private sources: TileSource[] = []
+}
+```
+
+Kardinalität 0..n auf einem Feld, aktuell gehalten, solange die Component läuft:
+ein Anbieter, der kommt oder geht, ändert die Collection, ohne die Component neu
+zu bauen. Ein leeres Feld blockiert nicht — 0..n ist erfüllt.
+
+Die `fieldOption` (DS 112.3.9) entscheidet **wie**:
+
+- **`replace`** (Standard): das Feld bekommt ein neues Array zugewiesen.
+- **`update`**: das gehaltene Array wird an seiner Stelle geändert. Seine
+  Identität bleibt — was eine reaktive View braucht, die daran gebunden ist. Mit
+  `replace` sähe ein Template, das das alte Array hält, die Änderung nie.
+
+`update` verlangt dafür, dass das Feld initialisiert ist (`= []`); sonst gibt es
+nichts zu ändern, und der Loader meldet es und weist zu. Hat sich nichts geändert,
+passiert nichts — eine unnötige Zuweisung würde eine reaktive View bei jedem
+fremden Registry-Ereignis neu rendern lassen.
+
+### 11.4d Conditions: auf eine Aussage warten
+
+Eine Condition ist ein Service ohne Verhalten — nur die Aussage, dass etwas der
+Fall ist. Der Weg, „nicht vorher" zu sagen, ohne einen Service zu erfinden, von
+dem man abhängt, und ohne dass der Wartende weiß, wer entscheidet.
+
+```typescript
+@component({ satisfyingCondition: conditionFilter('data.loaded') })
+export class Report { @activate() start() { /* ... */ } }
+
+// woanders, wenn es soweit ist:
+context.services.register(CONDITION_SERVICE_ID, TRUE_CONDITION, {
+  properties: conditionProperties('data.loaded')
+})
+```
+
+Behandelt wie eine weitere verpflichtende Referenz — so modelliert DS es auch
+(112.3.13). Solange nichts passt, wartet die Component; ihr Modul läuft weiter.
+`condition.id=true` ist immer registriert, damit ein Filter eine Grundlinie hat,
+gegen die er geschrieben werden kann.
+
+### 11.4e Factory-Components: eine Instanz auf Zuruf
+
+```typescript
+@component({ factory: 'editor', service: ['editor.instance'] })
+export class Editor {
+  @activate() start(context: ComponentContext) { this.open(context.configuration.file) }
+}
+
+// beim Aufrufer:
+const factory = services.getMatching<ComponentFactory>(
+  COMPONENT_FACTORY_SERVICE_ID, componentFactoryFilter('editor')
+)
+const tab = await factory.newInstance({ file: 'a.ts' })
+await tab.dispose()
+```
+
+Statt der eigenen Services registriert die Component eine `ComponentFactory`
+(DS 112.2.4); jedes `newInstance()` baut eine Instanz mit den Properties des
+Aufrufers. Nicht zu verwechseln mit einer Factory-**Konfiguration**: der
+Unterschied ist, wer entscheidet, dass es eine weitere geben soll. Eine
+Factory-Konfiguration ist Daten — ein UI oder eine Datei erzeugt Instanzen. Eine
+Factory-Component ist ein Aufruf — Code erzeugt sie. „Ein Editor pro offenem Tab"
+kann nur der Code wissen, der Tabs öffnet.
+
+Die Instanzen sind gewöhnliche Component-Instanzen: `@activate` läuft, die
+Services werden mit den übergebenen Properties registriert, also sind sie für
+jeden auffindbar, der darauf filtert — nicht nur für den Aufrufer. `dispose()`
+beendet eine; nichts anderes tut es, denn eine Instanz, die niemand konfiguriert
+hat, wird nicht dadurch zurückgeholt, dass Konfiguration verschwindet.
+
+Die Factory folgt der Satisfaction: fehlt eine verpflichtende Referenz, wird sie
+abgemeldet — niemand soll eine Instanz von etwas anfordern können, das nicht
+laufen kann. Kommt die Referenz zurück, kommt die Factory zurück, die früheren
+Instanzen aber nicht: sie gehörten dem, der sie angefordert hat.
+
+### 11.4f Targeted PIDs: eine Konfiguration für eine Version
+
+`pid|modulId|version` konfiguriert eine PID nur für dieses Modul, oder nur für
+diese Version davon (CM 104.3.2). Gesucht wird vom Spezifischsten zum
+Allgemeinsten, die erste Konfiguration **mit Werten** gewinnt:
+
+```
+demo.tiles|map-plugin|2.1.0   →   demo.tiles|map-plugin   →   demo.tiles
+```
+
+Was es bringt, ist ein Rollout: die neue Version bekommt ihre eigene
+Konfiguration, während die alte auf der untargeted weiterläuft. `location` aus
+OSGi entfällt — ein Modul hat keinen Installationsort.
+
+Ein Eintrag ohne Werte beendet die Suche nicht: `getConfiguration()` erzeugt
+solche, und einer davon darf keine Konfiguration verdecken, die Werte hat.
+
 ### 11.5 Konformität
 
 [`docs/CONFORMANCE.md`](docs/CONFORMANCE.md) stellt Abschnitt für Abschnitt
 gegenüber, was tsm von OSGi Release 8 umsetzt und wo es abweicht — mit der Art der
 Abweichung: **Sprache** (folgt aus TypeScript statt Java), **Plattform** (Browser
-statt JVM), **Laufzeit** (asynchrones Modul-Laden), **Modell** (Satisfaction pro
-Modul statt pro Component), **Absicht** oder **Lücke**.
+statt JVM), **Laufzeit** (asynchrones Modul-Laden), **Modell** (der Loader ist Framework
+und SCR in einem), **Absicht** oder **Lücke**.
 
-Von 124 verglichenen Punkten sind 55 konform, 45 anders und 24 nicht vorhanden.
-Von den 69 Abweichungen sind die meisten keine Wahl: 17 folgen aus der Sprache,
-15 aus der Plattform, 2 aus dem Laufzeitmodell, 8 aus dem Modulschnitt, 15 sind
-begründete Entscheidungen — und **6 sind echte Lücken**.
+Von 124 verglichenen Punkten sind 60 konform, 45 anders und 19 nicht vorhanden.
+Von den 64 Abweichungen sind die meisten keine Wahl: 18 folgen aus der Sprache,
+16 aus der Plattform, 2 aus dem Laufzeitmodell, 8 aus dem Modulschnitt, 15 sind
+begründete Entscheidungen — und **keine ist mehr eine Lücke**.
+
+Was fehlt, fehlt aus einem Grund. Das ist eine andere Aussage als „noch nicht
+gemacht", und die, für die diese Tabelle existiert. Offen bleibt begrifflich nur
+Compendium 159 (Feature Service): keine Lücke, sondern die Frage, was ein Feature
+hier bedeuten soll.
 
 ### 11.6 Die Spezifikationen zum Nachlesen
 
@@ -1599,7 +1760,8 @@ Die Kapitel, auf die sich tsm bezieht, liegen unter
 [`docs/osgi/`](docs/osgi/) — OSGi Release 8, mit einer Zuordnung, welches Kapitel
 welchen Teil trägt: Core 5 (Service Layer), Core 3 (Filter-Syntax), Core 4
 (Lebenszyklus), Compendium 104 (Configuration Admin), 105 (Metatype), 112
-(Declarative Services) und 159 (Feature Service, noch ohne Gegenstück).
+(Declarative Services) und 159 (Feature Service, noch ohne Gegenstück). Core 3.3
+(Requirements und Capabilities) ist umgesetzt, siehe §11.4a.
 
 Damit ist eine Frage nach dem gemeinten Verhalten nachlesbar statt zu raten.
 
@@ -1654,4 +1816,19 @@ TSM folgt Semantic Versioning:
 - Permissions-System
 - Extension Points
 - Verbesserte Fehlerbehandlung
-- Config-System für Module
+
+### OSGi-Konformität (laufend)
+Die sieben als Lücke geführten Punkte sind umgesetzt; `docs/CONFORMANCE.md` führt
+keine Lücke mehr. Was fehlt, fehlt aus einem Grund — Sprache, Plattform, Modell
+oder Absicht.
+- **Configuration Admin** (104) und **Metatype** (105), Config pro Component
+  (§11.3, §11.4)
+- **Requirements und Capabilities** (Core 3.3) samt System Bundle (§11.4a)
+- **Declarative Services** (112): Satisfaction pro Component, `@bind`/`@unbind`,
+  enable/disable, Factory-Components (§11.4e), Collection-Referenzen mit
+  `fieldOption` (§11.4c), Satisfying Conditions (§11.4d)
+- **Service-Scope `module`** — OSGi's `bundle`-Scope (§11.4b)
+- **`modified-endmatch`** für filternde Listener (§5.3)
+- **Targeted PIDs** (§11.4f)
+
+Begrifflich offen bleibt nur Compendium 159 (Feature Service).

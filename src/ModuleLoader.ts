@@ -10,6 +10,8 @@ import type {
   ComponentConfigurationInfo,
   ComponentContext,
   ComponentInfo,
+  ComponentFactory,
+  ComponentFactoryInstance,
   ComponentOptions,
   ConfigurationPolicy,
   ConfigurationProperties,
@@ -43,7 +45,8 @@ import {
   getInjectMetadata,
   getModifiedMethod,
   getPropertyInjectMetadata,
-  getUnbindMethods
+  getUnbindMethods,
+  getInjectAllMetadata
 } from './decorators.js'
 import {
   CONFIGURATION_ADMIN_SERVICE_ID,
@@ -53,6 +56,17 @@ import {
   targetedPids
 } from './ConfigurationAdmin.js'
 import { METATYPE_SERVICE_ID, type MetatypeRegistry } from './Metatype.js'
+import {
+  COMPONENT_FACTORY_SERVICE_ID,
+  COMPONENT_FACTORY,
+  COMPONENT_NAME
+} from './componentFactory.js'
+import {
+  CONDITION_SERVICE_ID,
+  CONDITION_ID,
+  TRUE_CONDITION_ID,
+  TRUE_CONDITION
+} from './conditions.js'
 import { isTsmRuntimeAvailable, tsmRuntime } from './TsmRuntime.js'
 
 
@@ -153,6 +167,18 @@ interface ComponentRuntime {
   policy: ConfigurationPolicy
   /** Keyed by {@link instanceKeyOf}: the PID for a factory instance, else one entry */
   instances: Map<string, ComponentInstance>
+  /**
+   * The registered factory, for a component declared with `factory`.
+   *
+   * Held because the factory is what has to be withdrawn when a mandatory
+   * reference goes: with no factory registered, nobody can ask for another
+   * instance of a component that cannot run.
+   */
+  factory?: {
+    registration: ServiceRegistration
+    /** Disposes every instance this factory built */
+    disposeAll: () => Promise<void>
+  }
 }
 
 interface ComponentInstance {
@@ -215,8 +241,28 @@ function referencesOf(
   ]
 }
 
+/**
+ * Whether two provider lists are the same services in the same order.
+ *
+ * Identity, not equality: two calls resolve the same singletons, so a plain
+ * comparison is enough — and cheaper than the re-render an unnecessary
+ * assignment would cause.
+ */
+function sameServices(held: readonly unknown[], fresh: readonly unknown[]): boolean {
+  return held.length === fresh.length && held.every((service, at) => service === fresh[at])
+}
+
 /** Key for the one instance a component has when its PID is not a factory PID */
 const SINGLETON = '\u0000singleton'
+
+/**
+ * Key prefix for an instance a factory component built.
+ *
+ * Not a PID: these instances are configured by their caller, so there is nothing
+ * to look up and nothing for `context.configurationPid` to report. The prefix
+ * keeps them apart from configuration-driven instances in the same map.
+ */
+const FACTORY_INSTANCE = '\u0000factory:'
 
 /**
  * How an instance is identified among its component's instances: by its PID when
@@ -316,9 +362,26 @@ export class ModuleLoader {
     this.options = { ...DEFAULT_OPTIONS, ...options }
     this.services = options.serviceRegistry ?? new DefaultServiceRegistry()
     this.logger = options.logger ?? new ConsoleLogger()
+    this.publishTrueCondition()
     this.observeServiceRegistry()
     this.observeConfigurations(options.configurationAdmin)
     this.publishMetatype(options.metatype)
+  }
+
+  /**
+   * Register the condition that always holds.
+   *
+   * DS treats `(osgi.condition.id=true)` as the default satisfying condition, so
+   * there is always a baseline a filter can be written against — and so the
+   * mechanism needs no special case for "no condition given". Registered once
+   * here rather than lazily: a component asking for it must not depend on
+   * whether some other component asked first.
+   */
+  private publishTrueCondition(): void {
+    this.services.register(CONDITION_SERVICE_ID, TRUE_CONDITION, {
+      providedBy: 'tsm',
+      properties: { [CONDITION_ID]: TRUE_CONDITION_ID }
+    })
   }
 
   /**
@@ -1422,9 +1485,19 @@ export class ModuleLoader {
       registeredSomething = false
 
       for (const runtime of runtimes) {
-        if (runtime.instances.size > 0) continue
         if (this.isComponentDisabled(loadedModule.manifest.id, runtime.className)) continue
         if (this.missingReferences(runtime).length > 0) continue
+
+        // A factory component registers a factory and no instances of its own:
+        // there is nothing to build until somebody asks
+        if (runtime.options.factory !== undefined) {
+          if (runtime.factory) continue
+          this.registerComponentFactory(loadedModule, runtime)
+          registeredSomething = true
+          continue
+        }
+
+        if (runtime.instances.size > 0) continue
 
         for (const wanted of this.configurationsFor(runtime)) {
           this.registerInstance(loadedModule, runtime, wanted)
@@ -1435,7 +1508,7 @@ export class ModuleLoader {
     }
 
     for (const runtime of runtimes) {
-      if (runtime.instances.size > 0) continue
+      if (runtime.instances.size > 0 || runtime.factory) continue
 
       const missing = this.missingReferences(runtime)
       this.logger.info(
@@ -1647,13 +1720,39 @@ export class ModuleLoader {
         .map(entry => entry.serviceId)
     )
 
-    return runtime.references
+    const missing = runtime.references
       .filter(reference =>
         !reference.optional &&
         !absorbed.has(reference.serviceId) &&
         !this.services.has(reference.serviceId)
       )
       .map(reference => reference.serviceId)
+
+    // A satisfying condition is a mandatory reference too — DS models it as
+    // exactly that (112.3.13), which is why it belongs here rather than beside
+    // the other checks: everything that waits for a reference then waits for it
+    const condition = runtime.options.satisfyingCondition
+    if (condition !== undefined && this.matchingConditions(condition) === 0) {
+      missing.push(`condition ${condition}`)
+    }
+
+    return missing
+  }
+
+  /**
+   * How many registered conditions match a filter.
+   *
+   * An invalid filter is reported once and treated as unsatisfied: a component
+   * whose condition cannot be parsed must not start as though it had none, and
+   * throwing here would take the whole module's start with it.
+   */
+  private matchingConditions(filter: string): number {
+    try {
+      return this.services.countProviders(CONDITION_SERVICE_ID, filter)
+    } catch (error) {
+      this.logger.error(`Invalid satisfying condition '${filter}':`, error)
+      return 0
+    }
   }
 
   /**
@@ -1671,15 +1770,24 @@ export class ModuleLoader {
       for (const runtime of runtimes) {
         if (this.isComponentDisabled(moduleId, runtime.className)) continue
 
-        // A bound reference is handled first: it may be able to absorb the change
-        // without the component going anywhere
+        // Collections and bound references are handled first: they may be able to
+        // absorb the change without the component going anywhere
         for (const instance of [...runtime.instances.values()]) {
+          this.applyCollections(loadedModule, runtime, instance)
           await this.applyBindings(loadedModule, runtime, instance)
         }
 
         const missing = this.missingReferences(runtime)
 
         if (missing.length > 0) {
+          if (runtime.factory) {
+            this.logger.info(
+              `Component factory ${runtime.options.factory} of ${moduleId} goes: ` +
+              `service(s) gone: ${missing.join(', ')}`
+            )
+            await this.withdrawComponentFactory(loadedModule, runtime)
+          }
+
           for (const [key, instance] of [...runtime.instances]) {
             this.logger.info(
               `Component ${runtime.className} of ${moduleId} stops: ` +
@@ -1690,6 +1798,14 @@ export class ModuleLoader {
           continue
         }
 
+        // Satisfied again: the factory comes back, but not the instances it had
+        // built. Those belonged to whoever asked for them, and re-creating them
+        // would be inventing state nobody asked for a second time
+        if (runtime.options.factory !== undefined) {
+          this.registerComponentFactory(loadedModule, runtime)
+          continue
+        }
+
         if (runtime.instances.size > 0) continue
 
         for (const wanted of this.configurationsFor(runtime)) {
@@ -1697,6 +1813,65 @@ export class ModuleLoader {
           await this.activateInstance(loadedModule, runtime, created)
         }
       }
+    }
+  }
+
+  /**
+   * Bring an instance's `@injectAll()` collections up to date.
+   *
+   * Runs on every registry event, so a collection reflects the registry rather
+   * than the moment the component was built. Which is the point: cardinality
+   * 0..n is not a snapshot.
+   */
+  private applyCollections(
+    loadedModule: LoadedModule,
+    runtime: ComponentRuntime,
+    instance: ComponentInstance
+  ): void {
+    const object = instance.instance
+    if (!object) return
+
+    const scope = this.scopeFor(loadedModule.manifest.id)
+
+    for (const collection of getInjectAllMetadata(runtime.ctor)) {
+      let services: unknown[]
+      try {
+        services = scope
+          .getServiceReferences(collection.serviceId, collection.target)
+          .map(reference => scope.resolveReference(reference))
+          .filter(service => service !== undefined)
+      } catch (error) {
+        // An unparseable target must not take the reconciliation down with it —
+        // every other component's collection is still waiting to be updated
+        this.logger.error(
+          `Invalid target on ${runtime.className}.${String(collection.propertyKey)}:`,
+          error
+        )
+        continue
+      }
+
+      const held = object[collection.propertyKey]
+
+      // Nothing changed: assigning anyway would make a reactive view re-render
+      // on every unrelated registry event
+      if (Array.isArray(held) && sameServices(held, services)) continue
+
+      if (collection.fieldOption === 'update') {
+        if (Array.isArray(held)) {
+          // The array's identity survives, which is the whole reason for `update`
+          held.length = 0
+          held.push(...services)
+          continue
+        }
+
+        this.logger.warn(
+          `${runtime.className}.${String(collection.propertyKey)} declares ` +
+          `fieldOption 'update' but is not an array, so it is replaced instead — ` +
+          `initialise it with '= []'`
+        )
+      }
+
+      object[collection.propertyKey] = services
     }
   }
 
@@ -1750,11 +1925,125 @@ export class ModuleLoader {
     }
   }
 
+  /**
+   * Register the factory of a factory component.
+   *
+   * Instead of the component's own services: nobody is meant to reach the
+   * template, only the instances built from it. The factory is registered once
+   * the component is satisfied and withdrawn when it stops being — with no
+   * factory in the registry, nobody can ask for an instance of something that
+   * cannot run, which is what DS means by the factory tracking satisfaction.
+   */
+  private registerComponentFactory(
+    loadedModule: LoadedModule,
+    runtime: ComponentRuntime
+  ): void {
+    if (runtime.factory) return
+
+    const name = runtime.options.factory
+    if (name === undefined) return
+
+    // These instances are configured by their caller, so a policy about
+    // configuration has nothing to act on. Saying so beats leaving the author to
+    // wonder why a component that requires configuration starts without any
+    if (runtime.policy === 'require') {
+      this.logger.warn(
+        `Component ${runtime.className} is a factory component, so ` +
+        `configurationPolicy 'require' does not apply — its instances are ` +
+        `configured by whoever calls newInstance()`
+      )
+    }
+
+    const scope = this.scopeFor(loadedModule.manifest.id)
+    const built = new Map<string, ComponentFactoryInstance>()
+    let nextInstance = 0
+
+    const factory: ComponentFactory = {
+      name,
+      get instances(): readonly ComponentFactoryInstance[] {
+        return [...built.values()]
+      },
+      newInstance: async (properties = {}) => {
+        const key = FACTORY_INSTANCE + String(++nextInstance)
+        const values = { ...this.declaredDefaults(runtime), ...properties }
+
+        const instance = this.registerInstance(
+          loadedModule, runtime, { factory: true, values }, key
+        )
+        await this.activateInstance(loadedModule, runtime, instance, { force: true })
+
+        const handle: ComponentFactoryInstance = {
+          get instance(): unknown { return instance.instance },
+          properties: { ...values },
+          dispose: async () => {
+            // Idempotent: the map is the record of what is still alive, so a
+            // second call finds nothing and a module teardown that got there
+            // first leaves the caller's own dispose() harmless
+            if (!built.delete(key)) return
+            await this.stopInstance(loadedModule, runtime, key, instance)
+          }
+        }
+
+        built.set(key, handle)
+        return handle
+      }
+    }
+
+    const registration = scope.register(COMPONENT_FACTORY_SERVICE_ID, factory, {
+      ranking: runtime.options.ranking,
+      properties: {
+        ...runtime.options.properties,
+        [COMPONENT_FACTORY]: name,
+        [COMPONENT_NAME]: runtime.className
+      }
+    })
+
+    runtime.factory = {
+      registration,
+      disposeAll: async () => {
+        // In reverse: the last instance built is the first to go, as everywhere
+        // else a teardown runs against the order things were created
+        for (const handle of [...built.values()].reverse()) {
+          await handle.dispose()
+        }
+      }
+    }
+
+    this.logger.info(
+      `Component factory ${name} of ${loadedModule.manifest.id} registered ` +
+      `(${runtime.className})`
+    )
+  }
+
+  /**
+   * Withdraw a factory and everything it built.
+   *
+   * The instances go too: they are instances of a component that can no longer
+   * run, and nothing would ever reclaim them — their lifetime was the caller's
+   * business only while the component was satisfied.
+   */
+  private async withdrawComponentFactory(
+    loadedModule: LoadedModule,
+    runtime: ComponentRuntime
+  ): Promise<void> {
+    const factory = runtime.factory
+    if (!factory) return
+
+    runtime.factory = undefined
+    await factory.disposeAll()
+    factory.registration.unregister()
+
+    this.logger.info(
+      `Component factory ${runtime.options.factory} of ${loadedModule.manifest.id} withdrawn`
+    )
+  }
+
   /** Register the services of one component instance, without creating it yet */
   private registerInstance(
     loadedModule: LoadedModule,
     runtime: ComponentRuntime,
-    wanted: WantedInstance
+    wanted: WantedInstance,
+    key: string = instanceKeyOf(wanted)
   ): ComponentInstance {
     const scope = this.scopeFor(loadedModule.manifest.id)
     const { options } = runtime
@@ -1779,10 +2068,10 @@ export class ModuleLoader {
           propertiesById,
           ranking: this.rankingFor(options, wanted.values),
           scope: options.scope,
-          // Only a factory configuration makes this one of several registrations
-          // of the class; for an ordinary PID it is the class's one registration,
-          // and a repeated one should replace it
-          instanceKey: wanted.factory ? wanted.pid : undefined
+          // Only a factory configuration or a factory component makes this one of
+          // several registrations of the class; for an ordinary PID it is the
+          // class's one registration, and a repeated one should replace it
+          instanceKey: wanted.factory ? wanted.pid ?? key : undefined
         })
 
     const instance: ComponentInstance = {
@@ -1792,7 +2081,7 @@ export class ModuleLoader {
       registration,
       bound: new Set()
     }
-    runtime.instances.set(instanceKeyOf(wanted), instance)
+    runtime.instances.set(key, instance)
     return instance
   }
 
@@ -1805,16 +2094,19 @@ export class ModuleLoader {
   private async activateInstance(
     loadedModule: LoadedModule,
     runtime: ComponentRuntime,
-    instance: ComponentInstance
+    instance: ComponentInstance,
+    options: { force?: boolean } = {}
   ): Promise<void> {
     if (instance.instance !== undefined) return
 
     const activateMethod = getActivateMethod(runtime.ctor)
     const binds = getBindMethods(runtime.ctor)
     // A component with bind methods wants to hear about services, which it cannot
-    // do without existing — so it counts as immediate like one with @activate
-    const immediate = runtime.options.immediate
-      ?? (activateMethod !== undefined || binds.length > 0)
+    // do without existing — so it counts as immediate like one with @activate.
+    // `force` is for a factory instance: the caller asked for the object, so
+    // handing back a delayed one that does not exist yet would be no answer
+    const immediate = options.force === true || (runtime.options.immediate
+      ?? (activateMethod !== undefined || binds.length > 0))
     if (!immediate) return
 
     // Resolve this registration rather than the ID: with several providers under
@@ -1828,12 +2120,13 @@ export class ModuleLoader {
 
     instance.instance = object
 
-    // Binding before activation, as DS orders it (112.5.10 before 112.5.11): the
-    // activate method should see the services it was given
+    // Collections and bindings before activation, as DS orders it (112.5.10
+    // before 112.5.11): the activate method should see what it was given
+    this.applyCollections(loadedModule, runtime, instance)
     await this.bindAvailable(loadedModule, runtime, instance)
 
     if (activateMethod !== undefined) {
-      await this.callComponentMethod(loadedModule, instance, activateMethod)
+      await this.callComponentMethod(loadedModule, runtime, instance, activateMethod)
     }
   }
 
@@ -1877,7 +2170,7 @@ export class ModuleLoader {
       await (method as (service: unknown, context: ComponentContext) => unknown).call(
         object,
         this.services.get(serviceId),
-        this.componentContext(loadedModule, instance)
+        this.componentContext(loadedModule, runtime, instance)
       )
     } catch (error) {
       this.logger.error(
@@ -1890,6 +2183,7 @@ export class ModuleLoader {
   /** Run one of a component's lifecycle methods with its context */
   private async callComponentMethod(
     loadedModule: LoadedModule,
+    runtime: ComponentRuntime,
     instance: ComponentInstance,
     methodName: string | symbol
   ): Promise<void> {
@@ -1901,16 +2195,28 @@ export class ModuleLoader {
 
     await (method as (context: ComponentContext) => unknown).call(
       object,
-      this.componentContext(loadedModule, instance)
+      this.componentContext(loadedModule, runtime, instance)
     )
   }
 
   private componentContext(
     loadedModule: LoadedModule,
+    runtime: ComponentRuntime,
     instance: ComponentInstance
   ): ComponentContext {
     return {
       ...this.createContext(loadedModule),
+      // A logger named after the component, not just its module: with several
+      // components in one module, a line saying only which module it came from
+      // makes the reader grep for the message. DS 112.3.12 gives a component a
+      // logger under the component's own name for the same reason.
+      // For a factory instance the PID is part of the name — one line per
+      // instance is otherwise indistinguishable from the same line four times
+      log: new ConsoleLogger(
+        instance.pid !== undefined && instance.pid !== runtime.className
+          ? `[${loadedModule.manifest.id}/${runtime.className}(${instance.pid})]`
+          : `[${loadedModule.manifest.id}/${runtime.className}]`
+      ),
       configuration: instance.configuration,
       properties: instance.properties,
       configurationPid: instance.pid
@@ -2029,7 +2335,7 @@ export class ModuleLoader {
     })
 
     if (created && modifiedMethod !== undefined) {
-      await this.callComponentMethod(loadedModule, instance, modifiedMethod)
+      await this.callComponentMethod(loadedModule, runtime, instance, modifiedMethod)
     }
   }
 
@@ -2060,7 +2366,7 @@ export class ModuleLoader {
     const deactivateMethod = getDeactivateMethod(runtime.ctor)
     if (deactivateMethod !== undefined && instance.instance) {
       try {
-        await this.callComponentMethod(loadedModule, instance, deactivateMethod)
+        await this.callComponentMethod(loadedModule, runtime, instance, deactivateMethod)
       } catch (error) {
         // A failing teardown must not keep the registration alive
         this.logger.error(
@@ -2175,6 +2481,10 @@ export class ModuleLoader {
     this.metatype?.removeAllOf(moduleId)
 
     for (const runtime of [...runtimes].reverse()) {
+      // The factory first, so nothing can ask for another instance while the
+      // ones that exist are being torn down
+      await this.withdrawComponentFactory(loadedModule, runtime)
+
       for (const [key, instance] of [...runtime.instances].reverse()) {
         await this.stopInstance(loadedModule, runtime, key, instance)
       }

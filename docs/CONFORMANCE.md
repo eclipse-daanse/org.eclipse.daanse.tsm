@@ -5,10 +5,11 @@ with the reason, because the reasons are not all of one kind. Fetch the
 specifications with `npm run docs:osgi` to read along; the section numbers are
 theirs.
 
-Scope: **Core 4** (Life Cycle Layer), **Core 5** (Service Layer, incl. 5.8
-Filters), **Compendium 104** (Configuration Admin), **105** (Metatype) and **112**
-(Declarative Services). Core 3 (Module Layer) and 159 (Feature Service) have no
-counterpart in tsm at all and are listed at the end as such.
+Scope: **Core 3.3** (Requirements and Capabilities), **Core 4** (Life Cycle
+Layer), **Core 5** (Service Layer, incl. 5.8 Filters), **Compendium 104**
+(Configuration Admin), **105** (Metatype) and **112** (Declarative Services). The
+rest of Core 3 rests on a class loader and 159 (Feature Service) is still an open
+question; both are listed at the end as such.
 
 | | |
 |---|---|
@@ -23,9 +24,9 @@ The **Art** column says what kind of difference it is:
 | **Sprache** | follows from TypeScript instead of Java, and would be wrong to copy |
 | **Plattform** | follows from the browser instead of a JVM |
 | **Laufzeit** | follows from asynchronous module loading |
-| **Modell** | follows from tsm settling satisfaction per *module* where DS settles it per *component* |
+| **Modell** | follows from the loader being framework and SCR in one |
 | **Absicht** | deliberately left out or done differently; the reason is in `SPEC.md` |
-| **Lücke** | missing without a reason of principle — buildable |
+| **Lücke** | missing without a reason of principle — buildable. No row carries this any more |
 
 ---
 
@@ -45,11 +46,11 @@ The **Art** column says what kind of difference it is:
 | 5.2.10 | Information About Services | `getBindingInfo`, `countProviders`, `getServiceConsumers` | ✅ | |
 | 5.2.11 | Service Exceptions | plain `Error`, no typed `ServiceException` | ◐ | Sprache — no checked exceptions to distinguish |
 | 5.2.12 | Services and Concurrency | nothing to synchronise | ✅ | Sprache — one thread |
-| 5.3 | Service Scope | `singleton` and `transient` | ◐ | **Lücke** — OSGi also has `bundle` scope, and tsm does know its consumer (the module), so this could be built |
+| 5.3 | Service Scope | `singleton`, `module`, `transient` | ✅ | `module` is OSGi's `bundle` scope under the name tsm uses for a bundle; a service's own references resolve for the module that provides it |
 | 5.4.1 | Getting a Single Service Object | `get(id)` | ✅ | |
 | 5.4.2 | Getting Multiple Service Objects | no `ServiceObjects` | ✗ | follows from the missing prototype scope |
 | 5.5 | Releasing Service Objects | nothing to release | ◐ | Sprache — reference counting exists because Java has no GC boundary here; the cost is that a transient service is never told it is done with |
-| 5.6.1 | Service Event Types | `registered`, `updated`, `unregistered` | ◐ | **Lücke** — `MODIFIED_ENDMATCH` is missing, because tsm has no filter-based listening |
+| 5.6.1 | Service Event Types | `registered`, `updated`, `unregistered`, `modified-endmatch` | ✅ | a listener may be added with a filter, which is what makes the end of a match observable |
 | 5.7 | Stale References | `invalidateInjectors` discards singletons built with a service that changed | ◐ | mitigated, not guaranteed — a module holding a reference itself keeps it |
 | 5.8 | Filters | `serviceFilter.ts`, checked against Felix `FilterImpl` and its TCK | ✅ | |
 | 5.9 | Service Factory | `bind(id, factory)` — but without the consuming bundle as an argument | ◐ | follows from 5.3 |
@@ -88,7 +89,7 @@ The **Art** column says what kind of difference it is:
 |---|---|---|---|---|
 | 104.2 | Configuration Targets | PIDs | ✅ | |
 | 104.3.1 | PID Syntax | any string; `demo.tiles` by convention | ✅ | |
-| 104.3.2 | Targeted PIDs | none | ✗ | **Lücke** — `pid\|id\|version` is buildable, the manifest carries both; only `location` has no counterpart |
+| 104.3.2 | Targeted PIDs | `pid\|id\|version`, most specific first | ◐ | Plattform — `location` has no counterpart, a module has no install location |
 | 104.4 | The Configuration Object | `pid`, `factoryPid`, `changeCount`, `getProperties`, `update`, `updateIfDifferent`, `delete` | ✅ | |
 | 104.4.1 | Location Binding | none | ✗ | Plattform — it exists to stop a foreign bundle reading foreign configuration |
 | 104.4.2 | Dynamic Binding | none | ✗ | Plattform |
@@ -150,7 +151,7 @@ The **Art** column says what kind of difference it is:
 | 112.2.1 | Declaring a Component | `@component()` | ✅ | |
 | 112.2.2 | Immediate Component | `immediate`, default when `@activate` exists | ✅ | |
 | 112.2.3 | Delayed Component | default without `@activate` | ✅ | |
-| 112.2.4 | Factory Component (`factory=`) | none | ✗ | **Lücke** — not to be confused with factory *configurations*, which tsm has |
+| 112.2.4 | Factory Component (`factory=`) | `@component({ factory })` registers a `ComponentFactory` | ✅ | distinct from factory *configurations*: data creates those, a call creates these |
 | 112.3.1 | Accessing Services | `@inject` | ✅ | |
 | 112.3.2 | Method Injection (bind/unbind per reference) | `@bind()` / `@unbind()`, called before `@activate` and in declaration order | ✅ | the decorator names the method by sitting on it, where DS names it in XML |
 | 112.3.3 | Field Injection | `@inject` on a property | ✅ | |
@@ -159,11 +160,11 @@ The **Art** column says what kind of difference it is:
 | 112.3.6 | Reference Scope | none | ✗ | follows from 5.3 |
 | 112.3.7 | Reference Policy | `static` / `dynamic` | ◐ | Modell — declared per requirement of a *module*, not per reference of a component |
 | 112.3.8 | Reference Policy Option | `greedy` / `reluctant` | ✅ | |
-| 112.3.9 | Reference Field Option | none | ✗ | **Lücke** — `replace` vs. `update` for collections |
+| 112.3.9 | Reference Field Option | `@injectAll(id, { fieldOption })` | ✅ | `update` keeps the array's identity, which is what a reactive view bound to it needs |
 | 112.3.10 | Selecting Target Services | `target` filter, LDAP syntax | ✅ | overriding it by configuration is missing — Modell, see `SPEC.md` §11.3 |
 | 112.3.11 | Circular References | detected while resolving; the chain is refused | ◐ | OSGi permits a cycle through a dynamic optional reference; tsm does not distinguish |
-| 112.3.12 | Logger Support | none | ✗ | **Lücke** — `ModuleContext.log` exists, but is not injectable per component |
-| 112.3.13 | Satisfying Condition | none | ✗ | **Lücke** — DS 1.5's `osgi.ds.satisfying.condition`, resting on the Condition Service of Core R8 |
+| 112.3.12 | Logger Support | `ComponentContext.log`, named after the component | ◐ | Sprache — a logger per component, not a `Logger` service to inject; the factory instance's PID is part of the name |
+| 112.3.13 | Satisfying Condition | `satisfyingCondition` filter over `tsm.condition` services | ✅ | treated as one more mandatory reference, as DS models it; `condition.id=true` is always registered |
 | 112.4 | Component Description (XML) | decorator metadata at runtime, read by the loader | ◐ | Sprache — `Symbol.for()` keys survive separate builds, so no descriptor generation step is needed |
 | 112.4.2 | Service Component Header | none needed | ◐ | Sprache |
 | 112.5.1 | Enabled | `disableComponent` / `enableComponent`, beside the module's switch | ✅ | a dimension of its own at both levels: off is not waiting |
@@ -197,44 +198,48 @@ The **Art** column says what kind of difference it is:
 ## What this adds up to
 
 Counted over the 124 numbered rows above — the four closing rows summarise whole
-chapters and are left out: **55 conform**, **45 present but different**,
-**24 absent**. Of the 69 departures, the large majority are **not choices**:
+chapters and are left out: **60 conform**, **45 present but different**,
+**19 absent**. Of the 64 departures, every one now has a reason, and the large
+majority are **not choices**:
 
-- **Sprache** (17 rows) — Java's `Dictionary`, checked exceptions, class names as
+- **Sprache** (18 rows) — Java's `Dictionary`, checked exceptions, class names as
   service identity, overload resolution, reference counting, eight numeric types.
   Copying these would make tsm worse, not more conform. Two of them come out
   *better* in TypeScript: the schema that is also the type (105.9, 112.8.2), and
   decorator metadata that needs no descriptor generation (112.4).
-- **Plattform** (15 rows) — everything that rests on a class loader, a file system,
+- **Plattform** (16 rows) — everything that rests on a class loader, a file system,
   or a security boundary between bundles: lazy activation, persistent storage,
-  permissions, location binding, multiple versions.
+  permissions, location binding, multiple versions, and the `location` segment of
+  a targeted PID.
 - **Laufzeit** (2 rows) — `import()` is asynchronous, so reactions to events run in
   a queue rather than inside the event. This is why `settle()` exists and OSGi
   needs no equivalent.
-- **Modell** (8 rows) — tsm settles satisfaction per module where DS settles it
-  per component, and the loader is framework and SCR in one. Configuration already
-  works per component (112.7.1); services do not.
-
-Core 3.3 — the generic requirement/capability model — is implemented as of the
-section above; what remains absent from Core 3 is everything resting on a class
-loader.
+- **Modell** (8 rows) — the loader is framework and SCR in one, and a few things
+  that OSGi settles per bundle tsm settles per module. Satisfaction, configuration
+  and the service scope now all work per component (112.5.2, 112.7.1, 5.3).
 - **Absicht** (15 rows) — named and argued in `SPEC.md`: no whiteboard for
   ManagedService or MetaTypeProvider, no XML, no ConfigurationPlugin, validation at
   the source instead of in the UI, `[]` instead of `null`.
 
-That leaves **7 rows marked as real gaps** — missing without a reason of
-principle, and buildable:
+**No row is marked as a gap any more.** The seven that were are built: factory
+components, `module` service scope, `MODIFIED_ENDMATCH`, the `update` field
+option, satisfying conditions, a logger per component, and targeted PIDs. What is
+still absent from the specifications is absent for a reason of language,
+platform, model or intent — which is a different claim than "not yet done", and
+the one this table exists to make.
 
-| | § | What it would take |
-|---|---|---|
-| Factory components | 112.2.4 | A `ComponentFactory` service per declaration |
-| `bundle` service scope | 5.3 | tsm knows the consuming module, so the instance could be cached per module |
-| `MODIFIED_ENDMATCH` | 5.6.1 | Filter-based listening in the registry |
-| Reference field option `update` | 112.3.9 | Mutating a collection in place instead of replacing it |
-| Satisfying condition | 112.3.13 | An `osgi.condition`-style service as a requirement |
-| Logger per component | 112.3.12 | Injecting a named logger instead of `ModuleContext.log` |
-| Targeted PIDs | 104.3.2 | Module identity and version in the PID lookup |
+Two of the seven turned out to say something about the design rather than just
+fill a hole:
 
-Ordered by what they would buy. None is large any more: the two that were —
-satisfaction per component and the bind/unbind methods that needed it — are
-done, and with them Declarative Services is covered but for these.
+- A service's own references resolve on behalf of the module that **provides**
+  it, not the one that asked. Whose code runs decides whose instance it gets —
+  otherwise `module` scope leaks down the dependency chain and one singleton ends
+  up with two different dependencies underneath it.
+- Filtering belongs in `addListener`, not in the callback. A listener that tests
+  properties itself can never learn that a service it had accepted stopped
+  qualifying, so whatever it collected goes stale in silence. That is the whole
+  content of `MODIFIED_ENDMATCH`.
+
+What remains conceptually open is **Compendium 159**, the Feature Service: not a
+gap but a question — what a feature would mean here, now that the system bundle
+and Core 3.3 have made the parts of an answer available.
