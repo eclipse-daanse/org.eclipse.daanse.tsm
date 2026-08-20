@@ -134,7 +134,8 @@ The **Art** column says what kind of difference it is:
 | 3.3.6 | `filter` matched per capability | one capability must satisfy the whole filter | ✅ | |
 | 3.3.6 | Case sensitive attribute names | `createServiceFilter(expr, { caseSensitive: true })` | ✅ | the distinction from service properties is kept |
 | 3.3.6 | Version constraints in the filter | `versionRange`, a semver range beside the filter | ◐ | Absicht — a filter compares text, so `(version>=1.9.0)` would accept `1.10.0` only by accident |
-| 3.3.5 | System Bundle Capabilities | none | ✗ | Absicht — there is no system bundle |
+| 3.3.5 | System Bundle Capabilities | `resolveWiring(manifests, { offered })`, and `libraryCapabilities()` from what the host registered; the wires name `environment` as the provider | ◐ | the mechanism is the same one — the specification has the framework parse `system.capabilities.extra` and resolve against it "as if provided by the system bundle". What is missing is only the synthetic bundle 0 to hang it on |
+| 4.2.2 | `system.packages.extra` — packages the environment exports | `sharedDependencies` wires to a `tsm.library` capability the host offers | ◐ | Plattform — the same construction (the specification has the framework "export the JRE packages as system packages"), with a library where OSGi has a Java package |
 | 3.2.5/3.2.6 | Version, Version Ranges | semver instead of OSGi's four-part version | ◐ | Sprache — the ecosystem's convention, and `semver` is already a dependency |
 | 3.4 | Execution Environment (`osgi.ee`) | none | ✗ | Plattform — no JVM profile to assert |
 | 3.7.10 | Provider Selection | highest `version` attribute wins, declaration order breaks a tie | ◐ | Absicht — a full constraint solver addresses problems that only package wiring creates |
@@ -194,15 +195,15 @@ The **Art** column says what kind of difference it is:
 
 ## What this adds up to
 
-Counted over the 122 rows above: **50 conform**, **46 present but different**,
-**26 absent**. Of the 72 departures, the large majority are **not choices**:
+Counted over the 123 rows above: **50 conform**, **48 present but different**,
+**25 absent**. Of the 73 departures, the large majority are **not choices**:
 
 - **Sprache** (17 rows) — Java's `Dictionary`, checked exceptions, class names as
   service identity, overload resolution, reference counting, eight numeric types.
   Copying these would make tsm worse, not more conform. Two of them come out
   *better* in TypeScript: the schema that is also the type (105.9, 112.8.2), and
   decorator metadata that needs no descriptor generation (112.4).
-- **Plattform** (14 rows) — everything that rests on a class loader, a file system,
+- **Plattform** (15 rows) — everything that rests on a class loader, a file system,
   or a security boundary between bundles: lazy activation, persistent storage,
   permissions, location binding, targeted PIDs, multiple versions.
 - **Laufzeit** (2 rows) — `import()` is asynchronous, so reactions to events run in
@@ -215,7 +216,7 @@ Counted over the 122 rows above: **50 conform**, **46 present but different**,
 Core 3.3 — the generic requirement/capability model — is implemented as of the
 section above; what remains absent from Core 3 is everything resting on a class
 loader.
-- **Absicht** (17 rows) — named and argued in `SPEC.md`: no whiteboard for
+- **Absicht** (16 rows) — named and argued in `SPEC.md`: no whiteboard for
   ManagedService or MetaTypeProvider, no XML, no ConfigurationPlugin, validation at
   the source instead of in the UI, `[]` instead of `null`.
 
