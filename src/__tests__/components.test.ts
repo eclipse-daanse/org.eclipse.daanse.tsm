@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ModuleLoader } from '../ModuleLoader'
 import { containers, resetContainers, testLoader } from './helpers/moduleContainers'
 import { activate, component, deactivate, inject } from '../decorators'
+import { CONDITION_SERVICE_ID } from '../conditions'
 import type { ModuleContext, ModuleManifest } from '../types'
 
 /**
@@ -111,7 +112,10 @@ describe('declarative components', () => {
       const loaded = await loader.loadModule(manifest('mixed'))
 
       expect(loaded.state).toBe('active')
-      expect(loader.getServiceRegistry().getServiceIds()).toEqual([])
+      // Everything but what the runtime registers itself: the baseline condition
+      // is always there, and this test is about the module's exports
+      expect(loader.getServiceRegistry().getServiceIds())
+        .toEqual([CONDITION_SERVICE_ID])
     })
   })
 

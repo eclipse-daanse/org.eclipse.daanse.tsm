@@ -15,6 +15,7 @@ export { createServiceFilter, type ServiceFilter } from './serviceFilter.js'
 export {
   injectable,
   inject,
+  injectAll,
   singleton,
   perModule,
   transient,
@@ -54,6 +55,25 @@ export {
   SYSTEM_BUNDLE_ID,
   systemBundle
 } from './capabilities.js'
+
+// Factory components - a component somebody instantiates by asking
+export {
+  COMPONENT_FACTORY_SERVICE_ID,
+  COMPONENT_FACTORY,
+  COMPONENT_NAME,
+  componentFactoryFilter
+} from './componentFactory.js'
+
+// Conditions - a service that is only a statement
+export {
+  CONDITION_SERVICE_ID,
+  CONDITION_ID,
+  TRUE_CONDITION_ID,
+  TRUE_CONDITION,
+  TRUE_CONDITION_FILTER,
+  conditionProperties,
+  conditionFilter
+} from './conditions.js'
 
 // Metatype - what a configuration looks like
 export {
@@ -113,6 +133,10 @@ export type {
   ServiceDeclaration,
   ServiceRequirement,
   ComponentInfo,
+  ComponentFactory,
+  ComponentFactoryInstance,
+  FieldOption,
+  ServiceScope,
   ComponentConfigurationInfo,
   ComponentOptions,
   ComponentContext,
