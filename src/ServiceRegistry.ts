@@ -174,8 +174,17 @@ export class DefaultServiceRegistry implements IModuleScopedServiceRegistry {
         properties: propertiesOf(binding)
       })
     } else {
-      // Outranked: kept as a stand-in, no change for readers
+      // Outranked: no change for a reader of `get(id)`, but a change all the
+      // same. A collection reference consumes every provider, so staying silent
+      // here would leave cardinality 0..n stale — and in OSGi every registration
+      // raises REGISTERED regardless of ranking
       this.pushShadowed(id, binding)
+      this.notify({
+        type: 'registered',
+        serviceId: id,
+        service: binding.instance,
+        properties: propertiesOf(binding)
+      })
     }
 
     return this.createHandle(id, binding)
@@ -334,10 +343,22 @@ export class DefaultServiceRegistry implements IModuleScopedServiceRegistry {
     const visible = this.bindings.get(id)
 
     if (visible?.seq !== seq) {
+      const going = this.registrationsOf(id).find(binding => binding.seq === seq)
       const removed = this.removeShadowed(id, binding => binding.seq === seq)
       // A stand-in has its own alias registrations, and those would survive it:
       // the interface would keep pointing at a registration that is gone
-      if (removed) this.dropAliasesOf(id, seq)
+      if (removed) {
+        this.dropAliasesOf(id, seq)
+        // The id still answers, but one provider fewer does — which is a change
+        // for anything consuming 0..n, and the counterpart of the notification
+        // a shadowed registration raises when it arrives
+        this.notify({
+          type: 'unregistered',
+          serviceId: id,
+          service: going?.instance,
+          properties: going ? propertiesOf(going) : undefined
+        })
+      }
       return removed
     }
 
@@ -369,6 +390,7 @@ export class DefaultServiceRegistry implements IModuleScopedServiceRegistry {
       providedBy?: string
       ranking?: number
       properties?: ServiceProperties
+      instanceKey?: string
     } = {}
   ): ServiceRegistration {
     return this.addRegistration(id, {
@@ -377,7 +399,8 @@ export class DefaultServiceRegistry implements IModuleScopedServiceRegistry {
       providedBy: options.providedBy,
       ranking: options.ranking ?? 0,
       seq: this.nextSeq++,
-      properties: options.properties
+      properties: options.properties,
+      instanceKey: options.instanceKey
     })
   }
 
@@ -392,6 +415,7 @@ export class DefaultServiceRegistry implements IModuleScopedServiceRegistry {
       providedBy?: string
       ranking?: number
       properties?: ServiceProperties
+      instanceKey?: string
     } = {}
   ): ServiceRegistration {
     return this.addRegistration(id, {
@@ -400,7 +424,8 @@ export class DefaultServiceRegistry implements IModuleScopedServiceRegistry {
       providedBy: options.providedBy,
       ranking: options.ranking ?? 0,
       seq: this.nextSeq++,
-      properties: options.properties
+      properties: options.properties,
+      instanceKey: options.instanceKey
     })
   }
 
@@ -502,6 +527,19 @@ export class DefaultServiceRegistry implements IModuleScopedServiceRegistry {
    * registering it: the same resolution as `bindClass()`, minus the registration.
    */
   construct<T>(ctor: InjectableConstructor<T>): T {
+    return this.constructFor(undefined, ctor)
+  }
+
+  /**
+   * Construct a class on behalf of a module, so a `module`-scoped dependency is
+   * that module's own.
+   *
+   * The counterpart of `getFor`. Without it a component with no service of its
+   * own — built through `construct` rather than through a registration — would
+   * silently share one instance with every other module, which is the one case
+   * where the scope would be wrong rather than merely absent.
+   */
+  constructFor<T>(consumer: string | undefined, ctor: InjectableConstructor<T>): T {
     if (!isInjectable(ctor)) {
       throw new Error(
         `Class '${ctor.name}' is not decorated with @injectable() or @component(), ` +
@@ -512,7 +550,7 @@ export class DefaultServiceRegistry implements IModuleScopedServiceRegistry {
     const resolving = new Set<string>()
 
     const args = getInjectMetadata(ctor).map(dependency => {
-      const resolved = this.get(dependency.serviceId, resolving)
+      const resolved = this.resolveFor(consumer, dependency.serviceId, resolving)
       if (resolved === undefined && !dependency.optional) {
         throw new Error(
           `Dependency '${dependency.serviceId}' not found (required by '${ctor.name}')`
@@ -524,7 +562,7 @@ export class DefaultServiceRegistry implements IModuleScopedServiceRegistry {
     const instance = new ctor(...args)
 
     for (const property of getPropertyInjectMetadata(ctor)) {
-      const resolved = this.get(property.serviceId, resolving)
+      const resolved = this.resolveFor(consumer, property.serviceId, resolving)
       if (resolved === undefined && !property.optional) {
         throw new Error(
           `Property dependency '${property.serviceId}' not found ` +

@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TSM: Editors</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Beyond one instance per bundle</h1>
+      <p>
+        Four things a component can be, all attached to the same thing — an
+        editor. Nothing here is configured: what exists is decided by a
+        condition, by a call, and by who is asking.
+      </p>
+      <p class="hint">
+        Everything on screen is read from the loader and the registry. Open the
+        console and try <code>tsm.factories()</code>,
+        <code>tsm.conditions()</code> and <code>tsm.components()</code>.
+      </p>
+    </header>
+
+    <main>
+      <section class="panel">
+        <h2>1 · A condition decides when anything starts</h2>
+        <article class="card">
+          <p class="explain">
+            A condition is a service with no behaviour — only the statement that
+            something is the case. The toolbars name
+            <code>(condition.id=workspace.ready)</code> and wait; the workspace
+            bundle registers it. Neither knows about the other.
+          </p>
+          <p id="workspace-state"></p>
+          <div class="row"><button id="workspace-load"></button></div>
+          <p class="meta">Conditions in the registry</p>
+          <ul id="conditions" class="plain"></ul>
+        </article>
+      </section>
+
+      <section class="panel">
+        <h2>2 · A factory component: one editor per file</h2>
+        <article class="card">
+          <p class="explain">
+            The <code>Editor</code> class registers no service of its own, only a
+            factory. Each call builds one instance with the properties passed to
+            it — which is the difference from a factory <em>configuration</em>:
+            only the code that opens files knows a file was opened.
+          </p>
+          <p id="factory-state"></p>
+          <label>file <input id="file-name" type="text" placeholder="notes.md" /></label>
+          <div class="row"><button id="open-editor">Open editor</button></div>
+          <ul id="editors" class="plain"></ul>
+          <p class="meta">
+            Close the workspace above and the factory is withdrawn: nobody can ask
+            for an instance of a component that cannot run.
+          </p>
+        </article>
+      </section>
+
+      <section class="panel">
+        <h2>3 · A collection, and what the field option changes</h2>
+        <article class="card">
+          <p class="explain">
+            Two toolbars collect the same tools with <code>@injectAll</code>, one
+            with <code>fieldOption: 'update'</code> and one with the default
+            <code>replace</code>. This page takes the array from each
+            <strong>once</strong>, when it starts — which is what a view bound to
+            a collection does.
+          </p>
+          <div class="row">
+            <button id="toggle-text" class="secondary">Toggle text tools</button>
+            <button id="toggle-draw" class="secondary">Toggle draw tools</button>
+          </div>
+          <p class="meta">Providers of <code>editor.tool</code>: <strong id="tools-offered"></strong></p>
+
+          <div class="columns">
+            <div>
+              <p class="meta"><code>update</code> — what the host holds</p>
+              <ul id="tools-update" class="plain"></ul>
+            </div>
+            <div>
+              <p class="meta"><code>replace</code> — what the host holds</p>
+              <ul id="tools-replace" class="plain"></ul>
+              <p class="meta">
+                the component's own field now has
+                <strong id="tools-replace-live"></strong>
+              </p>
+              <p id="replace-note"></p>
+            </div>
+          </div>
+          <p class="meta">
+            Neither is broken. <code>replace</code> assigns a new array, so what
+            was taken stops being the component's — which is why a view bound to
+            the array needs the other option.
+          </p>
+        </article>
+      </section>
+
+      <section class="panel">
+        <h2>4 · One undo stack per module</h2>
+        <article class="card">
+          <p class="explain">
+            <code>module</code> scope — OSGi's <code>bundle</code> scope. One
+            service id, one factory, and every bundle that asks gets its own
+            instance. A singleton would mix three bundles' history into one list.
+          </p>
+          <table class="stacks">
+            <thead><tr><th>module</th><th>entries</th><th>history</th></tr></thead>
+            <tbody id="stacks"></tbody>
+          </table>
+          <p class="meta">
+            The editors' entries land in the <code>editors</code> row, because the
+            instance was built for that bundle — not for the page that called the
+            factory.
+          </p>
+        </article>
+      </section>
+
+      <section class="panel">
+        <h2>Components</h2>
+        <ul id="components" class="plain components"></ul>
+
+        <h2>Journal</h2>
+        <p class="explain">What the bundles reported, newest first.</p>
+        <ol id="journal" class="log"></ol>
+      </section>
+    </main>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

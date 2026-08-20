@@ -682,6 +682,34 @@ export interface ComponentInfo {
   configurationPolicy: ConfigurationPolicy
 
   /**
+   * Collections it injects with `@injectAll()` — cardinality 0..n on a field.
+   *
+   * Never a reason to wait: an empty collection satisfies 0..n. Listed so a
+   * listing can show what a component is watching, not only what it needs.
+   */
+  collections: Array<{ serviceId: string; target?: string; fieldOption: FieldOption }>
+
+  /**
+   * The condition filter this component waits for, if it named one.
+   *
+   * Shows up in `configurations[].waitingFor` as well while it is unsatisfied;
+   * here it is visible even once the condition holds.
+   */
+  satisfyingCondition?: string
+
+  /**
+   * The factory's name, for a factory component — and what it has built.
+   *
+   * `registered: false` means the component is not satisfied, so the factory is
+   * withdrawn and nobody can ask for an instance of something that cannot run.
+   */
+  factory?: {
+    name: string
+    registered: boolean
+    instances: number
+  }
+
+  /**
    * What this declaration currently amounts to at runtime.
    *
    * Usually one entry; none while the component requires configuration that does
@@ -897,6 +925,15 @@ export interface ServiceRegistry {
       providedBy?: string
       ranking?: number
       properties?: ServiceProperties
+      /**
+       * Tells two registrations of one id from one provider apart.
+       *
+       * Without it a second `register()` under the same id *replaces* the first,
+       * so a module offering several objects under one id — the whiteboard
+       * pattern — would keep only the last. Registering the same thing twice by
+       * accident still replaces, which is what the default is for.
+       */
+      instanceKey?: string
     }
   ): ServiceRegistration
 
@@ -914,6 +951,8 @@ export interface ServiceRegistry {
       providedBy?: string
       ranking?: number
       properties?: ServiceProperties
+      /** As on `register()` — see there */
+      instanceKey?: string
     }
   ): ServiceRegistration
 
@@ -1013,6 +1052,12 @@ export interface ModuleScopedServiceRegistry extends ServiceRegistry {
 
   /** Resolve one reference on behalf of a module */
   resolveReferenceFor<T>(consumer: string, reference: ServiceReference): T | undefined
+
+  /**
+   * Construct a class on behalf of a module — the counterpart of `getFor` for a
+   * component that has no service of its own.
+   */
+  constructFor<T>(consumer: string, ctor: InjectableConstructor<T>): T
 
   /**
    * Drop the instances held for a module, and tell them so.

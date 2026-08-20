@@ -14,6 +14,7 @@
   },
   "include": [
     "examples/config/**/*.ts",
+    "examples/editors/**/*.ts",
     "examples/graph/**/*.ts",
     "examples/whiteboard/**/*.ts",
     "examples/wiring/**/*.ts",

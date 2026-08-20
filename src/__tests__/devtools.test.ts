@@ -4,7 +4,18 @@ import { containers, resetContainers, testLoader } from './helpers/moduleContain
 import { installDevtools, collectingOutput, type CollectingOutput } from '../devtools'
 import { tsmRuntime } from '../TsmRuntime'
 import { ConfigurationAdmin } from '../ConfigurationAdmin'
-import { activate, component, modified } from '../decorators'
+import { activate, component, inject, injectAll, modified } from '../decorators'
+import {
+  COMPONENT_FACTORY_SERVICE_ID,
+  componentFactoryFilter
+} from '../componentFactory'
+import {
+  CONDITION_SERVICE_ID,
+  TRUE_CONDITION,
+  conditionProperties,
+  conditionFilter
+} from '../conditions'
+import type { ComponentFactory } from '../types'
 import type { ModuleContext, ModuleManifest, ObservableServiceRegistry } from '../types'
 
 
@@ -651,6 +662,193 @@ describe('installDevtools - components and configuration', () => {
       expect(out.errors[0].message).toContain('configurationAdmin')
     })
   })
+
+  describe('factories()', () => {
+    it('says so when there are none', () => {
+      const tools = installDevtools({ loader: testLoader(), target: null, output: out })
+      tools.factories()
+      expect(out.lines.join("\n")).toContain('No factory components')
+    })
+
+    it('lists a factory with what it has built', async () => {
+      @component({ factory: 'editor', service: ['editor.instance'] })
+      class Editor {}
+
+      const loader = testLoader()
+      containers.ide = { Editor }
+      await loader.loadModule(componentManifest('ide'))
+
+      const tools = installDevtools({ loader, target: null, output: out })
+      const factory = loader.getServiceRegistry()
+        .getMatching<ComponentFactory>(COMPONENT_FACTORY_SERVICE_ID, componentFactoryFilter('editor'))!
+      await factory.newInstance({ file: 'a.ts' })
+
+      tools.factories()
+      expect(out.lines.join("\n")).toContain('editor')
+      expect(out.lines.join("\n")).toContain('Editor in ide')
+      expect(out.lines.join("\n")).toContain('1 instance(s)')
+      expect(out.lines.join("\n")).toContain('instances register editor.instance')
+    })
+
+    it('marks a withdrawn factory and what it waits for', async () => {
+      @component({ factory: 'editor' })
+      class Editor {
+        constructor(@inject('workspace') readonly workspace: unknown) {}
+      }
+
+      const loader = testLoader()
+      containers.ide = { Editor }
+      await loader.loadModule(componentManifest('ide'))
+
+      const tools = installDevtools({ loader, target: null, output: out })
+      tools.factories()
+
+      // The interesting case: no instance can be had, and the reason is nameable
+      expect(out.lines.join("\n")).toContain('withdrawn')
+      expect(out.lines.join("\n")).toContain('workspace')
+    })
+
+    it('returns the declarations', async () => {
+      @component({ factory: 'editor' })
+      class Editor {}
+
+      const loader = testLoader()
+      containers.ide = { Editor }
+      await loader.loadModule(componentManifest('ide'))
+
+      expect(installDevtools({ loader, target: null, output: out }).factories().map(entry => entry.factory?.name)).toEqual(['editor'])
+    })
+  })
+
+  describe('conditions()', () => {
+    it('shows the baseline alone when nothing else is going on', () => {
+      const tools = installDevtools({ loader: testLoader(), target: null, output: out })
+      tools.conditions()
+      expect(out.lines.join("\n")).toContain('true')
+      expect(out.lines.join("\n")).toContain('holds')
+    })
+
+    it('lists a registered condition', async () => {
+      const loader = testLoader()
+      loader.getServiceRegistry().register(CONDITION_SERVICE_ID, TRUE_CONDITION, {
+        providedBy: 'data', properties: conditionProperties('data.loaded')
+      })
+
+      installDevtools({ loader, target: null, output: out }).conditions()
+      expect(out.lines.join("\n")).toContain('data.loaded')
+    })
+
+    it('names who waits for a condition that does not hold', async () => {
+      @component({ satisfyingCondition: conditionFilter('data.loaded') })
+      class Report {
+        @activate() start(): void {}
+      }
+
+      const loader = testLoader()
+      containers.report = { Report }
+      await loader.loadModule(componentManifest('report'))
+
+      installDevtools({ loader, target: null, output: out }).conditions()
+
+      // Without this the component looks like one waiting for nothing at all
+      expect(out.lines.join("\n")).toContain('UNSATISFIED')
+      expect(out.lines.join("\n")).toContain('Report in report')
+    })
+
+    it('reports a condition as satisfied once it holds', async () => {
+      @component({ satisfyingCondition: conditionFilter('data.loaded') })
+      class Report {
+        @activate() start(): void {}
+      }
+
+      const loader = testLoader()
+      loader.getServiceRegistry().register(CONDITION_SERVICE_ID, TRUE_CONDITION, {
+        providedBy: 'data', properties: conditionProperties('data.loaded')
+      })
+      containers.report = { Report }
+      await loader.loadModule(componentManifest('report'))
+
+      installDevtools({ loader, target: null, output: out }).conditions()
+      expect(out.lines.join("\n")).toContain('satisfied')
+      expect(out.lines.join("\n")).not.toContain('UNSATISFIED')
+    })
+
+    it('treats an unparseable filter as unsatisfied', async () => {
+      @component({ satisfyingCondition: '(condition.id=' })
+      class Report {
+        @activate() start(): void {}
+      }
+
+      const loader = testLoader()
+      containers.report = { Report }
+      await loader.loadModule(componentManifest('report'))
+
+      installDevtools({ loader, target: null, output: out }).conditions()
+      expect(out.lines.join("\n")).toContain('UNSATISFIED')
+    })
+
+    it('returns what holds and what is awaited', async () => {
+      @component({ satisfyingCondition: conditionFilter('data.loaded') })
+      class Report {
+        @activate() start(): void {}
+      }
+
+      const loader = testLoader()
+      containers.report = { Report }
+      await loader.loadModule(componentManifest('report'))
+
+      const result = installDevtools({ loader, target: null, output: out }).conditions()
+      expect(result.held).toEqual(['true'])
+      expect(result.awaited).toEqual(['(condition.id=data.loaded)'])
+    })
+  })
+
+  describe('components() with the newer declarations', () => {
+    it('shows a factory component as a factory, not as a service', async () => {
+      @component({ factory: 'editor', service: ['editor.instance'] })
+      class Editor {}
+
+      const loader = testLoader()
+      containers.ide = { Editor }
+      await loader.loadModule(componentManifest('ide'))
+
+      installDevtools({ loader, target: null, output: out }).components('ide')
+      expect(out.lines.join("\n")).toContain("factory 'editor'")
+      // Naming the service would say the opposite of what is registered
+      expect(out.lines.join("\n")).not.toContain('delayed')
+    })
+
+    it('shows the condition a component named', async () => {
+      @component({ satisfyingCondition: conditionFilter('data.loaded') })
+      class Report {
+        @activate() start(): void {}
+      }
+
+      const loader = testLoader()
+      containers.report = { Report }
+      await loader.loadModule(componentManifest('report'))
+
+      installDevtools({ loader, target: null, output: out }).components('report')
+      expect(out.lines.join("\n")).toContain('condition (condition.id=data.loaded)')
+    })
+
+    it('shows a collection with its count and field option', async () => {
+      @component()
+      class Map2D {
+        @injectAll('tile.source', { fieldOption: 'update' }) sources: unknown[] = []
+        @activate() start(): void {}
+      }
+
+      const loader = testLoader()
+      loader.getServiceRegistry().register('tile.source', {}, { providedBy: 'a' })
+      containers.map = { Map2D }
+      await loader.loadModule(componentManifest('map'))
+
+      installDevtools({ loader, target: null, output: out }).components('map')
+      expect(out.lines.join("\n")).toContain('collects tile.source — 1 · update')
+    })
+  })
+
 })
 
 describe('installDevtools - capabilities and wiring', () => {
