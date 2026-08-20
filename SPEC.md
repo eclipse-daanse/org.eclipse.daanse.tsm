@@ -228,6 +228,43 @@ interface ModuleLifecycle {
 }
 ```
 
+#### Zwei Ebenen: Modul und Component
+
+`requiresService` im Manifest parkt das **ganze Modul**, solange ein Service
+fehlt. Was eine einzelne Component braucht, sagt sie selbst — mit `@inject()`:
+
+```typescript
+@component({ service: [MAP_VIEW] })
+export class Map2D {
+  constructor(@inject(TILE_SERVICE) private tiles: TileSource) {}
+  @activate() start(): void { /* … */ }
+}
+```
+
+Fehlt `demo.tiles`, wird diese Component **nicht registriert** — und das Modul
+läuft weiter. Verschwindet der Service später, wird sie mit `@deactivate`
+gestoppt und ihre eigenen Services abgemeldet; kommt er zurück, startet sie neu.
+Das ist DS' Unterscheidung (112.5.2), und `getComponents()` benennt beide Gründe:
+
+| Zustand | |
+| --- | --- |
+| `unsatisfied-reference` | ein injizierter Service fehlt; `waitingFor` nennt ihn |
+| `unsatisfied-configuration` | eine verlangte PID fehlt (§11.3) |
+| `satisfied` | registriert, noch nicht erzeugt (delayed) |
+| `active` | eine Instanz existiert |
+
+`@inject(id, { optional: true })` wartet nicht.
+
+Innerhalb eines Moduls arbeitet der Loader in Runden, weil eine Component den
+Service einer anderen brauchen kann und die Reihenfolge im Modul darüber nichts
+sagt — derselbe Fixpunkt wie auf Modulebene. Aktiviert wird dann in der
+Reihenfolge, in der registriert wurde: sonst würde ein Konsument starten, dessen
+Anbieter erst konstruiert, aber noch nicht initialisiert ist.
+
+**Wann welche Ebene?** `requiresService` ist das grobe Werkzeug: „ohne das hat das
+ganze Modul keinen Sinn". Für alles andere ist die Component-Ebene die genauere
+Antwort — ein Modul mit fünf Components verliert dann nur die eine.
+
 #### Statisch oder dynamisch
 
 `requiresService` sagt mit zwei getrennten Feldern, was ein Service für ein Modul
@@ -1499,10 +1536,10 @@ Abweichung: **Sprache** (folgt aus TypeScript statt Java), **Plattform** (Browse
 statt JVM), **Laufzeit** (asynchrones Modul-Laden), **Modell** (Satisfaction pro
 Modul statt pro Component), **Absicht** oder **Lücke**.
 
-Von 123 verglichenen Punkten sind 51 konform, 48 anders und 24 nicht vorhanden.
-Von den 72 Abweichungen sind die meisten keine Wahl: 17 folgen aus der Sprache,
-15 aus der Plattform, 2 aus dem Laufzeitmodell, 10 aus dem Modulschnitt, 15 sind
-begründete Entscheidungen — und **7 sind echte Lücken**.
+Von 123 verglichenen Punkten sind 52 konform, 47 anders und 24 nicht vorhanden.
+Von den 71 Abweichungen sind die meisten keine Wahl: 17 folgen aus der Sprache,
+15 aus der Plattform, 2 aus dem Laufzeitmodell, 8 aus dem Modulschnitt, 15 sind
+begründete Entscheidungen — und **8 sind echte Lücken**.
 
 ### 11.6 Die Spezifikationen zum Nachlesen
 

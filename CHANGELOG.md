@@ -422,6 +422,16 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
   installed. `scopes` are deliberately not generated: they could hand two modules different versions, which is the
   problem sharing exists to avoid.
 - Documentation fix: the README showed `createTsmExternals(['vue', 'primevue'])`, an array the signature never took.
+- **Satisfaction per component** (DS 112.5.2): what a component injects with `@inject()` is now its own
+  requirement. A missing service leaves it `unsatisfied-reference` — `getComponents()` names it in `waitingFor` —
+  while the module keeps running; the service arriving starts it, the service leaving stops it through `@deactivate`
+  and withdraws its own services, which cascades to whatever injected those. Before this, a missing service **threw**
+  and took the whole module's load with it: `Dependency 'demo.tiles' not found`. `requiresService` in the manifest
+  stays the coarser tool, for when a module has no purpose without the service.
+- Components of one module are now registered in rounds, since one may inject the service another offers and the order
+  inside a module says nothing about which comes first — the same fixpoint the module level uses. Activation then
+  follows the registration order rather than the declaration order: otherwise a consumer starts while its provider is
+  constructed but not yet activated, which the round-based registration made visible.
 - **A system bundle** (`getSystemBundle()`, `systemCapabilities`), which is how OSGi answers the same question:
   *"In addition to normal bundles, the Framework itself is represented as a bundle"* (Core 4.6). The environment gets
   the shape of a module, so the resolver needs no special case — it knows modules with capabilities, and one of them is

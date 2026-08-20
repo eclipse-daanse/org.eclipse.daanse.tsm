@@ -558,6 +558,12 @@ export interface ComponentInfo {
   hasDeactivate: boolean
   /** Whether it can take changed configuration without being rebuilt */
   hasModified: boolean
+  /**
+   * Services it injects, through `@inject()` on a constructor parameter or a
+   * property. A mandatory one has to be there for the component to run — DS calls
+   * these its references (112.3).
+   */
+  references: Array<{ serviceId: string; optional: boolean }>
   /** Configuration PIDs it reads, defaulting to the class name */
   configurationPid: string[]
   configurationPolicy: ConfigurationPolicy
@@ -583,11 +589,17 @@ export interface ComponentConfigurationInfo {
   /** PID of the configuration behind it, absent when it runs unconfigured */
   pid?: string
   /**
-   * - unsatisfied-configuration: required configuration is missing, nothing registered
+   * - unsatisfied-configuration: required configuration is missing
+   * - unsatisfied-reference: a service it injects is missing
    * - satisfied: registered, not instantiated yet (a delayed component)
    * - active: an instance exists
+   *
+   * The two unsatisfied states are DS' own distinction (112.5.2), and neither
+   * touches the module: it keeps running while the component waits.
    */
-  state: 'unsatisfied-configuration' | 'satisfied' | 'active'
+  state: 'unsatisfied-configuration' | 'unsatisfied-reference' | 'satisfied' | 'active'
+  /** Service IDs it is waiting for, when the state is `unsatisfied-reference` */
+  waitingFor?: string[]
   /** The merged properties its registrations carry */
   properties: Readonly<ServiceProperties>
 }

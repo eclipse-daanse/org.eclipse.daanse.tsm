@@ -152,7 +152,7 @@ The **Art** column says what kind of difference it is:
 | 112.2.3 | Delayed Component | default without `@activate` | ✅ | |
 | 112.2.4 | Factory Component (`factory=`) | none | ✗ | **Lücke** — not to be confused with factory *configurations*, which tsm has |
 | 112.3.1 | Accessing Services | `@inject` | ✅ | |
-| 112.3.2 | Method Injection (bind/unbind per reference) | module-wide `onServiceBound` / `onServiceUnbound` | ◐ | **Lücke** — per-reference hooks on the component are missing |
+| 112.3.2 | Method Injection (bind/unbind per reference) | module-wide `onServiceBound` / `onServiceUnbound`; a component is stopped and restarted instead | ◐ | **Lücke** — per-reference hooks are missing, so a dynamic reference costs a rebuild where DS would only call a method |
 | 112.3.3 | Field Injection | `@inject` on a property | ✅ | |
 | 112.3.4 | Constructor Injection | `@inject` on a parameter | ✅ | |
 | 112.3.5 | Reference Cardinality | `0..1`, `1..1`, `0..n`, `1..n` | ✅ | |
@@ -166,8 +166,8 @@ The **Art** column says what kind of difference it is:
 | 112.3.13 | Satisfying Condition | none | ✗ | **Lücke** — DS 1.5's `osgi.ds.satisfying.condition`, resting on the Condition Service of Core R8 |
 | 112.4 | Component Description (XML) | decorator metadata at runtime, read by the loader | ◐ | Sprache — `Symbol.for()` keys survive separate builds, so no descriptor generation step is needed |
 | 112.4.2 | Service Component Header | none needed | ◐ | Sprache |
-| 112.5.1 | Enabled | `disableModule` / `enableModule` | ◐ | Modell — DS enables and disables individual components |
-| 112.5.2 | Satisfied | per module for services; **per component for configuration** | ◐ | Modell — the central departure. A missing service parks the whole module; a missing PID holds back one component |
+| 112.5.1 | Enabled | `disableModule` / `enableModule` | ◐ | **Lücke** — DS enables and disables individual components; here the switch is the module's |
+| 112.5.2 | Satisfied | per component for both: a missing `@inject()` service leaves it `unsatisfied-reference`, a missing PID `unsatisfied-configuration`; the module keeps running either way | ✅ | the module-level `requiresService` stays as the coarser tool — it parks a whole module on purpose |
 | 112.5.6 | Activation | `@activate`, two phases (register all, then activate) | ✅ | |
 | 112.5.8 | Component Context | `ComponentContext` with `configuration`, `properties`, `configurationPid` | ✅ | |
 | 112.5.9 | Activation Objects | the context object; no `Map` / property-type parameter forms | ◐ | Sprache — no overload resolution to pick a parameter shape by type |
@@ -195,8 +195,8 @@ The **Art** column says what kind of difference it is:
 
 ## What this adds up to
 
-Counted over the 123 rows above: **51 conform**, **48 present but different**,
-**24 absent**. Of the 72 departures, the large majority are **not choices**:
+Counted over the 123 rows above: **52 conform**, **47 present but different**,
+**24 absent**. Of the 71 departures, the large majority are **not choices**:
 
 - **Sprache** (17 rows) — Java's `Dictionary`, checked exceptions, class names as
   service identity, overload resolution, reference counting, eight numeric types.
@@ -209,7 +209,7 @@ Counted over the 123 rows above: **51 conform**, **48 present but different**,
 - **Laufzeit** (2 rows) — `import()` is asynchronous, so reactions to events run in
   a queue rather than inside the event. This is why `settle()` exists and OSGi
   needs no equivalent.
-- **Modell** (10 rows) — tsm settles satisfaction per module where DS settles it
+- **Modell** (8 rows) — tsm settles satisfaction per module where DS settles it
   per component, and the loader is framework and SCR in one. Configuration already
   works per component (112.7.1); services do not.
 
@@ -220,13 +220,13 @@ loader.
   ManagedService or MetaTypeProvider, no XML, no ConfigurationPlugin, validation at
   the source instead of in the UI, `[]` instead of `null`.
 
-That leaves **7 rows marked as real gaps** — missing without a reason of
-principle, and buildable, plus the one below that follows from them:
+That leaves **8 rows marked as real gaps** — missing without a reason of
+principle, and buildable:
 
 | | § | What it would take |
 |---|---|---|
-| Per-reference bind/unbind on a component | 112.3.2 | Component-level satisfaction, i.e. the same step as 112.5.2 |
-| Component-level enable/disable and satisfaction | 112.5.1, 112.5.2 | The separation OSGi has between framework and SCR |
+| Per-reference bind/unbind on a component | 112.3.2 | A `@reference()` decorator naming the methods; the satisfaction it needs is now there |
+| Component-level enable/disable | 112.5.1 | A switch per declaration beside the module's, and the state to remember it |
 | Factory components | 112.2.4 | A `ComponentFactory` service per declaration |
 | `bundle` service scope | 5.3 | tsm knows the consuming module, so the instance could be cached per module |
 | `MODIFIED_ENDMATCH` | 5.6.1 | Filter-based listening in the registry |
