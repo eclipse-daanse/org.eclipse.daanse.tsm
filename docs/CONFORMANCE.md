@@ -48,13 +48,13 @@ The **Art** column says what kind of difference it is:
 | 5.2.12 | Services and Concurrency | nothing to synchronise | ✅ | Sprache — one thread |
 | 5.3 | Service Scope | `singleton`, `module`, `transient` | ✅ | `module` is OSGi's `bundle` scope under the name tsm uses for a bundle; a service's own references resolve for the module that provides it |
 | 5.4.1 | Getting a Single Service Object | `get(id)` | ✅ | |
-| 5.4.2 | Getting Multiple Service Objects | no `ServiceObjects` | ✗ | follows from the missing prototype scope |
+| 5.4.2 | Getting Multiple Service Objects | `transient` hands out a new instance per resolution | ◐ | Sprache — as 5.5: several objects are had by resolving several times, but there is no handle to release one, because GC needs none |
 | 5.5 | Releasing Service Objects | nothing to release | ◐ | Sprache — reference counting exists because Java has no GC boundary here; the cost is that a transient service is never told it is done with |
 | 5.6.1 | Service Event Types | `registered`, `updated`, `unregistered`, `modified-endmatch` | ✅ | a listener may be added with a filter, which is what makes the end of a match observable |
-| 5.7 | Stale References | `invalidateInjectors` discards singletons built with a service that changed | ◐ | mitigated, not guaranteed — a module holding a reference itself keeps it |
+| 5.7 | Stale References | `invalidateInjectors` discards singletons built with a service that changed | ◐ | Sprache — mitigated, not guaranteed: a module holding a reference keeps the object alive, and nothing can revoke it the way an unregistered Java service can be made to throw |
 | 5.8 | Filters | `serviceFilter.ts`, checked against Felix `FilterImpl` and its TCK | ✅ | |
-| 5.9 | Service Factory | `bind(id, factory)` — but without the consuming bundle as an argument | ◐ | follows from 5.3 |
-| 5.10 | Prototype Service Factory | `transient` gives a new instance per resolution | ◐ | close in effect, not in contract |
+| 5.9 | Service Factory | `module` scope: one instance per consuming module, built on its first resolution | ◐ | Sprache — the semantics are 5.3's `module` scope; what is absent is the `getService(bundle, registration)` callback shape, since the factory needs no argument to be given a consumer |
+| 5.10 | Prototype Service Factory | `transient` gives a new instance per resolution | ◐ | Sprache — close in effect, not in contract: no `ServiceObjects` handle, because releasing is GC's business |
 | 5.11 | Unregistering Services | `registration.unregister()`; the best remaining registration takes over | ✅ | |
 | 5.13.1 | Service Permission | none | ✗ | Plattform — no boundary between modules in a browser to enforce |
 
@@ -71,7 +71,7 @@ The **Art** column says what kind of difference it is:
 | 4.4.5 | Starting Bundles, persistent start | `loadModule`; the started state does not survive a reload | ✗ | Plattform — persistence is the application's, as `ConfigurationStore` shows |
 | 4.4.6 | Activation, lazy activation | components are immediate or delayed; bundles are always eager | ◐ | Plattform — lazy bundle activation needs a class-loading hook, which ES modules do not offer |
 | 4.4.7 | Stopping Bundles | `unloadModule`, `disableModule` | ✅ | |
-| 4.4.9 | Updating Bundles | `reloadModule`, with dependents | ◐ | no version negotiation on update |
+| 4.4.9 | Updating Bundles | `reloadModule`, with dependents | ◐ | Plattform — no version negotiation on update, because there is no second version to negotiate with (see Core 3.6) |
 | 4.4.10 | Uninstalling Bundles | `unloadModule` withdraws services and stops components | ✅ | |
 | 4.4.13 | Loading Classes | ES module resolution | ✗ | Plattform — no class loader, so no per-bundle isolation |
 | 4.4.14 | Access to Resources | none | ✗ | Plattform — a module is not an archive |
@@ -94,7 +94,7 @@ The **Art** column says what kind of difference it is:
 | 104.4.1 | Location Binding | none | ✗ | Plattform — it exists to stop a foreign bundle reading foreign configuration |
 | 104.4.2 | Dynamic Binding | none | ✗ | Plattform |
 | 104.4.3 | Configuration Properties | case-sensitive storage; two keys differing only in case are refused | ◐ | Sprache — OSGi's case-insensitive `Dictionary` has no JS equivalent; filters *are* case-insensitive, as in the spec |
-| 104.4.4 | Property Propagation | not applicable | ✗ | follows from 104.5 |
+| 104.4.4 | Property Propagation | not applicable | ✗ | Absicht — follows from 104.5: with no ManagedService there is nothing to propagate properties to |
 | 104.4.5 | Automatic Properties | `service.pid`, `service.factoryPid` | ✅ | |
 | 104.4.6 | Equality | undefined | ✗ | Sprache — no `equals` contract to honour |
 | 104.5 | Managed Service | no whiteboard; the loader is the only recipient | ◐ | Absicht — DS is the modern route, and tsm has only that one |
@@ -102,7 +102,7 @@ The **Art** column says what kind of difference it is:
 | 104.7 | Configuration Admin Service | `getConfiguration`, `getFactoryConfiguration`, `createFactoryConfiguration`, `listConfigurations`, `findConfiguration` | ✅ | `listConfigurations` returns `[]` rather than `null` — Absicht |
 | 104.7.5 | Multi-Locations | none | ✗ | Plattform |
 | 104.7.6 | Regions | none | ✗ | Plattform |
-| 104.8 | Configuration Events | `ConfigurationListener` with `updated` / `deleted` | ◐ | no `ConfigurationEvent` object carrying a reference to the admin; no Event Admin |
+| 104.8 | Configuration Events | `ConfigurationListener` with `updated` / `deleted` | ◐ | Absicht — the event carries pid and factoryPid, not a reference back to the admin the listener already has; no Event Admin, see `SPEC.md` |
 | 104.9 | Configuration Plugin | none | ✗ | Absicht — substitution belongs in the store |
 | — | Persistence | `ConfigurationStore`; memory and `localStorage` included | ✅ | the spec requires persistence and leaves the medium open, which is exactly this seam |
 | — | Asynchronous delivery | `update()` returns before components react; `settle()` waits | ✅ | |
@@ -120,7 +120,7 @@ The **Art** column says what kind of difference it is:
 | 105.7 | Meta Type Resources | no `METATYPE.XML` | ✗ | Absicht — the schema is a value in code |
 | 105.8 | XML Schema | none | ✗ | Absicht — JSON Schema and Ecore are the interchange formats instead (`toJsonSchema`, `@emfts/tsm-metatype`) |
 | 105.9 | Meta Type Annotations | `objectClass()` instead of `@ObjectClassDefinition` on an interface | ◐ | Sprache — and it comes out better: `ConfigurationOf<typeof schema>` derives the type from the schema, where Java needs an interface *and* annotations that can drift apart |
-| 105.12 | Capabilities | none | ✗ | Modell — tsm has no requirements/capabilities model |
+| 105.12 | Capabilities | none | ✗ | Modell — the `osgi.extender` capability exists so a bundle can require a Metatype *implementation*; here the loader is that implementation and cannot be swapped, so the need is `requiresService: ['tsm.metatype']` |
 | — | Validation | `validate`, `coerce`; the admin refuses a bad `update()` | ◐ | Absicht — in OSGi neither CM nor Metatype validates; here it is opt-in and refuses at the source |
 | — | Localization | `%key` per locale, an untranslated key keeps its `%key` form | ✅ | mechanism as in the spec, table instead of properties files |
 
@@ -157,12 +157,12 @@ The **Art** column says what kind of difference it is:
 | 112.3.3 | Field Injection | `@inject` on a property | ✅ | |
 | 112.3.4 | Constructor Injection | `@inject` on a parameter | ✅ | |
 | 112.3.5 | Reference Cardinality | `0..1`, `1..1`, `0..n`, `1..n` | ✅ | |
-| 112.3.6 | Reference Scope | none | ✗ | follows from 5.3 |
+| 112.3.6 | Reference Scope | none | ✗ | Absicht — the provider decides whether its service is shareable, not the consumer; see `SPEC.md` §11.4b |
 | 112.3.7 | Reference Policy | `static` / `dynamic` | ◐ | Modell — declared per requirement of a *module*, not per reference of a component |
 | 112.3.8 | Reference Policy Option | `greedy` / `reluctant` | ✅ | |
 | 112.3.9 | Reference Field Option | `@injectAll(id, { fieldOption })` | ✅ | `update` keeps the array's identity, which is what a reactive view bound to it needs |
 | 112.3.10 | Selecting Target Services | `target` filter, LDAP syntax | ✅ | overriding it by configuration is missing — Modell, see `SPEC.md` §11.3 |
-| 112.3.11 | Circular References | detected while resolving; the chain is refused | ◐ | OSGi permits a cycle through a dynamic optional reference; tsm does not distinguish |
+| 112.3.11 | Circular References | detected while resolving; the chain is refused | ◐ | Modell — OSGi permits a cycle broken by a dynamic optional reference; tsm refuses the chain rather than deciding which reference may break it |
 | 112.3.12 | Logger Support | `ComponentContext.log`, named after the component | ◐ | Sprache — a logger per component, not a `Logger` service to inject; the factory instance's PID is part of the name |
 | 112.3.13 | Satisfying Condition | `satisfyingCondition` filter over `tsm.condition` services | ✅ | treated as one more mandatory reference, as DS models it; `condition.id=true` is always registered |
 | 112.4 | Component Description (XML) | decorator metadata at runtime, read by the loader | ◐ | Sprache — `Symbol.for()` keys survive separate builds, so no descriptor generation step is needed |
@@ -198,26 +198,29 @@ The **Art** column says what kind of difference it is:
 ## What this adds up to
 
 Counted over the 124 numbered rows above — the four closing rows summarise whole
-chapters and are left out: **60 conform**, **45 present but different**,
-**19 absent**. Of the 64 departures, every one now has a reason, and the large
+chapters and are left out: **60 conform**, **46 present but different**,
+**18 absent**. Every one of the 64 departures carries a reason, and the large
 majority are **not choices**:
 
-- **Sprache** (18 rows) — Java's `Dictionary`, checked exceptions, class names as
-  service identity, overload resolution, reference counting, eight numeric types.
+- **Sprache** (21 rows) — Java's `Dictionary`, checked exceptions, class names as
+  service identity, overload resolution, reference counting, eight numeric types,
+  and everything that follows from GC: no handle to release a service, no way to
+  revoke a stale reference.
   Copying these would make tsm worse, not more conform. Two of them come out
   *better* in TypeScript: the schema that is also the type (105.9, 112.8.2), and
   decorator metadata that needs no descriptor generation (112.4).
-- **Plattform** (16 rows) — everything that rests on a class loader, a file system,
+- **Plattform** (17 rows) — everything that rests on a class loader, a file system,
   or a security boundary between bundles: lazy activation, persistent storage,
   permissions, location binding, multiple versions, and the `location` segment of
   a targeted PID.
 - **Laufzeit** (2 rows) — `import()` is asynchronous, so reactions to events run in
   a queue rather than inside the event. This is why `settle()` exists and OSGi
   needs no equivalent.
-- **Modell** (8 rows) — the loader is framework and SCR in one, and a few things
-  that OSGi settles per bundle tsm settles per module. Satisfaction, configuration
-  and the service scope now all work per component (112.5.2, 112.7.1, 5.3).
-- **Absicht** (15 rows) — named and argued in `SPEC.md`: no whiteboard for
+- **Modell** (8 rows) — the loader is framework and SCR in one, so there is no
+  extender to require and no second implementation to swap. Satisfaction,
+  configuration and the service scope all work per component now (112.5.2,
+  112.7.1, 5.3).
+- **Absicht** (16 rows) — named and argued in `SPEC.md`: no whiteboard for
   ManagedService or MetaTypeProvider, no XML, no ConfigurationPlugin, validation at
   the source instead of in the UI, `[]` instead of `null`.
 
