@@ -37,11 +37,13 @@ import { collectsMany } from './cardinality.js'
 import { SYSTEM_BUNDLE_ID, resolveWiring, systemBundle, wiringOf } from './capabilities.js'
 import {
   getActivateMethod,
+  getBindMethods,
   getComponentMetadata,
   getDeactivateMethod,
   getInjectMetadata,
   getModifiedMethod,
-  getPropertyInjectMetadata
+  getPropertyInjectMetadata,
+  getUnbindMethods
 } from './decorators.js'
 import {
   CONFIGURATION_ADMIN_SERVICE_ID,
@@ -152,6 +154,13 @@ interface ComponentInstance {
   properties: ServiceProperties
   registration?: ServiceRegistration
   instance?: Record<string | symbol, unknown>
+  /**
+   * Which `@bind()` services this instance currently holds.
+   *
+   * Needed to tell a change from a repeat: a registry event says something moved,
+   * not what this instance already has.
+   */
+  bound: Set<string>
 }
 
 /** What a component's configuration amounts to for one instance of it */
@@ -184,6 +193,12 @@ function referencesOf(
       optional: entry.optional
     })),
     ...getPropertyInjectMetadata(ctor).map(entry => ({
+      serviceId: entry.serviceId,
+      optional: entry.optional
+    })),
+    // A bound service is a reference too — the difference is only what a change
+    // does: a method call instead of a rebuild
+    ...getBindMethods(ctor).map(entry => ({
       serviceId: entry.serviceId,
       optional: entry.optional
     }))
@@ -253,6 +268,13 @@ export class ModuleLoader {
    * pointless — the next reconcile would activate it right back.
    */
   private disabled = new Set<string>()
+  /**
+   * Components switched off individually, keyed `moduleId/ClassName`.
+   *
+   * A dimension of its own, as with modules: a disabled component is not waiting
+   * for anything, it is off. DS has the same pair (112.5.1), one level down.
+   */
+  private disabledComponents = new Set<string>()
   /**
    * Per module: its `@component()` classes and what became of them.
    *
@@ -780,6 +802,7 @@ export class ModuleLoader {
     this.boundRegistrations.clear()
     this.declarationMismatches.clear()
     this.disabled.clear()
+    this.disabledComponents.clear()
     this.preloaded.clear()
     this.componentRuntimes.clear()
 
@@ -903,8 +926,6 @@ export class ModuleLoader {
       }))
 
     if (configurations.length === 0) {
-      // Two reasons to have no instance, and DS distinguishes them: a service it
-      // injects is missing, or configuration it requires is
       const missing = this.missingReferences(runtime)
       configurations.push(
         missing.length > 0
@@ -916,6 +937,7 @@ export class ModuleLoader {
     return {
       moduleId,
       className: runtime.className,
+      disabled: this.isComponentDisabled(moduleId, runtime.className),
       services: runtime.options.service ?? [],
       immediate: runtime.options.immediate ?? activateMethod !== undefined,
       hasActivate: activateMethod !== undefined,
@@ -1385,6 +1407,7 @@ export class ModuleLoader {
 
       for (const runtime of runtimes) {
         if (runtime.instances.size > 0) continue
+        if (this.isComponentDisabled(loadedModule.manifest.id, runtime.className)) continue
         if (this.missingReferences(runtime).length > 0) continue
 
         for (const wanted of this.configurationsFor(runtime)) {
@@ -1583,8 +1606,26 @@ export class ModuleLoader {
    * waits and the module keeps running, as DS has it (112.5.2).
    */
   private missingReferences(runtime: ComponentRuntime): string[] {
+    // A bound reference with an @unbind method is absorbed by the component
+    // itself, so its absence is not a reason to stop — unless it is mandatory,
+    // which DS treats the same way (112.5.18): no replacement, no component
+    const absorbed = new Set(
+      getUnbindMethods(runtime.ctor)
+        .filter(entry => {
+          const reference = runtime.references.find(
+            candidate => candidate.serviceId === entry.serviceId
+          )
+          return reference?.optional === true
+        })
+        .map(entry => entry.serviceId)
+    )
+
     return runtime.references
-      .filter(reference => !reference.optional && !this.services.has(reference.serviceId))
+      .filter(reference =>
+        !reference.optional &&
+        !absorbed.has(reference.serviceId) &&
+        !this.services.has(reference.serviceId)
+      )
       .map(reference => reference.serviceId)
   }
 
@@ -1601,6 +1642,14 @@ export class ModuleLoader {
       if (!loadedModule || loadedModule.state !== 'active') continue
 
       for (const runtime of runtimes) {
+        if (this.isComponentDisabled(moduleId, runtime.className)) continue
+
+        // A bound reference is handled first: it may be able to absorb the change
+        // without the component going anywhere
+        for (const instance of [...runtime.instances.values()]) {
+          await this.applyBindings(loadedModule, runtime, instance)
+        }
+
         const missing = this.missingReferences(runtime)
 
         if (missing.length > 0) {
@@ -1619,6 +1668,56 @@ export class ModuleLoader {
         for (const wanted of this.configurationsFor(runtime)) {
           const created = this.registerInstance(loadedModule, runtime, wanted)
           await this.activateInstance(loadedModule, runtime, created)
+        }
+      }
+    }
+  }
+
+  /**
+   * Tell a running instance about its `@bind()` services coming and going.
+   *
+   * This is what a dynamic reference buys: the component stays and is handed the
+   * change, where a plain `@inject()` reference would mean a rebuild.
+   *
+   * Without an `@unbind()` method the loss is only reported: the component keeps
+   * whatever it stored, which is stale. Stopping it instead would turn an optional
+   * reference into a mandatory one, so the choice is the component's — a mandatory
+   * reference does go down, since nothing could keep it consistent.
+   */
+  private async applyBindings(
+    loadedModule: LoadedModule,
+    runtime: ComponentRuntime,
+    instance: ComponentInstance
+  ): Promise<void> {
+    if (instance.instance === undefined) return
+
+    const unbinds = new Map(
+      getUnbindMethods(runtime.ctor).map(entry => [entry.serviceId, entry.method])
+    )
+
+    for (const binding of getBindMethods(runtime.ctor)) {
+      const present = this.services.has(binding.serviceId)
+      const held = instance.bound.has(binding.serviceId)
+
+      if (present && !held) {
+        instance.bound.add(binding.serviceId)
+        await this.callBinding(
+          loadedModule, runtime, instance, binding.method, binding.serviceId
+        )
+        continue
+      }
+
+      if (!present && held) {
+        instance.bound.delete(binding.serviceId)
+
+        const method = unbinds.get(binding.serviceId)
+        if (method !== undefined) {
+          await this.callBinding(loadedModule, runtime, instance, method, binding.serviceId)
+        } else {
+          this.logger.warn(
+            `Component ${runtime.className} has no @unbind for ${binding.serviceId}, ` +
+            `so it still holds a service that is gone`
+          )
         }
       }
     }
@@ -1663,7 +1762,8 @@ export class ModuleLoader {
       pid: wanted.pid,
       configuration: wanted.values,
       properties,
-      registration
+      registration,
+      bound: new Set()
     }
     runtime.instances.set(instanceKeyOf(wanted), instance)
     return instance
@@ -1683,7 +1783,12 @@ export class ModuleLoader {
     if (instance.instance !== undefined) return
 
     const activateMethod = getActivateMethod(runtime.ctor)
-    if (!(runtime.options.immediate ?? activateMethod !== undefined)) return
+    const binds = getBindMethods(runtime.ctor)
+    // A component with bind methods wants to hear about services, which it cannot
+    // do without existing — so it counts as immediate like one with @activate
+    const immediate = runtime.options.immediate
+      ?? (activateMethod !== undefined || binds.length > 0)
+    if (!immediate) return
 
     // Resolve this registration rather than the ID: with several providers under
     // one service ID, get() would hand back somebody else's component
@@ -1695,8 +1800,63 @@ export class ModuleLoader {
     if (!object) return
 
     instance.instance = object
+
+    // Binding before activation, as DS orders it (112.5.10 before 112.5.11): the
+    // activate method should see the services it was given
+    await this.bindAvailable(loadedModule, runtime, instance)
+
     if (activateMethod !== undefined) {
       await this.callComponentMethod(loadedModule, instance, activateMethod)
+    }
+  }
+
+  /**
+   * Hand the instance every `@bind()` service that is there, in declaration order.
+   */
+  private async bindAvailable(
+    loadedModule: LoadedModule,
+    runtime: ComponentRuntime,
+    instance: ComponentInstance
+  ): Promise<void> {
+    for (const binding of getBindMethods(runtime.ctor)) {
+      if (instance.bound.has(binding.serviceId)) continue
+      if (!this.services.has(binding.serviceId)) continue
+
+      instance.bound.add(binding.serviceId)
+      await this.callBinding(loadedModule, runtime, instance, binding.method, binding.serviceId)
+    }
+  }
+
+  /**
+   * Call one bind or unbind method with the service and the component's context.
+   *
+   * A failure is logged and does not stop the rest: the component stays as it is,
+   * which is what a dynamic reference promises.
+   */
+  private async callBinding(
+    loadedModule: LoadedModule,
+    runtime: ComponentRuntime,
+    instance: ComponentInstance,
+    methodName: string | symbol,
+    serviceId: string
+  ): Promise<void> {
+    const object = instance.instance
+    if (!object) return
+
+    const method = object[methodName]
+    if (typeof method !== 'function') return
+
+    try {
+      await (method as (service: unknown, context: ComponentContext) => unknown).call(
+        object,
+        this.services.get(serviceId),
+        this.componentContext(loadedModule, instance)
+      )
+    } catch (error) {
+      this.logger.error(
+        `${String(methodName)} of ${runtime.className} failed for ${serviceId}:`,
+        error
+      )
     }
   }
 
@@ -1874,6 +2034,59 @@ export class ModuleLoader {
     }
 
     instance.registration?.unregister()
+  }
+
+  /** The key a component is switched off under */
+  private componentKey(moduleId: string, className: string): string {
+    return `${moduleId}/${className}`
+  }
+
+  private isComponentDisabled(moduleId: string, className: string): boolean {
+    return this.disabledComponents.has(this.componentKey(moduleId, className))
+  }
+
+  /**
+   * Switch off one component, leaving its module and its siblings running.
+   *
+   * DS' enabled state, one level below a module's (112.5.1): the component's
+   * services are withdrawn and its `@deactivate` runs, but nothing about it is
+   * waiting — it is off, and only `enableComponent()` brings it back. Whatever
+   * consumed its services reacts as it would to any withdrawal.
+   */
+  async disableComponent(moduleId: string, className: string): Promise<boolean> {
+    this.disabledComponents.add(this.componentKey(moduleId, className))
+
+    const loadedModule = this.modules.get(moduleId)
+    const runtime = this.componentRuntimes.get(moduleId)
+      ?.find(candidate => candidate.className === className)
+    if (!loadedModule || !runtime) return false
+
+    for (const [key, instance] of [...runtime.instances]) {
+      await this.stopInstance(loadedModule, runtime, key, instance)
+    }
+
+    this.logger.info(`Component ${className} of ${moduleId} disabled`)
+    await this.settle()
+    return true
+  }
+
+  /** Let a component run again, if what it needs is there */
+  async enableComponent(moduleId: string, className: string): Promise<boolean> {
+    if (!this.disabledComponents.delete(this.componentKey(moduleId, className))) {
+      return false
+    }
+
+    this.logger.info(`Component ${className} of ${moduleId} enabled`)
+    // Through the same reconciliation as any other change: it may still be
+    // waiting for a service or a configuration
+    this.enqueue(() => this.reconcile())
+    await this.settle()
+    return true
+  }
+
+  /** Components switched off individually, as `moduleId/ClassName` */
+  getDisabledComponents(): string[] {
+    return [...this.disabledComponents]
   }
 
   /**

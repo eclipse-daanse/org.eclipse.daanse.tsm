@@ -20,7 +20,9 @@ export {
   component,
   activate,
   deactivate,
-  modified
+  modified,
+  bind,
+  unbind
 } from './decorators.js'
 
 // Import maps for shared libraries

@@ -554,6 +554,12 @@ export interface ComponentInfo {
   services: string[]
   /** Whether it was created with its module rather than on first resolution */
   immediate: boolean
+  /**
+   * Switched off with `disableComponent()`.
+   *
+   * A dimension of its own, as with a module: not waiting for anything, just off.
+   */
+  disabled: boolean
   hasActivate: boolean
   hasDeactivate: boolean
   /** Whether it can take changed configuration without being rebuilt */

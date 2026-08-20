@@ -152,7 +152,7 @@ The **Art** column says what kind of difference it is:
 | 112.2.3 | Delayed Component | default without `@activate` | ✅ | |
 | 112.2.4 | Factory Component (`factory=`) | none | ✗ | **Lücke** — not to be confused with factory *configurations*, which tsm has |
 | 112.3.1 | Accessing Services | `@inject` | ✅ | |
-| 112.3.2 | Method Injection (bind/unbind per reference) | module-wide `onServiceBound` / `onServiceUnbound`; a component is stopped and restarted instead | ◐ | **Lücke** — per-reference hooks are missing, so a dynamic reference costs a rebuild where DS would only call a method |
+| 112.3.2 | Method Injection (bind/unbind per reference) | `@bind()` / `@unbind()`, called before `@activate` and in declaration order | ✅ | the decorator names the method by sitting on it, where DS names it in XML |
 | 112.3.3 | Field Injection | `@inject` on a property | ✅ | |
 | 112.3.4 | Constructor Injection | `@inject` on a parameter | ✅ | |
 | 112.3.5 | Reference Cardinality | `0..1`, `1..1`, `0..n`, `1..n` | ✅ | |
@@ -166,7 +166,7 @@ The **Art** column says what kind of difference it is:
 | 112.3.13 | Satisfying Condition | none | ✗ | **Lücke** — DS 1.5's `osgi.ds.satisfying.condition`, resting on the Condition Service of Core R8 |
 | 112.4 | Component Description (XML) | decorator metadata at runtime, read by the loader | ◐ | Sprache — `Symbol.for()` keys survive separate builds, so no descriptor generation step is needed |
 | 112.4.2 | Service Component Header | none needed | ◐ | Sprache |
-| 112.5.1 | Enabled | `disableModule` / `enableModule` | ◐ | **Lücke** — DS enables and disables individual components; here the switch is the module's |
+| 112.5.1 | Enabled | `disableComponent` / `enableComponent`, beside the module's switch | ✅ | a dimension of its own at both levels: off is not waiting |
 | 112.5.2 | Satisfied | per component for both: a missing `@inject()` service leaves it `unsatisfied-reference`, a missing PID `unsatisfied-configuration`; the module keeps running either way | ✅ | the module-level `requiresService` stays as the coarser tool — it parks a whole module on purpose |
 | 112.5.6 | Activation | `@activate`, two phases (register all, then activate) | ✅ | |
 | 112.5.8 | Component Context | `ComponentContext` with `configuration`, `properties`, `configurationPid` | ✅ | |
@@ -174,6 +174,7 @@ The **Art** column says what kind of difference it is:
 | 112.5.12 | Bound Service Replacement | `policyOption: greedy` rebuilds or rebinds | ✅ | |
 | 112.5.13-15 | Updated, Modification, Modified Method | `@modified()`; without it, rebuild | ✅ | |
 | 112.5.16 | Deactivation | `@deactivate`, newest first | ✅ | |
+| 112.5.18 | Unbinding | `@unbind()`; a mandatory reference going means the component goes, an optional one does not | ✅ | |
 | 112.6.1 | Service Properties | component properties merged with configuration; keys starting with `.` stay private | ✅ | |
 | 112.6.1 | `service.ranking` from configuration | overrides the declared ranking | ✅ | |
 | 112.7.1 | Configuration Changes | `configurationPolicy: require / optional / ignore` | ✅ | |
@@ -195,8 +196,8 @@ The **Art** column says what kind of difference it is:
 
 ## What this adds up to
 
-Counted over the 123 rows above: **52 conform**, **47 present but different**,
-**24 absent**. Of the 71 departures, the large majority are **not choices**:
+Counted over the 124 rows above: **55 conform**, **45 present but different**,
+**24 absent**. Of the 69 departures, the large majority are **not choices**:
 
 - **Sprache** (17 rows) — Java's `Dictionary`, checked exceptions, class names as
   service identity, overload resolution, reference counting, eight numeric types.
@@ -220,13 +221,11 @@ loader.
   ManagedService or MetaTypeProvider, no XML, no ConfigurationPlugin, validation at
   the source instead of in the UI, `[]` instead of `null`.
 
-That leaves **8 rows marked as real gaps** — missing without a reason of
+That leaves **6 rows marked as real gaps** — missing without a reason of
 principle, and buildable:
 
 | | § | What it would take |
 |---|---|---|
-| Per-reference bind/unbind on a component | 112.3.2 | A `@reference()` decorator naming the methods; the satisfaction it needs is now there |
-| Component-level enable/disable | 112.5.1 | A switch per declaration beside the module's, and the state to remember it |
 | Factory components | 112.2.4 | A `ComponentFactory` service per declaration |
 | `bundle` service scope | 5.3 | tsm knows the consuming module, so the instance could be cached per module |
 | `MODIFIED_ENDMATCH` | 5.6.1 | Filter-based listening in the registry |
@@ -234,6 +233,6 @@ principle, and buildable:
 | Satisfying condition | 112.3.13 | An `osgi.condition`-style service as a requirement |
 | Targeted PIDs | 104.3.2 | Module identity and version in the PID lookup |
 
-Ordered by what they would buy: the first two are one piece of work and the
-largest one — everything else on the list is small in comparison, and several of
-the small ones follow from it.
+Ordered by what they would buy. None is large any more: the two that were —
+satisfaction per component and the bind/unbind methods that needed it — are
+done, and with them Declarative Services is covered but for these.

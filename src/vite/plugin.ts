@@ -73,7 +73,25 @@ export interface TsmPluginOptions {
    */
   components?: 'validate' | 'derive' | false
 
-  /** File name for the emitted manifest with `components: 'derive'` */
+  /**
+   * What to do with the `dependencies` the `tsm:` imports imply.
+   *
+   * - `'validate'` (the default when a manifest is given): an import of an
+   *   undeclared module fails the build, a declaration nothing imports warns
+   * - `'derive'`: emit a manifest whose `dependencies` are the modules actually
+   *   imported, so the declaration exists in one place only
+   *
+   * A `tsm:` import of a **shared library** is not a module dependency and is
+   * left out: the module depends on the host providing it, which is what
+   * `sharedDependencies` says.
+   */
+  dependencies?: 'validate' | 'derive'
+
+  /**
+   * File name for the emitted manifest with `components: 'derive'` or
+   * `dependencies: 'derive'`. Both write the same file, so what they derive ends
+   * up in one manifest rather than two that overwrite each other.
+   */
   derivedManifestName?: string
 
   /**
@@ -220,6 +238,7 @@ export function tsmPlugin(options: TsmPluginOptions = {}): Plugin {
     manifest,
     strict = true,
     components = false,
+    dependencies = 'validate',
     derivedManifestName = 'manifest.json'
   } = options
 
@@ -317,6 +336,10 @@ export function tsmPlugin(options: TsmPluginOptions = {}): Plugin {
           if (reference.typeOnly) continue
 
           importedModuleIds.add(reference.moduleId)
+
+          // Deriving means the manifest follows the code, so there is nothing to
+          // hold the code against
+          if (dependencies === 'derive') continue
           if (isDeclared(reference, declared)) continue
 
           const message =
@@ -365,6 +388,8 @@ export function tsmPlugin(options: TsmPluginOptions = {}): Plugin {
 
       if (!validatable) return
 
+      if (dependencies === 'derive') return
+
       const unused = requiredDependencyIds(validatable).filter(
         dependencyId => !importedModuleIds.has(dependencyId)
       )
@@ -391,18 +416,37 @@ export function tsmPlugin(options: TsmPluginOptions = {}): Plugin {
         )
       }
 
-      if (components !== 'derive' || !validatable) return
+      if (!validatable) return
 
-      const provides = [...declaredServices.values()].map(service => ({
-        id: service.id,
-        ...(service.ranking === undefined ? {} : { ranking: service.ranking }),
-        ...(service.properties === undefined ? {} : { properties: service.properties })
-      }))
+      // One file, however many things are derived: two emits under the same name
+      // would silently overwrite each other
+      const derived: Record<string, unknown> = { ...validatable }
+
+      if (components === 'derive') {
+        derived.provides = [...declaredServices.values()].map(service => ({
+          id: service.id,
+          ...(service.ranking === undefined ? {} : { ranking: service.ranking }),
+          ...(service.properties === undefined ? {} : { properties: service.properties })
+        }))
+      }
+
+      if (dependencies === 'derive') {
+        // A tsm: import of a shared library is not a module dependency: the
+        // module depends on the host providing it, which sharedDependencies says
+        const shared = new Set(
+          (validatable.sharedDependencies ?? []).map(dependency => dependency.id)
+        )
+        derived.dependencies = [...importedModuleIds]
+          .filter(moduleId => !shared.has(moduleId))
+          .sort()
+      }
+
+      if (components !== 'derive' && dependencies !== 'derive') return
 
       this.emitFile({
         type: 'asset',
         fileName: derivedManifestName,
-        source: `${JSON.stringify({ ...validatable, provides }, null, 2)}\n`
+        source: `${JSON.stringify(derived, null, 2)}\n`
       })
     },
 

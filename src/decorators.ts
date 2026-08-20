@@ -22,6 +22,8 @@ const COMPONENT_KEY = Symbol.for('tsm:component')
 const ACTIVATE_KEY = Symbol.for('tsm:component:activate')
 const DEACTIVATE_KEY = Symbol.for('tsm:component:deactivate')
 const MODIFIED_KEY = Symbol.for('tsm:component:modified')
+const BIND_KEY = Symbol.for('tsm:component:bind')
+const UNBIND_KEY = Symbol.for('tsm:component:unbind')
 
 /**
  * Metadata for a single constructor parameter injection
@@ -208,6 +210,74 @@ export function getActivateMethod(target: MetadataTarget): string | symbol | und
 /** The method marked with @deactivate, if any */
 export function getDeactivateMethod(target: MetadataTarget): string | symbol | undefined {
   return Reflect.getOwnMetadata(DEACTIVATE_KEY, target)
+}
+
+/** One service a component binds, and the method that takes it */
+export interface BindingMetadata {
+  serviceId: string
+  method: string | symbol
+  optional: boolean
+}
+
+/**
+ * Marks the method that receives a service while the component runs.
+ *
+ * This is what makes a reference **dynamic**: without it, a service arriving or
+ * leaving means the component is built again — with it, the component stays and
+ * is handed the change. DS calls these bind methods (112.5.10); the difference
+ * there is that the method names are declared in XML, while here the decorator
+ * names them by being on them.
+ *
+ * The method runs before `@activate` when the component starts, in the order the
+ * references were declared, as in DS.
+ *
+ * ```typescript
+ * @bind(TILE_SERVICE) setTiles(tiles: TileSource) { this.tiles = tiles }
+ * @unbind(TILE_SERVICE) unsetTiles() { this.tiles = undefined }
+ * ```
+ *
+ * @param options.optional The component runs without it. Otherwise the service
+ *   has to be there for the component to start at all, as with `@inject()`.
+ */
+export function bind(serviceId: string, options?: { optional?: boolean }): MethodDecorator {
+  return (target, propertyKey) => {
+    const existing: BindingMetadata[] =
+      Reflect.getOwnMetadata(BIND_KEY, target.constructor) ?? []
+    Reflect.defineMetadata(
+      BIND_KEY,
+      [...existing, { serviceId, method: propertyKey, optional: options?.optional === true }],
+      target.constructor
+    )
+  }
+}
+
+/**
+ * Marks the method called when a bound service goes away.
+ *
+ * The component keeps running — dropping the reference is its own business, which
+ * is what a dynamic reference means. Without an unbind method the component is
+ * stopped instead, since nothing else could keep it consistent.
+ */
+export function unbind(serviceId: string): MethodDecorator {
+  return (target, propertyKey) => {
+    const existing: BindingMetadata[] =
+      Reflect.getOwnMetadata(UNBIND_KEY, target.constructor) ?? []
+    Reflect.defineMetadata(
+      UNBIND_KEY,
+      [...existing, { serviceId, method: propertyKey, optional: false }],
+      target.constructor
+    )
+  }
+}
+
+/** The services this class binds, with the methods that take them */
+export function getBindMethods(target: MetadataTarget): BindingMetadata[] {
+  return Reflect.getOwnMetadata(BIND_KEY, target) ?? []
+}
+
+/** The methods called when a bound service goes away */
+export function getUnbindMethods(target: MetadataTarget): BindingMetadata[] {
+  return Reflect.getOwnMetadata(UNBIND_KEY, target) ?? []
 }
 
 /** The method marked with @modified, if any */
