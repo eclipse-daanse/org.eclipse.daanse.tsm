@@ -1637,6 +1637,13 @@ sich.
 benutzt, außerhalb jedes Moduls, sieht Singleton-Verhalten — eine neue Instanz pro
 Aufruf wäre `transient`, ein Vertrag, den die Registrierung nicht deklariert hat.
 
+**Den Scope entscheidet der Anbieter, nicht der Konsument.** DS erlaubt einer
+Referenz, einen Scope zu *verlangen* (`bundle`, `prototype`; 112.3.6) — hier gibt
+es das nicht. Ob ein Service teilbar ist, weiß der, der ihn schreibt: ob er
+Zustand führt, ob er teuer ist, ob zwei Nutzer sich gegenseitig stören. Ein
+Konsument, der eine eigene Instanz verlangen kann, umgeht diese Aussage, ohne sie
+widerlegen zu können.
+
 ### 11.4c Collection-Referenzen: alle Anbieter statt des besten
 
 ```typescript
@@ -1744,10 +1751,11 @@ Abweichung: **Sprache** (folgt aus TypeScript statt Java), **Plattform** (Browse
 statt JVM), **Laufzeit** (asynchrones Modul-Laden), **Modell** (der Loader ist Framework
 und SCR in einem), **Absicht** oder **Lücke**.
 
-Von 124 verglichenen Punkten sind 60 konform, 45 anders und 19 nicht vorhanden.
-Von den 64 Abweichungen sind die meisten keine Wahl: 18 folgen aus der Sprache,
-16 aus der Plattform, 2 aus dem Laufzeitmodell, 8 aus dem Modulschnitt, 15 sind
-begründete Entscheidungen — und **keine ist mehr eine Lücke**.
+Von 124 verglichenen Punkten sind 60 konform, 46 anders und 18 nicht vorhanden.
+Jede der 64 Abweichungen trägt einen Grund, und die meisten sind keine Wahl: 21
+folgen aus der Sprache, 17 aus der Plattform, 2 aus dem Laufzeitmodell, 8 aus dem
+Modulschnitt, 16 sind begründete Entscheidungen — und **keine ist mehr eine
+Lücke**.
 
 Was fehlt, fehlt aus einem Grund. Das ist eine andere Aussage als „noch nicht
 gemacht", und die, für die diese Tabelle existiert. Offen bleibt begrifflich nur
