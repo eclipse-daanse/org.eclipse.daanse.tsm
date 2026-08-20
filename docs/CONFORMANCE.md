@@ -88,7 +88,7 @@ The **Art** column says what kind of difference it is:
 |---|---|---|---|---|
 | 104.2 | Configuration Targets | PIDs | ✅ | |
 | 104.3.1 | PID Syntax | any string; `demo.tiles` by convention | ✅ | |
-| 104.3.2 | Targeted PIDs | none | ✗ | Plattform — `pid\|bsn\|version\|location` needs bundle identity and version |
+| 104.3.2 | Targeted PIDs | none | ✗ | **Lücke** — `pid\|id\|version` is buildable, the manifest carries both; only `location` has no counterpart |
 | 104.4 | The Configuration Object | `pid`, `factoryPid`, `changeCount`, `getProperties`, `update`, `updateIfDifferent`, `delete` | ✅ | |
 | 104.4.1 | Location Binding | none | ✗ | Plattform — it exists to stop a foreign bundle reading foreign configuration |
 | 104.4.2 | Dynamic Binding | none | ✗ | Plattform |
@@ -162,7 +162,7 @@ The **Art** column says what kind of difference it is:
 | 112.3.9 | Reference Field Option | none | ✗ | **Lücke** — `replace` vs. `update` for collections |
 | 112.3.10 | Selecting Target Services | `target` filter, LDAP syntax | ✅ | overriding it by configuration is missing — Modell, see `SPEC.md` §11.3 |
 | 112.3.11 | Circular References | detected while resolving; the chain is refused | ◐ | OSGi permits a cycle through a dynamic optional reference; tsm does not distinguish |
-| 112.3.12 | Logger Support | none | ✗ | small Lücke — `ModuleContext.log` exists, but is not injectable per component |
+| 112.3.12 | Logger Support | none | ✗ | **Lücke** — `ModuleContext.log` exists, but is not injectable per component |
 | 112.3.13 | Satisfying Condition | none | ✗ | **Lücke** — DS 1.5's `osgi.ds.satisfying.condition`, resting on the Condition Service of Core R8 |
 | 112.4 | Component Description (XML) | decorator metadata at runtime, read by the loader | ◐ | Sprache — `Symbol.for()` keys survive separate builds, so no descriptor generation step is needed |
 | 112.4.2 | Service Component Header | none needed | ◐ | Sprache |
@@ -196,7 +196,8 @@ The **Art** column says what kind of difference it is:
 
 ## What this adds up to
 
-Counted over the 124 rows above: **55 conform**, **45 present but different**,
+Counted over the 124 numbered rows above — the four closing rows summarise whole
+chapters and are left out: **55 conform**, **45 present but different**,
 **24 absent**. Of the 69 departures, the large majority are **not choices**:
 
 - **Sprache** (17 rows) — Java's `Dictionary`, checked exceptions, class names as
@@ -206,7 +207,7 @@ Counted over the 124 rows above: **55 conform**, **45 present but different**,
   decorator metadata that needs no descriptor generation (112.4).
 - **Plattform** (15 rows) — everything that rests on a class loader, a file system,
   or a security boundary between bundles: lazy activation, persistent storage,
-  permissions, location binding, targeted PIDs, multiple versions.
+  permissions, location binding, multiple versions.
 - **Laufzeit** (2 rows) — `import()` is asynchronous, so reactions to events run in
   a queue rather than inside the event. This is why `settle()` exists and OSGi
   needs no equivalent.
@@ -221,7 +222,7 @@ loader.
   ManagedService or MetaTypeProvider, no XML, no ConfigurationPlugin, validation at
   the source instead of in the UI, `[]` instead of `null`.
 
-That leaves **6 rows marked as real gaps** — missing without a reason of
+That leaves **7 rows marked as real gaps** — missing without a reason of
 principle, and buildable:
 
 | | § | What it would take |
@@ -231,6 +232,7 @@ principle, and buildable:
 | `MODIFIED_ENDMATCH` | 5.6.1 | Filter-based listening in the registry |
 | Reference field option `update` | 112.3.9 | Mutating a collection in place instead of replacing it |
 | Satisfying condition | 112.3.13 | An `osgi.condition`-style service as a requirement |
+| Logger per component | 112.3.12 | Injecting a named logger instead of `ModuleContext.log` |
 | Targeted PIDs | 104.3.2 | Module identity and version in the PID lookup |
 
 Ordered by what they would buy. None is large any more: the two that were —
