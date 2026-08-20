@@ -137,6 +137,7 @@ export type {
   ComponentFactoryInstance,
   FieldOption,
   ServiceScope,
+  ModuleScopedServiceRegistry,
   ComponentConfigurationInfo,
   ComponentOptions,
   ComponentContext,

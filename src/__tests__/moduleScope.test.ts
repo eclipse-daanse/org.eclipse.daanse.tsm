@@ -214,4 +214,72 @@ describe('module scope', () => {
       expect(registry.getServiceReferences('cache')[0].scope).toBe('module')
     })
   })
+
+  describe('reached through a component', () => {
+    it('gives each module its own instance', async () => {
+      // The path that matters most, and the one that was wrong: a component with
+      // no service of its own is built through `construct`, which had no
+      // consumer to build for
+      const { ModuleLoader } = await import('../ModuleLoader.js')
+      const { component, activate } = await import('../decorators.js')
+
+      const loader = new ModuleLoader()
+      let built = 0
+      loader.getServiceRegistry().bind('undo', () => ({ n: ++built }), { scope: 'module' })
+
+      const seen: unknown[] = []
+
+      @component({ immediate: true })
+      class Left {
+        constructor(@inject('undo') readonly undo: unknown) { seen.push(undo) }
+        @activate() start(): void {}
+      }
+      @component({ immediate: true })
+      class Right {
+        constructor(@inject('undo') readonly undo: unknown) { seen.push(undo) }
+        @activate() start(): void {}
+      }
+
+      await loader.loadModule(
+        { id: 'one', version: '1.0.0', entry: 'one.js', provides: [] },
+        { container: { Left } }
+      )
+      await loader.loadModule(
+        { id: 'two', version: '1.0.0', entry: 'two.js', provides: [] },
+        { container: { Right } }
+      )
+
+      expect(seen[0]).not.toBe(seen[1])
+      expect(built).toBe(2)
+    })
+
+    it('shares one instance between two components of a module', async () => {
+      const { ModuleLoader } = await import('../ModuleLoader.js')
+      const { component, activate } = await import('../decorators.js')
+
+      const loader = new ModuleLoader()
+      let built = 0
+      loader.getServiceRegistry().bind('undo', () => ({ n: ++built }), { scope: 'module' })
+      const seen: unknown[] = []
+
+      @component({ immediate: true })
+      class Left {
+        constructor(@inject('undo') readonly undo: unknown) { seen.push(undo) }
+        @activate() start(): void {}
+      }
+      @component({ immediate: true })
+      class Right {
+        constructor(@inject('undo') readonly undo: unknown) { seen.push(undo) }
+        @activate() start(): void {}
+      }
+
+      await loader.loadModule(
+        { id: 'one', version: '1.0.0', entry: 'one.js', provides: [] },
+        { container: { Left, Right } }
+      )
+
+      expect(seen[0]).toBe(seen[1])
+      expect(built).toBe(1)
+    })
+  })
 })

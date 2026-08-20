@@ -31,6 +31,7 @@ import {
   type Configuration,
   type ConfigurationAdmin
 } from '../ConfigurationAdmin.js'
+import { CONDITION_SERVICE_ID, CONDITION_ID } from '../conditions.js'
 import { METATYPE_SERVICE_ID, type MetatypeRegistry } from '../Metatype.js'
 import { capabilitiesOf } from '../capabilities.js'
 
@@ -102,6 +103,23 @@ export interface TsmDevtools {
 
   /** The `@component()` classes of the loaded modules, as DS shows with scr:list */
   components(moduleId?: string): ComponentInfo[]
+
+  /**
+   * The factory components and what each has built.
+   *
+   * A withdrawn factory is the interesting entry: it means a mandatory reference
+   * is missing, so no instance of it can be had.
+   */
+  factories(): ComponentInfo[]
+
+  /**
+   * Which conditions hold, and which are waited for in vain.
+   *
+   * The second half is the point: a condition nobody registered is invisible in
+   * the service list, and a component waiting for it looks like one waiting for
+   * nothing at all.
+   */
+  conditions(): { held: string[]; awaited: string[] }
 
   /** Switch one component off, leaving its module and siblings running */
   disableComponent(moduleId: string, className: string): Promise<void>
@@ -181,6 +199,21 @@ export function installDevtools(options: DevtoolsOptions): TsmDevtools {
 
   const services = loader.getServiceRegistry()
   const queued = new Set<string>()
+
+  /**
+   * Whether anything registered satisfies a condition filter.
+   *
+   * An unparseable filter counts as unsatisfied, exactly as the loader treats it:
+   * a listing saying "holds" where the loader refuses to start would be worse
+   * than no listing.
+   */
+  function conditionHolds(filter: string): boolean {
+    try {
+      return services.countProviders(CONDITION_SERVICE_ID, filter) > 0
+    } catch {
+      return false
+    }
+  }
 
   function requireRegistry(command: string): PluginRegistry | undefined {
     if (!registry) {
@@ -379,6 +412,90 @@ export function installDevtools(options: DevtoolsOptions): TsmDevtools {
       }
     },
 
+    /**
+     * The component factories on offer, and what each has built.
+     *
+     * A factory with no instances is not idle by mistake: nobody has asked yet.
+     * A component whose factory is *withdrawn* is the interesting case — it means
+     * a mandatory reference is missing, so no instance can be had.
+     */
+    factories() {
+      const declarations = loader.getComponents()
+        .filter(declaration => declaration.factory !== undefined)
+
+      if (declarations.length === 0) {
+        out.log('%cNo factory components', css('muted'))
+        return declarations
+      }
+
+      out.log('%cComponent factories', css('heading'))
+      for (const declaration of declarations) {
+        const factory = declaration.factory!
+        out.log(
+          `  %c${factory.name}%c ${declaration.className} in ${declaration.moduleId} — ` +
+          `${factory.instances} instance(s)`,
+          css('name'),
+          css(factory.registered ? 'muted' : 'warn')
+        )
+        if (!factory.registered) {
+          const waiting = declaration.configurations
+            .flatMap(instance => instance.waitingFor ?? [])
+          out.log(
+            `    %cwithdrawn%c waiting for ${waiting.join(', ') || 'satisfaction'}`,
+            css('warn'),
+            css('muted')
+          )
+        }
+        for (const service of declaration.services) {
+          out.log(`    instances register ${service}`, css('muted'))
+        }
+      }
+      return declarations
+    },
+
+    /**
+     * Which conditions hold, and which are waited for in vain.
+     *
+     * The second half is the point: a condition nobody registered is invisible in
+     * the service list, and a component waiting for it looks like a component
+     * waiting for nothing.
+     */
+    conditions() {
+      const registered = services.getServiceReferences(CONDITION_SERVICE_ID)
+      const held = registered
+        .map(reference => String(reference.properties[CONDITION_ID] ?? '?'))
+        .sort()
+
+      out.log('%cConditions', css('heading'))
+      for (const id of held) {
+        out.log(`  %c${id}%c holds`, css('name'), css('ok'))
+      }
+
+      // Every filter some component named, and whether anything matches it
+      const awaited = new Map<string, string[]>()
+      for (const declaration of loader.getComponents()) {
+        const filter = declaration.satisfyingCondition
+        if (filter === undefined) continue
+        const waiting = awaited.get(filter) ?? []
+        waiting.push(`${declaration.className} in ${declaration.moduleId}`)
+        awaited.set(filter, waiting)
+      }
+
+      for (const [filter, components] of awaited) {
+        const holds = conditionHolds(filter)
+        out.log(
+          `  %c${filter}%c ${holds ? 'satisfied' : 'UNSATISFIED'} — ${components.join(', ')}`,
+          css('name'),
+          css(holds ? 'muted' : 'warn')
+        )
+      }
+
+      if (held.length === 0 && awaited.size === 0) {
+        out.log('%cNothing but the baseline', css('muted'))
+      }
+      return { held, awaited: [...awaited.keys()] }
+    },
+
     services() {
       const ids = services.getServiceIds()
       if (ids.length === 0) {
@@ -462,10 +579,16 @@ export function installDevtools(options: DevtoolsOptions): TsmDevtools {
       for (const declaration of declarations) {
         const traits = [
           declaration.disabled ? 'DISABLED' : undefined,
-          declaration.immediate ? 'immediate' : 'delayed',
-          declaration.services.length > 0
+          // A factory component registers a factory, not its own service, so
+          // naming the services would say the opposite of what is registered
+          declaration.factory
+            ? `factory '${declaration.factory.name}'` +
+              (declaration.factory.registered ? '' : ' (withdrawn)') +
+              ` · ${declaration.factory.instances} instance(s)`
+            : declaration.immediate ? 'immediate' : 'delayed',
+          declaration.factory === undefined && declaration.services.length > 0
             ? declaration.services.join(', ')
-            : 'no service',
+            : declaration.factory === undefined ? 'no service' : undefined,
           declaration.configurationPolicy !== 'optional'
             ? `config ${declaration.configurationPolicy}`
             : undefined,
@@ -477,6 +600,24 @@ export function installDevtools(options: DevtoolsOptions): TsmDevtools {
           css('name'),
           css('muted')
         )
+
+        if (declaration.satisfyingCondition !== undefined) {
+          out.log(
+            `    %ccondition%c ${declaration.satisfyingCondition}`,
+            css(conditionHolds(declaration.satisfyingCondition) ? 'ok' : 'warn'),
+            css('muted')
+          )
+        }
+
+        for (const collection of declaration.collections) {
+          const count = services.countProviders(collection.serviceId, collection.target)
+          out.log(
+            `    %ccollects%c ${collection.serviceId}${collection.target ?? ''} — ` +
+            `${count} · ${collection.fieldOption}`,
+            css('muted'),
+            css('muted')
+          )
+        }
 
         for (const instance of declaration.configurations) {
           // What it waits for matters more than the PID when it is waiting
@@ -880,6 +1021,8 @@ export function installDevtools(options: DevtoolsOptions): TsmDevtools {
         ]],
         ['Components', [
           'components(id?)      declared components and their state',
+          'factories()          component factories and what they built',
+          'conditions()         which conditions hold, and who waits in vain',
           'disableComponent(id, class) / enableComponent(id, class)',
           'config(pid?)         configurations, or the values of one',
           'describe(pid, loc?)  what a PID accepts, and what is wrong now',

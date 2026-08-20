@@ -76,6 +76,7 @@ export class ScopedServiceRegistry implements IObservableServiceRegistry {
       providedBy?: string
       ranking?: number
       properties?: ServiceProperties
+      instanceKey?: string
     } = {}
   ): ServiceRegistration {
     return this.track(this.target.register(id, service, {
@@ -94,6 +95,7 @@ export class ScopedServiceRegistry implements IObservableServiceRegistry {
       providedBy?: string
       ranking?: number
       properties?: ServiceProperties
+      instanceKey?: string
     } = {}
   ): ServiceRegistration {
     return this.track(this.target.bind(id, factory, {
@@ -159,8 +161,18 @@ export class ScopedServiceRegistry implements IObservableServiceRegistry {
     return scoped
   }
 
+  /**
+   * Construct a class for this module, so a `module`-scoped dependency is this
+   * module's own instance.
+   *
+   * The path a component without a service of its own takes, which makes it the
+   * one that must not lose the consumer.
+   */
   construct<T>(ctor: InjectableConstructor<T>): T {
-    return this.target.construct(ctor)
+    const target = this.target as Partial<IModuleScopedServiceRegistry>
+    return typeof target.constructFor === 'function'
+      ? target.constructFor<T>(this.moduleId, ctor)
+      : this.target.construct(ctor)
   }
 
   /**

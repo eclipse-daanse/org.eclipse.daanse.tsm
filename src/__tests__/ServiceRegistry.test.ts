@@ -659,7 +659,7 @@ describe('DefaultServiceRegistry - ranking and several providers per ID', () => 
       expect(registry.has('geo.service')).toBe(false)
     })
 
-    it('should stay silent for a registration that was never visible', () => {
+    it('should report a registration going that was never visible', () => {
       const registry = new DefaultServiceRegistry()
       registry.register('geo.service', {}, { providedBy: 'strong', ranking: 10 })
       const weak = registry.register('geo.service', {}, { providedBy: 'weak' })
@@ -669,8 +669,27 @@ describe('DefaultServiceRegistry - ranking and several providers per ID', () => 
 
       expect(weak.unregister()).toBe(true)
 
-      expect(events).toEqual([])
+      // `get(id)` answers with the same object as before, so this used to be
+      // treated as no change at all. But `countProviders` went from 2 to 1, and
+      // a collection reference consumes every provider — staying silent leaves
+      // cardinality 0..n stale. OSGi raises UNREGISTERING per registration for
+      // exactly this reason.
+      expect(events).toEqual(['unregistered'])
       expect(registry.countProviders('geo.service')).toBe(1)
+    })
+
+    it('should report a registration arriving that is outranked', () => {
+      const registry = new DefaultServiceRegistry()
+      registry.register('geo.service', {}, { providedBy: 'strong', ranking: 10 })
+
+      const events: string[] = []
+      registry.addListener({ onServiceEvent: event => { events.push(event.type) } })
+
+      registry.register('geo.service', {}, { providedBy: 'weak' })
+
+      // The counterpart: a provider nobody sees through `get()` is still a
+      // provider, and a collection has to hear about it
+      expect(events).toEqual(['registered'])
     })
 
     it('should refuse to withdraw the same registration twice', () => {

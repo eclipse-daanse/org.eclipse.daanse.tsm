@@ -1003,7 +1003,12 @@ export class ModuleLoader {
       configurations.push(
         missing.length > 0
           ? { state: 'unsatisfied-reference', waitingFor: missing, properties: {} }
-          : { state: 'unsatisfied-configuration', properties: {} }
+          // A satisfied factory component has no instances by design — nobody has
+          // asked yet — so reporting it as waiting for configuration would be a
+          // lie about a component that is doing exactly what it should
+          : runtime.factory !== undefined
+            ? { state: 'satisfied', properties: {} }
+            : { state: 'unsatisfied-configuration', properties: {} }
       )
     }
 
@@ -1017,6 +1022,17 @@ export class ModuleLoader {
       hasDeactivate: getDeactivateMethod(runtime.ctor) !== undefined,
       hasModified: getModifiedMethod(runtime.ctor) !== undefined,
       references: runtime.references,
+      collections: getInjectAllMetadata(runtime.ctor).map(entry => ({
+        serviceId: entry.serviceId,
+        target: entry.target,
+        fieldOption: entry.fieldOption
+      })),
+      satisfyingCondition: runtime.options.satisfyingCondition,
+      factory: runtime.options.factory === undefined ? undefined : {
+        name: runtime.options.factory,
+        registered: runtime.factory !== undefined,
+        instances: runtime.instances.size
+      },
       configurationPid: runtime.pids,
       configurationPolicy: runtime.policy,
       configurations
