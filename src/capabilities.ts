@@ -15,6 +15,13 @@
  */
 
 import semver from 'semver'
+import {
+  COMPONENT_EXTENDER,
+  CONFIGURATION_IMPLEMENTATION,
+  EXTENDER_NAMESPACE,
+  IMPLEMENTATION_NAMESPACE,
+  METATYPE_EXTENDER
+} from './componentRuntime.js'
 import type {
   Capability,
   ModuleManifest,
@@ -42,6 +49,20 @@ export const SERVICE_NAMESPACE = 'osgi.service'
 
 /** Shared libraries the host provides. Attributes: `library`, `version`. */
 export const LIBRARY_NAMESPACE = 'tsm.library'
+
+/**
+ * The version of Declarative Services the component layer follows.
+ *
+ * Carried on the extender capability so a module can require a minimum, as it
+ * would against Felix SCR.
+ */
+export const DS_VERSION = '1.5.0'
+
+/** The Metatype version the schema model follows */
+export const METATYPE_VERSION = '1.4.0'
+
+/** The Configuration Admin version the admin follows */
+export const CM_VERSION = '1.6.0'
 
 /** The value of `type` on an identity capability */
 export const MODULE_TYPE = 'tsm.module'
@@ -232,6 +253,16 @@ export function systemBundle(options: {
   version?: string
   libraries?: Map<string, { version: string; providedBy?: string }> | Record<string, string>
   capabilities?: Capability[]
+  /**
+   * Whether the application supplied a Metatype registry and a Configuration
+   * Admin, so a module can require what it actually depends on.
+   *
+   * Both are optional in tsm, and a module with a `configurationSchema` or one
+   * that reads configuration has a real reason to ask: without them its schema is
+   * dropped and its PID answers nothing.
+   */
+  metatype?: boolean
+  configurationAdmin?: boolean
 } = {}): ModuleManifest {
   return {
     id: SYSTEM_BUNDLE_ID,
@@ -240,6 +271,28 @@ export function systemBundle(options: {
     entry: 'System Bundle',
     exports: {},
     capabilities: [
+      // What the runtime offers of its own accord. In OSGi this one comes from
+      // the SCR bundle rather than from the framework; here the loader is both,
+      // so the system bundle is where it belongs — and a module can require it
+      // exactly as it would require Felix SCR
+      {
+        namespace: EXTENDER_NAMESPACE,
+        attributes: { [EXTENDER_NAMESPACE]: COMPONENT_EXTENDER, version: DS_VERSION }
+      },
+      // These two only when they are really there: a capability nobody can rely
+      // on is worse than none, because a module would resolve and then find
+      // nothing behind it
+      ...(options.metatype === true ? [{
+        namespace: EXTENDER_NAMESPACE,
+        attributes: { [EXTENDER_NAMESPACE]: METATYPE_EXTENDER, version: METATYPE_VERSION }
+      }] : []),
+      ...(options.configurationAdmin === true ? [{
+        namespace: IMPLEMENTATION_NAMESPACE,
+        attributes: {
+          [IMPLEMENTATION_NAMESPACE]: CONFIGURATION_IMPLEMENTATION,
+          version: CM_VERSION
+        }
+      }] : []),
       ...(options.libraries ? libraryCapabilities(options.libraries) : []),
       ...(options.capabilities ?? [])
     ]

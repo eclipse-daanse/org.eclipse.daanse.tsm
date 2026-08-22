@@ -1743,6 +1743,68 @@ OSGi entfällt — ein Modul hat keinen Installationsort.
 Ein Eintrag ohne Werte beendet die Suche nicht: `getConfiguration()` erzeugt
 solche, und einer davon darf keine Konfiguration verdecken, die Werte hat.
 
+### 11.4g Die Component-Ebene als Service
+
+In OSGi ist SCR ein gewöhnliches Bundle: ein Extender, der die
+Component-Beschreibungen *anderer* Bundles liest und sie von außen verwaltet. Das
+Framework selbst kennt Declarative Services überhaupt nicht. Zwei Dinge folgen
+daraus, die tsm übernimmt, obwohl der Extender hier kein eigenes Bundle ist.
+
+**Introspektion ist ein Service.** Der Loader veröffentlicht
+`ServiceComponentRuntime` unter `tsm.component.runtime` (DS 112.10):
+
+```typescript
+@component()
+export class ComponentView {
+  constructor(
+    @inject(COMPONENT_RUNTIME_SERVICE_ID) private readonly scr: ServiceComponentRuntime
+  ) {}
+
+  @activate()
+  start() {
+    for (const declaration of this.scr.getComponentDescriptions()) {
+      // Zustand, Referenzen, wartende Konfigurationen
+    }
+  }
+}
+```
+
+Das ist der Unterschied zwischen einem Werkzeug, das als Modul ausgeliefert werden
+kann, und einem, das im Host leben muss. Vorher war `loader.getComponents()` der
+einzige Weg, und der `ModuleContext` gibt den Loader nicht weiter — eine
+Component-Ansicht, ein Diagnose-Panel oder Devtools waren damit Host-Sache. Die
+Devtools in diesem Paket gehen jetzt über den Service, genau wie `scr:list` in
+OSGi ein Shell-Bundle ist, das mit SCR redet.
+
+**Was die Laufzeit bietet, kann ein Modul anfordern.** Das System Bundle trägt die
+Capabilities, die in OSGi vom jeweiligen Implementierungs-Bundle kommen:
+
+| Capability | wann |
+|---|---|
+| `osgi.extender=osgi.component` | immer — die Component-Ebene ist Teil des Loaders |
+| `osgi.extender=osgi.metatype` | nur mit übergebener `MetatypeRegistry` |
+| `osgi.implementation=osgi.cm` | nur mit übergebenem `ConfigurationAdmin` |
+
+Die letzten zwei sind bedingt, und das ist der Punkt: eine Capability, auf die
+sich niemand verlassen kann, ist schlimmer als keine. Ein Modul mit
+`configurationSchema` würde sonst auflösen und dann feststellen, dass sein Schema
+verworfen wird.
+
+```json
+{
+  "id": "config-forms",
+  "requirements": [
+    { "namespace": "osgi.extender", "filter": "(osgi.extender=osgi.metatype)" }
+  ]
+}
+```
+
+Was tsm **nicht** hat: SCR ist nicht stoppbar und nicht austauschbar, weil der
+Loader beides in einem Objekt ist. „Alle Components anhalten, Bundles laufen
+lassen" gibt es nur einzeln über `disableComponent()`. Das ist die
+Modell-Abweichung, die in `docs/CONFORMANCE.md` bei 112.9 steht — und alles, was
+davon übrig ist.
+
 ### 11.5 Konformität
 
 [`docs/CONFORMANCE.md`](docs/CONFORMANCE.md) stellt Abschnitt für Abschnitt
@@ -1751,9 +1813,9 @@ Abweichung: **Sprache** (folgt aus TypeScript statt Java), **Plattform** (Browse
 statt JVM), **Laufzeit** (asynchrones Modul-Laden), **Modell** (der Loader ist Framework
 und SCR in einem), **Absicht** oder **Lücke**.
 
-Von 124 verglichenen Punkten sind 60 konform, 46 anders und 18 nicht vorhanden.
-Jede der 64 Abweichungen trägt einen Grund, und die meisten sind keine Wahl: 21
-folgen aus der Sprache, 17 aus der Plattform, 2 aus dem Laufzeitmodell, 8 aus dem
+Von 124 verglichenen Punkten sind 61 konform, 46 anders und 17 nicht vorhanden.
+Jede der 63 Abweichungen trägt einen Grund, und die meisten sind keine Wahl: 22
+folgen aus der Sprache, 17 aus der Plattform, 2 aus dem Laufzeitmodell, 6 aus dem
 Modulschnitt, 16 sind begründete Entscheidungen — und **keine ist mehr eine
 Lücke**.
 

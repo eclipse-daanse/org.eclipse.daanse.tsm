@@ -12,8 +12,10 @@ import {
   requirementsOf,
   resolveWiring,
   satisfies,
-  wiringOf
+  wiringOf,
+  DS_VERSION
 } from '../capabilities'
+import { COMPONENT_EXTENDER, EXTENDER_NAMESPACE } from '../componentRuntime'
 import type { Capability, ModuleManifest, Requirement } from '../types'
 
 /**
@@ -503,6 +505,12 @@ describe('the loader', () => {
   })
 })
 
+/** What the runtime offers of its own accord, in every system bundle */
+const extenderCapability = {
+  namespace: EXTENDER_NAMESPACE,
+  attributes: { [EXTENDER_NAMESPACE]: COMPONENT_EXTENDER, version: DS_VERSION }
+}
+
 describe('the system bundle', () => {
   it('should stand for the runtime, with the location OSGi gives it', () => {
     const manifest = systemBundle()
@@ -510,13 +518,42 @@ describe('the system bundle', () => {
     expect(manifest.id).toBe(SYSTEM_BUNDLE_ID)
     // getLocation() returns the fixed string "System Bundle" in OSGi
     expect(manifest.entry).toBe('System Bundle')
-    expect(manifest.capabilities).toEqual([])
+
+    // Never empty: the component layer is always there, and in OSGi the SCR
+    // bundle offers exactly this so a module can require it
+    expect(manifest.capabilities).toEqual([extenderCapability])
+  })
+
+  it('should offer the component extender, as the SCR bundle does', () => {
+    const [capability] = systemBundle().capabilities!
+
+    expect(capability.namespace).toBe(EXTENDER_NAMESPACE)
+    expect(capability.attributes[EXTENDER_NAMESPACE]).toBe(COMPONENT_EXTENDER)
+    expect(capability.attributes.version).toBe(DS_VERSION)
+  })
+
+  it('should let a module require the component extender', () => {
+    const resolution = resolveWiring([
+      systemBundle(),
+      bundle('ui', {
+        requirements: [{
+          namespace: EXTENDER_NAMESPACE,
+          filter: `(${EXTENDER_NAMESPACE}=${COMPONENT_EXTENDER})`
+        }]
+      })
+    ])
+
+    // What `Require-Capability: osgi.extender; filter:="(osgi.extender=osgi.component)"`
+    // buys a bundle with components: it stays unresolved where nothing runs them
+    expect(resolution.unresolved).toEqual([])
+    expect(resolution.wires[0].provider).toBe(SYSTEM_BUNDLE_ID)
   })
 
   it('should carry the libraries the host registered', () => {
     const manifest = systemBundle({ libraries: { vue: '3.5.13' } })
 
     expect(manifest.capabilities).toEqual([
+      extenderCapability,
       { namespace: LIBRARY_NAMESPACE, attributes: { library: 'vue', version: '3.5.13' } }
     ])
   })
@@ -530,7 +567,7 @@ describe('the system bundle', () => {
 
     const manifest = systemBundle({ capabilities: [screen] })
 
-    expect(manifest.capabilities).toEqual([screen])
+    expect(manifest.capabilities).toEqual([extenderCapability, screen])
   })
 
   it('should satisfy a requirement like any other module', () => {
@@ -568,6 +605,7 @@ describe('the loader and the system bundle', () => {
 
     expect(manifest.id).toBe(SYSTEM_BUNDLE_ID)
     expect(manifest.capabilities).toEqual([
+      extenderCapability,
       { namespace: 'acme.screen', attributes: { width: 640 } }
     ])
   })
