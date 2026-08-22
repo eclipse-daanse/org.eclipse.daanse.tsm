@@ -295,6 +295,34 @@ function sameProperties(left: ServiceProperties, right: ServiceProperties): bool
   })
 }
 
+/**
+ * Dynamic import the way the browser sees it, hidden from bundler transforms.
+ *
+ * A dev server that rewrites this call gives the entry its own URL - vite
+ * appends `?import` - and a different URL is a different module instance.
+ * Consumers reaching the same entry through the import map would then no
+ * longer share the loader's module: the loader activates one instance while
+ * every bare import reads another. Module identity is URL identity, so the
+ * fetch has to leave the URL alone.
+ */
+const importOutsideBundler = new Function('specifier', 'return import(specifier)') as (
+  specifier: string
+) => Promise<Record<string, unknown>>
+
+async function nativeImport(specifier: string): Promise<Record<string, unknown>> {
+  try {
+    return await importOutsideBundler(specifier)
+  } catch (error) {
+    // A VM host without a dynamic-import callback (vitest) cannot run the
+    // Function-wrapped form. The direct form is right there: no bundler is
+    // involved in that environment either.
+    if ((error as { code?: string })?.code === 'ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING') {
+      return await import(/* @vite-ignore */ specifier)
+    }
+    throw error
+  }
+}
+
 export class ModuleLoader {
   private modules = new Map<string, LoadedModule>()
   private manifests = new Map<string, ModuleManifest>()
@@ -1416,8 +1444,16 @@ export class ModuleLoader {
     }
 
     try {
-      const module = await import(/* @vite-ignore */ manifest.entry)
-      return (module as { default?: unknown }).default ?? module
+      const module = await nativeImport(manifest.entry)
+      const namespace = module as { default?: unknown; activate?: unknown; deactivate?: unknown }
+      // A module exporting its lifecycle at the top level IS the container.
+      // `default` stands in only for default-export-style modules - a library
+      // bundle may carry a genuine default export for its consumers, and that
+      // must not shadow the lifecycle next to it.
+      if (typeof namespace.activate === 'function' || typeof namespace.deactivate === 'function') {
+        return namespace
+      }
+      return namespace.default ?? namespace
     } catch (error) {
       throw new Error(`Failed to load module entry: ${manifest.entry} - ${error}`)
     }
