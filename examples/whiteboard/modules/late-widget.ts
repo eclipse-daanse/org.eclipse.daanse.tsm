@@ -1,5 +1,5 @@
 import type { ModuleContext } from '../../../src/index.js'
-import { WIDGET_SERVICE, type Widget } from '../src/contracts.js'
+import { Widget } from '../src/contracts.js'
 
 const map: Widget = {
   label: 'Map',
@@ -11,6 +11,6 @@ const map: Widget = {
  * picks it up without being restarted.
  */
 export function activate(context: ModuleContext): void {
-  context.services.register(WIDGET_SERVICE, map, { properties: { kind: 'map' } })
+  context.services.register(Widget, map, { properties: { kind: 'map' } })
   context.log.info('late widget registered')
 }

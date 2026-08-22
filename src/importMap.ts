@@ -9,11 +9,17 @@
  * What it does not answer is versions. An import map maps a name to a URL and
  * knows nothing about `^3.4.0`, so the checking has to happen before the map is
  * installed — which is what `generateImportMap` is for: it reads the manifests,
- * matches their `sharedDependencies` against what the host offers, and reports
- * what is missing or incompatible instead of letting it fail as a 404 later.
+ * matches their `sharedDependencies` against what is on offer, and reports what
+ * is missing or incompatible instead of letting it fail as a 404 later.
+ *
+ * What is on offer comes from two places: the host, and **library bundles** —
+ * modules whose contribution is a package rather than a service, declared with a
+ * `tsm.library` capability. The consumer cannot tell the difference, which is the
+ * point: `import { project } from 'geo'` says nothing about who supplies it.
  */
 
 import semver from 'semver'
+import { LIBRARY_NAMESPACE } from './capabilities.js'
 import type { ModuleManifest } from './types.js'
 
 /** What the host offers under a bare specifier */
@@ -53,10 +59,68 @@ export interface IncompatibleLibrary extends MissingLibrary {
 
 export interface ImportMapResult {
   importMap: ImportMap
-  /** Libraries a module needs and the host does not offer */
+  /** Libraries a module needs and nothing offers */
   missing: MissingLibrary[]
-  /** Libraries the host offers in a version no module's range accepts */
+  /** Libraries offered in a version no module's range accepts */
   incompatible: IncompatibleLibrary[]
+  /**
+   * Libraries the host and a module both offer.
+   *
+   * The host wins — it is the outer environment, and a module cannot know what
+   * else was built against the host's copy. Reported all the same, because it
+   * usually means a library bundle was deployed that nobody needed.
+   */
+  shadowed: ShadowedLibrary[]
+}
+
+/** A library a module offers that the host also offers */
+export interface ShadowedLibrary {
+  library: string
+  /** The module whose offer is unused */
+  moduleId: string
+  moduleVersion?: string
+  /** What the host offers instead */
+  hostVersion?: string
+}
+
+/**
+ * The libraries the modules themselves offer, from their `tsm.library`
+ * capabilities.
+ *
+ * A **library bundle**: a module whose contribution is a package rather than a
+ * service. It declares what it provides and where it is served from, and a
+ * consumer imports it by its bare name like any other dependency — so the same
+ * mechanism covers "the host supplies Vue" and "this bundle supplies our geometry
+ * helpers", which is what a package-exporting bundle is in OSGi.
+ *
+ * Such a module is never *activated*: it has no components and no services, so
+ * there is nothing to start. The browser fetches it through the map when someone
+ * imports it, which is exactly how an API bundle that is never started behaves.
+ */
+export function offeredByModules(
+  manifests: readonly ModuleManifest[]
+): Record<string, OfferedLibrary & { moduleId: string }> {
+  const offered: Record<string, OfferedLibrary & { moduleId: string }> = {}
+
+  for (const manifest of manifests) {
+    for (const capability of manifest.capabilities ?? []) {
+      if (capability.namespace !== LIBRARY_NAMESPACE) continue
+
+      const library = capability.attributes?.library
+      if (typeof library !== 'string') continue
+
+      const version = capability.attributes?.version
+      offered[library] = {
+        // The module's own entry is where the package lives: a library bundle is
+        // the package, so there is nothing else it could point at
+        url: manifest.entry,
+        version: typeof version === 'string' ? version : undefined,
+        moduleId: manifest.id
+      }
+    }
+  }
+
+  return offered
 }
 
 /**
@@ -68,15 +132,32 @@ export interface ImportMapResult {
  */
 export function generateImportMap(
   manifests: ModuleManifest[],
-  offered: Record<string, OfferedLibrary | string>
+  offered: Record<string, OfferedLibrary | string> = {}
 ): ImportMapResult {
   const imports: Record<string, string> = {}
   const missing: MissingLibrary[] = []
   const incompatible: IncompatibleLibrary[] = []
+  const shadowed: ShadowedLibrary[] = []
+
+  // A library bundle offers a package the same way the host does; the host wins
+  // where both do, and the unused offer is reported rather than dropped in silence
+  const fromModules = offeredByModules(manifests)
+
+  for (const [library, entry] of Object.entries(fromModules)) {
+    if (offered[library] === undefined) continue
+
+    const host = offered[library]
+    shadowed.push({
+      library,
+      moduleId: entry.moduleId,
+      moduleVersion: entry.version,
+      hostVersion: typeof host === 'string' ? undefined : host.version
+    })
+  }
 
   for (const manifest of manifests) {
     for (const dependency of manifest.sharedDependencies ?? []) {
-      const entry = offered[dependency.id]
+      const entry = offered[dependency.id] ?? fromModules[dependency.id]
 
       if (entry === undefined) {
         missing.push({
@@ -107,7 +188,7 @@ export function generateImportMap(
     }
   }
 
-  return { importMap: { imports }, missing, incompatible }
+  return { importMap: { imports }, missing, incompatible, shadowed }
 }
 
 /**

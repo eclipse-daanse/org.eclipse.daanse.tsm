@@ -1590,6 +1590,23 @@ Bibliothek in OSGi ein Bundle ist, das ein Package exportiert. Für den *Import*
 auf, nicht der Loader. Das Modul-Dasein betrifft die Deklaration und die
 Auflösung, nicht den Transportweg.
 
+`generateImportMap()` liest diese Capabilities: `offeredByModules(manifests)`
+sammelt, was die Module selbst anbieten, und die `entry` des Moduls ist die URL —
+bei einem **Library-Bundle** *ist* das Modul das Package. Damit deckt derselbe
+Mechanismus „der Host liefert Vue" und „dieses Bundle liefert unsere Geometrie".
+Der Konsument merkt keinen Unterschied, und das ist der Punkt:
+`import { project } from 'geo'` sagt nichts darüber, wer liefert.
+
+Bieten Host **und** Modul dieselbe Bibliothek an, gewinnt der Host — er ist die
+äußere Umgebung, und ein Modul kann nicht wissen, was sonst noch gegen die Kopie
+des Hosts gebaut wurde. Gemeldet wird es als `shadowed`, denn meist heißt es, dass
+ein Library-Bundle ausgeliefert wurde, das niemand braucht.
+
+So ein Bundle wird nie **aktiviert**: es hat keine Components und keine Services,
+also gibt es nichts zu starten. Der Browser holt es über die Import Map, wenn
+jemand es importiert — genau das Verhalten eines API-Bundles, das nie gestartet
+wird.
+
 #### Was fehlt, und warum
 
 Package-Wiring (`Import-Package`/`Export-Package`) hat kein Gegenstück: ES-Module
@@ -1884,6 +1901,67 @@ Configuration Admin statt dem Configurator (Compendium 150), den tsm nicht hat.
 In der Konsole: `tsm.feature(json)` liest ein Dokument und sagt, was eine
 Installation noch bräuchte — ohne zu installieren, denn wo Module herkommen, ist
 keine Entscheidung für eine Konsolenzeile.
+
+### 11.4i Typisierte Service-IDs
+
+In OSGi benennt das Interface den Service: `@Reference private TileService tiles;`
+— die Deklaration *ist* der Vertrag. Ein TypeScript-Interface überlebt das
+Kompilieren nicht, also benennt tsm Services mit Zeichenketten. Der Konsument
+importierte damit zwei Dinge, wo eins genügen sollte, und niemand prüfte, ob sie
+zusammengehören.
+
+`serviceId()` schließt das. Der Vertrag nennt sich einmal, in beiden Namensräumen:
+
+```typescript
+// contracts.ts — die Zeichenkette steht genau hier, einmal
+export interface TileService { tileUrl(z: number): string }
+export const TileService = serviceId<TileService>('demo.tiles')
+```
+
+```typescript
+// der Konsument: ein Import, ein Name
+import { TileService } from './contracts.js'
+
+@component({ service: [TileService] })
+export class Raster implements TileService {
+  constructor(@inject(TileService) private tiles: TileService) {}
+}
+```
+
+Dass beide Namen gleich heißen dürfen, liegt daran, dass TypeScript Werte und
+Typen in getrennten Namensräumen führt — derselbe Griff, mit dem `Date` und
+`Array` in der Standardbibliothek arbeiten.
+
+**Zur Laufzeit ist es die Zeichenkette.** `serviceId()` ist eine
+Identitätsfunktion; `TileService === 'demo.tiles'` ist wahr. Damit bleiben
+Manifest, Target-Filter, `osgi.service`-Capability und die Auflösung vor dem Laden
+unberührt — und ein Modul, das den Token nie gesehen hat, findet den Service unter
+seinem Namen.
+
+**Rückwärtskompatibel.** Der Brand ist optional, also ist jedes String-Literal
+weiterhin zuweisbar. Ein Vertrag kann Stück für Stück umgestellt werden.
+
+Zwei Details, die beim Bauen entschieden wurden:
+
+Die Signaturen nehmen `ServiceId<T>` **allein**, nicht `ServiceId<T> | string`.
+Die Union sieht großzügiger aus, ist aber strikt schlechter: die Inferenz matcht
+gegen `string`, lässt `T` unbestimmt, und jeder Aufruf kommt als `unknown` zurück
+— sie akzeptiert dieselben Argumente und zerstört dabei das Einzige, wofür der
+Typ da ist.
+
+`register`, `bind` und `bindClass` nehmen den Wert als `NoInfer<T>`. Sonst hat der
+Aufruf zwei Inferenzpositionen, das Argument gewinnt gegen den Token, und ein
+falsch registrierter Service fällt nicht auf. So entscheidet die ID, was der
+Vertrag ist, und der Wert muss sich fügen.
+
+Dazu `getServices(id, target?)`: alle Anbieter einer ID, typisiert, ohne den
+Vertrag bei jedem `resolveReference` erneut zu nennen. Ein Anbieter, der sich
+nicht bauen lässt, fällt heraus statt als `undefined` in der Liste zu stehen.
+
+**Was das nicht leistet:** die ID kanonisch machen. `serviceId<Widget>('demo.tiles')`
+ist eine Lüge, die kein Compiler fängt, während ein Java-Klassenname nicht lügen
+kann. Der Vertrag ist eine Datei, die einmal geschrieben und danach nur importiert
+wird — dort muss die Ehrlichkeit herkommen.
 
 ### 11.5 Konformität
 

@@ -3,6 +3,12 @@
  * Type definitions
  */
 
+import type { ServiceId } from './serviceId.js'
+
+// Re-exported so `types.js` stays the one place a consumer needs
+export type { ServiceId, ServiceOf } from './serviceId.js'
+
+
 // Type-only, so the cycle with ConfigurationAdmin.ts exists on paper alone
 import type { ConfigurationAdmin } from './ConfigurationAdmin.js'
 import type { AttributeDefinition, MetatypeRegistry, ObjectClassDefinition } from './Metatype.js'
@@ -458,8 +464,12 @@ export interface ComponentOptions {
   /**
    * Service IDs to register the component under. The first is the primary one,
    * the rest become aliases. Omit for a component that only has a lifecycle.
+   *
+   * A {@link ServiceId} carries the contract it stands for, so
+   * `@component({ service: [TileService] })` reads like the Java form — and
+   * `implements TileService` on the class is what makes the compiler check it.
    */
-  service?: string[]
+  service?: readonly (ServiceId<unknown> | string)[]
 
   /** Properties for the registration */
   properties?: ServiceProperties
@@ -919,8 +929,8 @@ export interface ServiceRegistry {
    * @returns A handle that withdraws exactly this registration
    */
   register<T>(
-    id: string,
-    service: T,
+    id: ServiceId<T>,
+    service: NoInfer<T>,
     options?: {
       providedBy?: string
       ranking?: number
@@ -944,8 +954,8 @@ export interface ServiceRegistry {
    * @param options Scope (see {@link ServiceScope}) and provider info
    */
   bind<T>(
-    id: string,
-    factory: () => T,
+    id: ServiceId<T>,
+    factory: () => NoInfer<T>,
     options?: {
       scope?: ServiceScope
       providedBy?: string
@@ -964,8 +974,8 @@ export interface ServiceRegistry {
    * @param options Scope override, provider info, and interface bindings
    */
   bindClass<T>(
-    id: string,
-    ctor: InjectableConstructor<T>,
+    id: ServiceId<T>,
+    ctor: InjectableConstructor<NoInfer<T>>,
     options?: BindClassOptions
   ): ServiceRegistration
 
@@ -976,11 +986,17 @@ export interface ServiceRegistry {
    */
   construct<T>(ctor: InjectableConstructor<T>): T
 
-  /** Get a service (creates singleton on first access, resolves dependencies automatically) */
-  get<T>(id: string): T | undefined
+  /**
+   * Get a service (creates singleton on first access, resolves dependencies
+   * automatically).
+   *
+   * With a {@link ServiceId} the type follows from the id and needs no type
+   * argument; with a plain string it is `unknown` unless one is given.
+   */
+  get<T>(id: ServiceId<T>): T | undefined
 
   /** Get a required service - throws if not available */
-  getRequired<T>(id: string): T
+  getRequired<T>(id: ServiceId<T>): T
 
   /**
    * Get all instantiated services whose ID matches a wildcard pattern.
@@ -1013,6 +1029,14 @@ export interface ServiceRegistry {
   /** Resolve one reference from getServiceReferences() */
   resolveReference<T>(reference: ServiceReference): T | undefined
 
+  /**
+   * Every registration for a typed id, best first.
+   *
+   * The typed counterpart of `getServiceReferences`, for consuming 0..n without
+   * naming the contract a second time at every `resolveReference`.
+   */
+  getServices<T>(id: ServiceId<T>, target?: string): T[]
+
   /** How many registrations an ID carries, optionally matching a target filter */
   countProviders(id: string, target?: string): number
 
@@ -1020,7 +1044,7 @@ export interface ServiceRegistry {
    * The best service for an ID whose properties match the filter.
    * `get(id)` ignores filters — this is the filtered counterpart.
    */
-  getMatching<T>(id: string, target: string): T | undefined
+  getMatching<T>(id: ServiceId<T>, target: string): T | undefined
 
   /** Unregister a service */
   unregister(id: string): boolean

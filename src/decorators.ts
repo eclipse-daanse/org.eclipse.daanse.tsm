@@ -4,7 +4,7 @@
  */
 
 import 'reflect-metadata'
-import type { ComponentOptions, FieldOption, ServiceScope } from './types.js'
+import type { ComponentOptions, FieldOption, ServiceId, ServiceScope } from './types.js'
 
 /**
  * Metadata keys, taken from the global symbol registry rather than created here.
@@ -71,8 +71,8 @@ export interface InjectAllMetadata {
  * @param options.fieldOption `replace` (default) assigns a new array on every
  *   change, `update` mutates the one the component holds — see {@link FieldOption}
  */
-export function injectAll(
-  serviceId: string,
+export function injectAll<T>(
+  serviceId: ServiceId<T>,
   options: { target?: string; fieldOption?: FieldOption } = {}
 ): PropertyDecorator {
   return (target: object, propertyKey: string | symbol) => {
@@ -116,7 +116,10 @@ export function injectable(): ClassDecorator {
  * Usage on property:
  *   @inject('logger') private logger!: Logger
  */
-export function inject(serviceId: string, options?: { optional?: boolean }): ParameterDecorator & PropertyDecorator {
+export function inject<T>(
+  serviceId: ServiceId<T>,
+  options?: { optional?: boolean }
+): ParameterDecorator & PropertyDecorator {
   return (target: object, propertyKey: string | symbol | undefined, parameterIndex?: number) => {
     if (parameterIndex !== undefined) {
       // Constructor parameter injection
@@ -309,7 +312,10 @@ export interface BindingMetadata {
  * @param options.optional The component runs without it. Otherwise the service
  *   has to be there for the component to start at all, as with `@inject()`.
  */
-export function bind(serviceId: string, options?: { optional?: boolean }): MethodDecorator {
+export function bind<T>(
+  serviceId: ServiceId<T>,
+  options?: { optional?: boolean }
+): MethodDecorator {
   return (target, propertyKey) => {
     const existing: BindingMetadata[] =
       Reflect.getOwnMetadata(BIND_KEY, target.constructor) ?? []
@@ -328,7 +334,7 @@ export function bind(serviceId: string, options?: { optional?: boolean }): Metho
  * is what a dynamic reference means. Without an unbind method the component is
  * stopped instead, since nothing else could keep it consistent.
  */
-export function unbind(serviceId: string): MethodDecorator {
+export function unbind<T>(serviceId: ServiceId<T>): MethodDecorator {
   return (target, propertyKey) => {
     const existing: BindingMetadata[] =
       Reflect.getOwnMetadata(UNBIND_KEY, target.constructor) ?? []

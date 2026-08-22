@@ -9,7 +9,7 @@ import { installDevtools } from '../../../src/devtools/index.js'
 import { DependencyResolver } from '../../../src/DependencyResolver.js'
 import { ModuleLoader } from '../../../src/ModuleLoader.js'
 import { initTsmRuntime, tsmRuntime } from '../../../src/TsmRuntime.js'
-import { UI_SERVICE, type DemoUi } from './contracts.js'
+import { DemoUi } from './contracts.js'
 import { lateWidget, manifests } from './manifests.js'
 
 initTsmRuntime()
@@ -50,7 +50,7 @@ const ui: DemoUi = {
 }
 
 // The host is a provider like any module
-services.register(UI_SERVICE, ui, { providedBy: 'host' })
+services.register(DemoUi, ui, { providedBy: 'host' })
 
 // ---------------------------------------------------------------- module table
 

@@ -1,5 +1,5 @@
 import type { ModuleContext } from '../../../src/index.js'
-import { GREETING_SERVICE, UI_SERVICE, type DemoUi, type Greeting } from '../src/contracts.js'
+import { Greeting, DemoUi } from '../src/contracts.js'
 
 /**
  * Requires the greeting with `policyOption: "greedy"`, so it is rebuilt when a
@@ -7,6 +7,6 @@ import { GREETING_SERVICE, UI_SERVICE, type DemoUi, type Greeting } from '../src
  * follows the ranking instead of sticking to whatever was there first.
  */
 export function activate(context: ModuleContext): void {
-  const greeting = context.services.getRequired<Greeting>(GREETING_SERVICE)
-  context.services.get<DemoUi>(UI_SERVICE)?.setGreeting(greeting.text())
+  const greeting = context.services.getRequired<Greeting>(Greeting)
+  context.services.get<DemoUi>(DemoUi)?.setGreeting(greeting.text())
 }

@@ -34,7 +34,7 @@ The **Art** column says what kind of difference it is:
 | § | Concept | tsm | | Art |
 |---|---|---|---|---|
 | 5.2.1 | Service References | `ServiceReference` with `key`, `properties`, `ranking`, `instantiated` | ✅ | |
-| 5.2.2 | Service Interfaces | String IDs instead of class names | ◐ | Sprache — a TS interface does not exist at runtime, so there is nothing to name a service by |
+| 5.2.2 | Service Interfaces | `serviceId<T>('demo.tiles')`: a string carrying the contract as a phantom type | ◐ | Sprache — a TS interface does not exist at runtime, so a service is named by a string; the id and the contract are declared together, so a consumer writes one name and a mismatch is a compile error. What stays absent is a *canonical* name — a string can lie about its type where a class name cannot |
 | 5.2.3 | Registering Services | `register`, `bind`, `bindClass` | ✅ | |
 | 5.2.4 | Early need for ServiceRegistration | the handle is returned before anything resolves it | ✅ | |
 | 5.2.5 | Service Properties | `string \| number \| boolean` and arrays of those | ◐ | Sprache — Java takes any object in a `Dictionary`; tsm restricts to what a filter can match and a store can write |
