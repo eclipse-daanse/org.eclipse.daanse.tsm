@@ -734,6 +734,48 @@ Die ältere Form `createTsmExternals('modul-id', { libraryProviders, sharedPacka
 gilt weiter, entscheidet aber aus Listen in der Build-Konfiguration statt aus dem
 Manifest.
 
+### 6.2a Die Bundle-Grenze
+
+ES-Module haben kein Gegenstück zum Klassenlader. Ein relativer Pfad in die
+Quellen eines anderen Bundles kompiliert, bündelt und läuft — mit dessen Code
+hineinkopiert, ohne Eintrag im Manifest, und das Service-Layer umgangen. Zur
+Laufzeit kann das niemand erkennen, und die Kopie funktioniert weiter, nachdem
+das andere Bundle abgezogen wurde.
+
+Die Grenze liegt dort, wo das **Manifest** liegt: ein Bundle ist durch sein
+Manifest definiert, also ist `dirname(manifest)` die Wurzel.
+
+```typescript
+tsmPlugin({
+  manifest: resolve(__dirname, 'manifest.json'),
+  boundary: { allow: ['../contracts.ts'] }
+})
+```
+
+Immer erlaubt ist alles unter der Wurzel und alles unter `node_modules` — eine
+npm-Abhängigkeit ist eine deklarierte Abhängigkeit. Alles andere bricht den Build,
+mit der Datei und dem Importeur in der Meldung:
+
+```
+tsm: ../outline/src/index.ts is outside this bundle and its code was copied
+into index.js — imported by src/index.ts.
+```
+
+**Immer ein Fehler**, anders als die übrigen Prüfungen des Plugins. Eine
+undeklarierte Abhängigkeit kostet einen unnötigen Modul-Ladevorgang; eine Datei
+über die Bundle-Grenze ist strukturell falsch — es gibt keine Variante davon, die
+bloß unsauber wäre. Die Stelle, an der eine Ausnahme steht, ist `boundary.allow`,
+wo sie aufgeschrieben ist statt geduldet.
+
+Dort gehört das **Vertragsmodul** hin: es liegt mit Absicht außerhalb jedes
+Bundles, und genau darum muss es benannt werden statt erraten. Was hier steht,
+landet als Kopie im Bundle — die Liste sollte kurz bleiben, und jeder Eintrag
+etwas ohne Verhalten sein.
+
+Ohne Manifest-Pfad und ohne `root` bleibt die Prüfung aus: aus dem Entry oder dem
+Arbeitsverzeichnis eine Grenze zu raten würde eine ziehen, die niemand erklärt
+hat. `boundary: false` schaltet sie ab.
+
 ### 6.3 Import Maps statt `__tsm__.require()`
 
 `__tsm__.require()` ist ein Module-Federation-Erbe: der Vite-Plugin schreibt

@@ -663,3 +663,193 @@ describe("tsmPlugin - dependencies: 'derive'", () => {
     expect(derived(recorded).dependencies).toEqual([])
   })
 })
+
+describe('tsmPlugin - the bundle boundary', () => {
+  const root = '/repo/bundles/notes'
+  const manifestPath = `${root}/manifest.json`
+
+  interface Recorded { errors: string[]; warnings: string[] }
+
+  async function generate(
+    modules: string[],
+    options: Parameters<typeof tsmPlugin>[0] = {}
+  ): Promise<Recorded> {
+    const plugin = tsmPlugin({
+      // A parsed manifest plus an explicit root, so nothing has to be on disk
+      manifest: { id: 'notes' },
+      boundary: { root },
+      ...options
+    })
+
+    const recorded: Recorded = { errors: [], warnings: [] }
+    const ctx = {
+      error(message: string) { recorded.errors.push(message); throw new Error(message) },
+      warn(message: string) { recorded.warnings.push(message) },
+      emitFile() {},
+      getModuleInfo(id: string) {
+        return { importers: [`${root}/src/index.ts`], id }
+      }
+    }
+    type Hook = (this: typeof ctx, ...args: unknown[]) => unknown
+
+    await (plugin.buildStart as Hook).call(ctx)
+    try {
+      await (plugin.generateBundle as Hook).call(ctx, {}, {
+        'index.js': { type: 'chunk', modules: Object.fromEntries(modules.map(id => [id, {}])) }
+      })
+    } catch {
+      // this.error() throws by contract; the message is recorded
+    }
+    return recorded
+  }
+
+  it('accepts what is inside the bundle', async () => {
+    const recorded = await generate([`${root}/src/index.ts`, `${root}/src/view.ts`])
+
+    expect(recorded.errors).toEqual([])
+    expect(recorded.warnings).toEqual([])
+  })
+
+  it('accepts an npm dependency', async () => {
+    // A declared dependency, and the one kind of outside file that is normal
+    const recorded = await generate([
+      `${root}/src/index.ts`, '/repo/node_modules/lodash-es/map.js'
+    ])
+
+    expect(recorded.errors).toEqual([])
+  })
+
+  it('refuses a file from another bundle', async () => {
+    const recorded = await generate([
+      `${root}/src/index.ts`, '/repo/bundles/outline/src/index.ts'
+    ])
+
+    expect(recorded.errors).toHaveLength(1)
+    expect(recorded.errors[0]).toContain('../outline/src/index.ts')
+    expect(recorded.errors[0]).toContain('is outside this bundle')
+  })
+
+  it('names who reached across', async () => {
+    const recorded = await generate([
+      `${root}/src/index.ts`, '/repo/bundles/outline/src/index.ts'
+    ])
+
+    // The part an author can act on
+    expect(recorded.errors[0]).toContain('imported by src/index.ts')
+  })
+
+  it('fails the build even with strict: false', async () => {
+    // Unlike the other checks: an undeclared dependency costs a needless load,
+    // a file copied across a boundary is structurally wrong
+    const recorded = await generate(
+      [`${root}/src/index.ts`, '/repo/bundles/outline/src/index.ts'],
+      { manifest: { id: 'notes' }, boundary: { root }, strict: false }
+    )
+
+    expect(recorded.errors).toHaveLength(1)
+    expect(recorded.warnings).toEqual([])
+  })
+
+  it('accepts a path listed in allow', async () => {
+    const recorded = await generate(
+      [`${root}/src/index.ts`, '/repo/bundles/contracts.ts'],
+      { manifest: { id: 'notes' }, boundary: { root, allow: ['../contracts.ts'] } }
+    )
+
+    expect(recorded.errors).toEqual([])
+  })
+
+  it('accepts a directory listed in allow', async () => {
+    const recorded = await generate(
+      [`${root}/src/index.ts`, '/repo/src/decorators.ts'],
+      { manifest: { id: 'notes' }, boundary: { root, allow: ['../../src'] } }
+    )
+
+    expect(recorded.errors).toEqual([])
+  })
+
+  it('takes an absolute allow entry', async () => {
+    const recorded = await generate(
+      [`${root}/src/index.ts`, '/elsewhere/contracts.ts'],
+      { manifest: { id: 'notes' }, boundary: { root, allow: ['/elsewhere'] } }
+    )
+
+    expect(recorded.errors).toEqual([])
+  })
+
+  it('does not let an allow entry cover a sibling by prefix', async () => {
+    // '/repo/bundles/out' must not allow '/repo/bundles/outline'
+    const recorded = await generate(
+      [`${root}/src/index.ts`, '/repo/bundles/outline/src/index.ts'],
+      { manifest: { id: 'notes' }, boundary: { root, allow: ['../out'] } }
+    )
+
+    expect(recorded.errors).toHaveLength(1)
+  })
+
+  it('reports each crossing file once', async () => {
+    const recorded = await generate([
+      `${root}/src/index.ts`,
+      '/repo/bundles/outline/src/index.ts',
+      '/repo/bundles/outline/src/index.ts'
+    ])
+
+    expect(recorded.errors).toHaveLength(1)
+  })
+
+  it('ignores virtual modules', async () => {
+    // No place on disk to compare, and they come from plugins rather than authors
+    const recorded = await generate([
+      `${root}/src/index.ts`, '\0vite/preload-helper.js', 'virtual:some-plugin'
+    ])
+
+    expect(recorded.errors).toEqual([])
+  })
+
+  it('is off when boundary is false', async () => {
+    const recorded = await generate(
+      [`${root}/src/index.ts`, '/repo/bundles/outline/src/index.ts'],
+      { manifest: { id: 'notes' }, boundary: false }
+    )
+
+    expect(recorded.errors).toEqual([])
+  })
+
+  it('is off when no root can be worked out', async () => {
+    // A parsed manifest has no directory to take, and guessing at the entry or
+    // the working directory would produce a boundary nobody declared
+    const recorded = await generate(
+      [`${root}/src/index.ts`, '/repo/bundles/outline/src/index.ts'],
+      { manifest: { id: 'notes' }, boundary: undefined }
+    )
+
+    expect(recorded.errors).toEqual([])
+  })
+
+  it('takes the manifest directory as the root', async () => {
+    const plugin = tsmPlugin({ manifest: manifestPath })
+    const recorded: Recorded = { errors: [], warnings: [] }
+    const ctx = {
+      error(message: string) { recorded.errors.push(message); throw new Error(message) },
+      warn(message: string) { recorded.warnings.push(message) },
+      emitFile() {},
+      getModuleInfo() { return { importers: [] } }
+    }
+    type Hook = (this: typeof ctx, ...args: unknown[]) => unknown
+
+    // buildStart fails on the unreadable path, which is fine: the boundary is
+    // worked out from the path itself, not from the file's contents
+    await (plugin.buildStart as Hook).call(ctx).catch(() => {})
+    try {
+      await (plugin.generateBundle as Hook).call(ctx, {}, {
+        'index.js': {
+          type: 'chunk',
+          modules: { '/repo/bundles/outline/src/index.ts': {} }
+        }
+      })
+    } catch { /* recorded */ }
+
+    expect(recorded.errors.some(message => message.includes('is outside this bundle')))
+      .toBe(true)
+  })
+})

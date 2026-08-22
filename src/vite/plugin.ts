@@ -21,7 +21,7 @@
 
 import { readFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import { dirname, resolve as resolvePath } from 'node:path'
+import { dirname, isAbsolute, relative, resolve as resolvePath } from 'node:path'
 import type { Plugin } from 'vite'
 import {
   collectTsmImports,
@@ -93,6 +93,41 @@ export interface TsmPluginOptions {
    * up in one manifest rather than two that overwrite each other.
    */
   derivedManifestName?: string
+
+  /**
+   * Whether files from outside this bundle may be pulled into it.
+   *
+   * ES modules have no counterpart to a class loader: a relative path reaching
+   * into another bundle's sources compiles, bundles, and runs — with that
+   * bundle's code copied in, no entry in the manifest, and the whole service
+   * layer bypassed. Nothing at runtime can tell, and the copy keeps working after
+   * the other bundle is undeployed.
+   *
+   * The boundary is where the **manifest** is: a bundle is defined by its
+   * manifest, so `dirname(manifest)` is the root unless `root` says otherwise.
+   * Needs `manifest` to be a path; with a parsed object there is no directory to
+   * take, and the check stays off unless `root` is given.
+   *
+   * Always allowed: anything under the root, and anything under `node_modules`
+   * — an npm dependency is a declared dependency.
+   *
+   * @default enabled when the manifest is a path
+   */
+  boundary?: false | {
+    /** The bundle's root. Defaults to the directory the manifest is in. */
+    root?: string
+
+    /**
+     * Paths outside the root that may be imported anyway, as prefixes —
+     * absolute, or relative to the root.
+     *
+     * The contract module belongs here: it sits outside every bundle on purpose,
+     * and that is exactly why it has to be named rather than guessed. Anything
+     * allowed here is code that ends up copied into this bundle, so the list
+     * should stay short and each entry should be something without behaviour.
+     */
+    allow?: string[]
+  }
 
   /**
    * Whether an import of an undeclared module fails the build.
@@ -239,7 +274,8 @@ export function tsmPlugin(options: TsmPluginOptions = {}): Plugin {
     strict = true,
     components = false,
     dependencies = 'validate',
-    derivedManifestName = 'manifest.json'
+    derivedManifestName = 'manifest.json',
+    boundary
   } = options
 
   let validatable: ValidatableManifest | undefined
@@ -247,6 +283,23 @@ export function tsmPlugin(options: TsmPluginOptions = {}): Plugin {
   const importedModuleIds = new Set<string>()
   /** Services declared by `@component()`, collected across files */
   const declaredServices = new Map<string, DeclaredService>()
+
+  /**
+   * Where this bundle ends, and what may come in from outside it.
+   *
+   * Resolved once: the manifest's directory is the root, because a bundle is
+   * defined by its manifest. Without a manifest path and without an explicit
+   * root there is nothing to measure against, and the check stays off rather
+   * than guessing at the entry or the working directory.
+   */
+  const boundaryRoot = boundary === false
+    ? undefined
+    : boundary?.root ?? (typeof manifest === 'string' ? dirname(manifest) : undefined)
+
+  const boundaryAllowed = (boundary === false ? [] : boundary?.allow ?? [])
+    .map(entry => (isAbsolute(entry)
+      ? entry
+      : resolvePath(boundaryRoot ?? '.', entry)))
 
   return {
     name: 'tsm-plugin',
@@ -403,6 +456,35 @@ export function tsmPlugin(options: TsmPluginOptions = {}): Plugin {
 
     // The generated manifest belongs to the build output, like a descriptor
     generateBundle(_outputOptions, bundle) {
+      // The boundary ES modules do not have. Checked here rather than in
+      // `transform`, because only the finished chunk says what was actually
+      // pulled in — and `getModuleInfo` can then name who pulled it
+      if (boundaryRoot !== undefined) {
+        // Always an error, unlike the other checks: an undeclared dependency
+        // costs a needless load, but a file copied across a bundle boundary is
+        // structurally wrong — there is no version of it that is merely untidy.
+        // The place to say "this one is fine" is `boundary.allow`, where it is
+        // written down rather than tolerated
+        for (const crossing of crossesBoundary(bundle, boundaryRoot, boundaryAllowed)) {
+          // Who reached across, which is the part an author can act on. Only the
+          // importers from inside the bundle are worth naming: a chain of
+          // outside files says nothing about what to change here
+          const importers = (this.getModuleInfo(crossing.file)?.importers ?? [])
+            .filter(importer => !importer.includes('node_modules'))
+          const from = (file: string): string => relative(boundaryRoot, file)
+          const by = importers.length > 0
+            ? ` — imported by ${importers.map(from).join(', ')}`
+            : ''
+          this.error(
+            `tsm: ${from(crossing.file)} is outside this bundle and its code was ` +
+            `copied into ${crossing.chunk}${by}. ES modules have no class loader, so ` +
+            `nothing at runtime can tell — and the copy keeps working after that ` +
+            `bundle is undeployed. Consume it as a service, declare it as a ` +
+            `sharedDependency, or list it in boundary.allow if it is a contract.`
+          )
+        }
+      }
+
       // A package declared as shared but bundled anyway is a second instance of
       // it, and nothing at runtime can tell: validateSharedDependencies only asks
       // whether the *host* has the library, not whether the module uses it
@@ -532,6 +614,49 @@ export interface CreateExternalsOptions {
  * The evidence is a module path under `node_modules/<library>/`: if the package
  * had been external, no file of it would be in a chunk at all.
  */
+/**
+ * Files a chunk pulled in from outside the bundle.
+ *
+ * Anything under the root belongs here; anything under `node_modules` is a
+ * declared npm dependency and so does an allowed path. What is left is a file
+ * from somewhere else in the tree — in a monorepo, usually another bundle's
+ * sources, reached by a relative path that no manifest mentions.
+ *
+ * Virtual modules (`\0`-prefixed, `virtual:`) are left alone: they have no place
+ * on disk to compare, and they come from plugins rather than from an author.
+ */
+function crossesBoundary(
+  bundle: Record<string, { type: string; modules?: Record<string, unknown> }>,
+  root: string,
+  allowed: readonly string[]
+): Array<{ file: string; chunk: string; importers: string[] }> {
+  const crossings: Array<{ file: string; chunk: string; importers: string[] }> = []
+  const seen = new Set<string>()
+
+  const inside = (file: string, directory: string): boolean => {
+    const relation = relative(directory, file)
+    return relation !== '' && !relation.startsWith('..') && !isAbsolute(relation)
+  }
+
+  for (const [chunkName, chunk] of Object.entries(bundle)) {
+    if (chunk.type !== 'chunk' || !chunk.modules) continue
+
+    for (const file of Object.keys(chunk.modules)) {
+      if (seen.has(file)) continue
+      if (file.startsWith('\0') || file.includes('virtual:')) continue
+      if (!isAbsolute(file)) continue
+      if (file.includes('node_modules')) continue
+      if (inside(file, root)) continue
+      if (allowed.some(entry => file === entry || inside(file, entry))) continue
+
+      seen.add(file)
+      crossings.push({ file, chunk: chunkName, importers: [] })
+    }
+  }
+
+  return crossings
+}
+
 function bundledSharedLibraries(
   manifest: ValidatableManifest | undefined,
   bundle: Record<string, { type: string; modules?: Record<string, unknown> }>
