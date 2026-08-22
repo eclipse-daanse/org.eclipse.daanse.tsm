@@ -1,6 +1,6 @@
 import 'reflect-metadata'
 import { describe, it, expect, beforeEach } from 'vitest'
-import { ModuleLoader } from '../ModuleLoader'
+import type { ModuleLoader } from '../ModuleLoader'
 import { containers, resetContainers, testLoader } from './helpers/moduleContainers'
 import { COMPONENT_FACTORY_SERVICE_ID, componentFactoryFilter } from '../componentFactory'
 import { bundles } from '../../examples/editors/src/manifests'

@@ -776,6 +776,40 @@ Ohne Manifest-Pfad und ohne `root` bleibt die Prüfung aus: aus dem Entry oder d
 Arbeitsverzeichnis eine Grenze zu raten würde eine ziehen, die niemand erklärt
 hat. `boundary: false` schaltet sie ab.
 
+#### Das kleinere Loch: ein fehlendes `type`
+
+Ein Import ohne `type` ist ein Wert-Import, und der Bundler folgt ihm — die Datei
+wird geholt, mit allem, was *sie* importiert. Bei einem reinen `interface`
+passiert heute nichts, aber ein Vertragsmodul wächst: ein Enum, eine Konstante,
+eine Hilfsfunktion. Dann fängt dieselbe Zeile an, Code über die Bundle-Grenze zu
+kopieren.
+
+`verbatimModuleSyntax: true` macht den Unterschied bedeutsam,
+`@typescript-eslint/consistent-type-imports` macht ihn sichtbar. Beim Einschalten
+kamen elf Stellen zum Vorschein — alle in Tests, alle `ModuleLoader` als Wert
+importiert, wo nur der Typ gebraucht wurde.
+
+Der Fix-Stil ist dabei **nicht** kosmetisch:
+
+```typescript
+import { type Thing } from './dep.js'   // →  import {} from './dep.js'
+import type { Thing } from './dep.js'   // →  (nichts)
+```
+
+Die Inline-Form lässt einen Side-Effect-Import zurück, dem der Bundler folgt —
+also genau das, wovor die Grenzprüfung schützen soll. Nur die getrennte Form
+verschwindet ganz. Deshalb steht `fixStyle: 'separate-type-imports'` in der
+Lint-Konfiguration.
+
+Bei einem *gemischten* Import bleibt alles wie es ist: das Modul wird für seinen
+Wert ohnehin zur Laufzeit gebraucht, also kostet `import { ID, type Contract }`
+nichts und hält den Vertrag auf einer Zeile.
+
+Daraus folgt eine praktische Ersparnis: ein Bundle, das den Vertrag **nur als
+Typ** importiert, braucht keinen `boundary.allow`-Eintrag dafür — es wird nichts
+kopiert, also gibt es nichts zu erlauben. Nötig wird der Eintrag erst durch einen
+Wert, etwa eine ID-Konstante.
+
 ### 6.3 Import Maps statt `__tsm__.require()`
 
 `__tsm__.require()` ist ein Module-Federation-Erbe: der Vite-Plugin schreibt

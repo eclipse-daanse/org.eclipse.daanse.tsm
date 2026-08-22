@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { ModuleLoader } from '../ModuleLoader'
+import type { ModuleLoader } from '../ModuleLoader'
 import { containers, resetContainers, testLoader } from './helpers/moduleContainers'
 import { DemoUi } from '../../examples/whiteboard/src/contracts'
 import { lateWidget, manifests } from '../../examples/whiteboard/src/manifests'

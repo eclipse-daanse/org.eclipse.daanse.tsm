@@ -1,6 +1,6 @@
 import 'reflect-metadata'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { ModuleLoader } from '../ModuleLoader'
+import type { ModuleLoader } from '../ModuleLoader'
 import { containers, resetContainers, testLoader } from './helpers/moduleContainers'
 import {
   ConfigurationAdmin,
