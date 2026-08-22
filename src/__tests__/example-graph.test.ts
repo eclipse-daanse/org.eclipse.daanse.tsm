@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { ModuleLoader } from '../ModuleLoader'
+import type { ModuleLoader } from '../ModuleLoader'
 import { containers, resetContainers, testLoader } from './helpers/moduleContainers'
 import { DefaultServiceRegistry } from '../ServiceRegistry'
 import { draw, type GraphModel } from '../../examples/graph/src/draw'

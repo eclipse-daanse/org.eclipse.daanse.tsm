@@ -6,7 +6,7 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { TestServer, createTestServer } from './helpers/TestServer'
+import { createTestServer, type TestServer } from './helpers/TestServer'
 import { PluginRegistry } from '../PluginRegistry'
 import { ModuleLoader } from '../ModuleLoader'
 import { DependencyResolver } from '../DependencyResolver'

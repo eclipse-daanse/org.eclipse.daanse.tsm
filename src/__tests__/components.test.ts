@@ -1,6 +1,6 @@
 import 'reflect-metadata'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { ModuleLoader } from '../ModuleLoader'
+import type { ModuleLoader } from '../ModuleLoader'
 import { containers, resetContainers, testLoader } from './helpers/moduleContainers'
 import { activate, component, deactivate, inject } from '../decorators'
 import { CONDITION_SERVICE_ID } from '../conditions'
