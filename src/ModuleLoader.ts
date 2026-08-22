@@ -1062,7 +1062,7 @@ export class ModuleLoader {
       moduleId,
       className: runtime.className,
       disabled: this.isComponentDisabled(moduleId, runtime.className),
-      services: runtime.options.service ?? [],
+      services: [...(runtime.options.service ?? [])],
       immediate: runtime.options.immediate ?? activateMethod !== undefined,
       hasActivate: activateMethod !== undefined,
       hasDeactivate: getDeactivateMethod(runtime.ctor) !== undefined,

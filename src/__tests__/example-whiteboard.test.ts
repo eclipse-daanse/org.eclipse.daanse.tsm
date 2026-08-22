@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { ModuleLoader } from '../ModuleLoader'
 import { containers, resetContainers, testLoader } from './helpers/moduleContainers'
-import { UI_SERVICE, type DemoUi } from '../../examples/whiteboard/src/contracts'
+import { DemoUi } from '../../examples/whiteboard/src/contracts'
 import { lateWidget, manifests } from '../../examples/whiteboard/src/manifests'
 import * as chartWidget from '../../examples/whiteboard/modules/chart-widget'
 import * as greeter from '../../examples/whiteboard/modules/greeter'
@@ -42,7 +42,7 @@ describe('examples/whiteboard', () => {
       setPalette(widgets) { shownPalette = widgets },
       setGreeting(text) { shownGreeting = text }
     }
-    loader.getServiceRegistry().register(UI_SERVICE, ui, { providedBy: 'host' })
+    loader.getServiceRegistry().register(DemoUi, ui, { providedBy: 'host' })
     loader.register(manifests)
 
     return loader

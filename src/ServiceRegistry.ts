@@ -5,6 +5,7 @@
 
 import type {
   ModuleScopedServiceRegistry as IModuleScopedServiceRegistry,
+  ServiceId,
   ServiceScope,
   InjectableConstructor,
   BindClassOptions,
@@ -384,8 +385,8 @@ export class DefaultServiceRegistry implements IModuleScopedServiceRegistry {
    * Register a service instance directly
    */
   register<T>(
-    id: string,
-    service: T,
+    id: ServiceId<T>,
+    service: NoInfer<T>,
     options: {
       providedBy?: string
       ranking?: number
@@ -408,8 +409,8 @@ export class DefaultServiceRegistry implements IModuleScopedServiceRegistry {
    * Bind a factory function for lazy instantiation
    */
   bind<T>(
-    id: string,
-    factory: () => T,
+    id: ServiceId<T>,
+    factory: () => NoInfer<T>,
     options: {
       scope?: ServiceScope
       providedBy?: string
@@ -439,8 +440,8 @@ export class DefaultServiceRegistry implements IModuleScopedServiceRegistry {
    * delegate to the primary ID, so the same singleton is shared.
    */
   bindClass<T>(
-    id: string,
-    ctor: InjectableConstructor<T>,
+    id: ServiceId<T>,
+    ctor: InjectableConstructor<NoInfer<T>>,
     options: BindClassOptions = {}
   ): ServiceRegistration {
     if (!isInjectable(ctor)) {
@@ -575,7 +576,7 @@ export class DefaultServiceRegistry implements IModuleScopedServiceRegistry {
     return instance
   }
 
-  get<T>(id: string, _resolving?: Set<string>): T | undefined {
+  get<T>(id: ServiceId<T>, _resolving?: Set<string>): T | undefined {
     return this.resolveFor<T>(undefined, id, _resolving)
   }
 
@@ -583,7 +584,7 @@ export class DefaultServiceRegistry implements IModuleScopedServiceRegistry {
    * Resolve a service on behalf of a module, so a `module`-scoped registration
    * can hand that module its own instance.
    */
-  getFor<T>(consumer: string, id: string): T | undefined {
+  getFor<T>(consumer: string, id: ServiceId<T>): T | undefined {
     return this.resolveFor<T>(consumer, id)
   }
 
@@ -803,7 +804,7 @@ export class DefaultServiceRegistry implements IModuleScopedServiceRegistry {
   /**
    * Get a required service - throws if not available
    */
-  getRequired<T>(id: string): T {
+  getRequired<T>(id: ServiceId<T>): T {
     const service = this.get<T>(id)
     if (service === undefined) {
       throw new Error(`Required service not found: ${id}`)
@@ -868,7 +869,7 @@ export class DefaultServiceRegistry implements IModuleScopedServiceRegistry {
    * `get(id)` answers with the highest-ranked registration regardless of
    * properties; a consumer that declared a target needs this one.
    */
-  getMatching<T>(id: string, target: string): T | undefined {
+  getMatching<T>(id: ServiceId<T>, target: string): T | undefined {
     const [reference] = this.getServiceReferences(id, target)
     return reference ? this.resolveReference<T>(reference) : undefined
   }
@@ -884,6 +885,20 @@ export class DefaultServiceRegistry implements IModuleScopedServiceRegistry {
     const filter = createServiceFilter(target)
     this.filterCache.set(target, filter)
     return filter
+  }
+
+  /**
+   * Every service registered under an id, best first.
+   *
+   * The typed way to consume 0..n: `getServiceReferences` plus a resolve per
+   * reference, without naming the contract again at each one. A provider that
+   * fails to instantiate is left out rather than appearing as `undefined` — a
+   * collection of services should not need a null check per element.
+   */
+  getServices<T>(id: ServiceId<T>, target?: string): T[] {
+    return this.getServiceReferences(id, target)
+      .map(reference => this.resolveReference<T>(reference))
+      .filter((service): service is T => service !== undefined)
   }
 
   /**

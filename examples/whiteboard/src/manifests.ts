@@ -1,5 +1,5 @@
 import type { ModuleManifest } from '../../../src/index.js'
-import { GREETING_SERVICE, UI_SERVICE, WIDGET_SERVICE } from './contracts.js'
+import { Greeting, DemoUi, Widget } from './contracts.js'
 
 /**
  * Registered in a deliberately unhelpful order: consumers first, providers last.
@@ -13,8 +13,8 @@ export const manifests: ModuleManifest[] = [
     entry: '/modules/palette.ts',
     exports: {},
     requiresService: [
-      { id: WIDGET_SERVICE, cardinality: '0..n', policy: 'dynamic' },
-      { id: UI_SERVICE }
+      { id: Widget, cardinality: '0..n', policy: 'dynamic' },
+      { id: DemoUi }
     ]
   },
   {
@@ -24,8 +24,8 @@ export const manifests: ModuleManifest[] = [
     entry: '/modules/greeter.ts',
     exports: {},
     requiresService: [
-      { id: GREETING_SERVICE, policyOption: 'greedy' },
-      { id: UI_SERVICE }
+      { id: Greeting, policyOption: 'greedy' },
+      { id: DemoUi }
     ]
   },
   {
@@ -42,7 +42,7 @@ export const manifests: ModuleManifest[] = [
     version: '1.0.0',
     entry: '/modules/chart-widget.ts',
     exports: {},
-    provides: [{ id: WIDGET_SERVICE, properties: { kind: 'chart' } }]
+    provides: [{ id: Widget, properties: { kind: 'chart' } }]
   },
   {
     id: 'table-widget',
@@ -50,7 +50,7 @@ export const manifests: ModuleManifest[] = [
     version: '1.0.0',
     entry: '/modules/table-widget.ts',
     exports: {},
-    provides: [{ id: WIDGET_SERVICE, properties: { kind: 'table' } }]
+    provides: [{ id: Widget, properties: { kind: 'table' } }]
   },
   {
     id: 'greeting-basic',
@@ -58,7 +58,7 @@ export const manifests: ModuleManifest[] = [
     version: '1.0.0',
     entry: '/modules/greeting-basic.ts',
     exports: {},
-    provides: [{ id: GREETING_SERVICE }]
+    provides: [{ id: Greeting }]
   },
   {
     id: 'greeting-premium',
@@ -67,7 +67,7 @@ export const manifests: ModuleManifest[] = [
     entry: '/modules/greeting-premium.ts',
     exports: {},
     // Outranks the basic greeting, so this is the visible one
-    provides: [{ id: GREETING_SERVICE, ranking: 10 }]
+    provides: [{ id: Greeting, ranking: 10 }]
   }
 ]
 
@@ -78,5 +78,5 @@ export const lateWidget: ModuleManifest = {
   version: '1.0.0',
   entry: '/modules/late-widget.ts',
   exports: {},
-  provides: [{ id: WIDGET_SERVICE, properties: { kind: 'map' } }]
+  provides: [{ id: Widget, properties: { kind: 'map' } }]
 }

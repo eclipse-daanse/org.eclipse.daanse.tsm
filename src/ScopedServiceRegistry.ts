@@ -7,6 +7,7 @@ import type {
   ObservableServiceRegistry as IObservableServiceRegistry,
   ModuleScopedServiceRegistry as IModuleScopedServiceRegistry,
   ServiceRegistry as IServiceRegistry,
+  ServiceId,
   ServiceScope,
   InjectableConstructor,
   BindClassOptions,
@@ -70,8 +71,8 @@ export class ScopedServiceRegistry implements IObservableServiceRegistry {
   }
 
   register<T>(
-    id: string,
-    service: T,
+    id: ServiceId<T>,
+    service: NoInfer<T>,
     options: {
       providedBy?: string
       ranking?: number
@@ -88,8 +89,8 @@ export class ScopedServiceRegistry implements IObservableServiceRegistry {
   }
 
   bind<T>(
-    id: string,
-    factory: () => T,
+    id: ServiceId<T>,
+    factory: () => NoInfer<T>,
     options: {
       scope?: ServiceScope
       providedBy?: string
@@ -107,8 +108,8 @@ export class ScopedServiceRegistry implements IObservableServiceRegistry {
   }
 
   bindClass<T>(
-    id: string,
-    ctor: InjectableConstructor<T>,
+    id: ServiceId<T>,
+    ctor: InjectableConstructor<NoInfer<T>>,
     options: BindClassOptions = {}
   ): ServiceRegistration {
     // Alias registrations from `implements` are removed with their primary,
@@ -182,14 +183,14 @@ export class ScopedServiceRegistry implements IObservableServiceRegistry {
    * A target registry without `getFor` falls back to the plain read, where a
    * `module`-scoped registration behaves as a singleton.
    */
-  get<T>(id: string): T | undefined {
+  get<T>(id: ServiceId<T>): T | undefined {
     const target = this.target as Partial<IModuleScopedServiceRegistry>
     return typeof target.getFor === 'function'
       ? target.getFor<T>(this.moduleId, id)
       : this.target.get<T>(id)
   }
 
-  getRequired<T>(id: string): T {
+  getRequired<T>(id: ServiceId<T>): T {
     const service = this.get<T>(id)
     if (service === undefined) {
       // Same message the shared registry would give, so the module sees no
@@ -218,6 +219,16 @@ export class ScopedServiceRegistry implements IObservableServiceRegistry {
     return this.target.getServiceReferences(id, target)
   }
 
+  /**
+   * Every service under an id, best first — resolved as this module, so a
+   * `module`-scoped provider hands over this module's own instance.
+   */
+  getServices<T>(id: ServiceId<T>, target?: string): T[] {
+    return this.getServiceReferences(id, target)
+      .map(reference => this.resolveReference<T>(reference))
+      .filter((service): service is T => service !== undefined)
+  }
+
   resolveReference<T>(reference: ServiceReference): T | undefined {
     const target = this.target as Partial<IModuleScopedServiceRegistry>
     return typeof target.resolveReferenceFor === 'function'
@@ -229,7 +240,7 @@ export class ScopedServiceRegistry implements IObservableServiceRegistry {
     return this.target.countProviders(id, target)
   }
 
-  getMatching<T>(id: string, target: string): T | undefined {
+  getMatching<T>(id: ServiceId<T>, target: string): T | undefined {
     return this.target.getMatching<T>(id, target)
   }
 

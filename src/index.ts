@@ -11,6 +11,9 @@ export { DefaultServiceRegistry } from './ServiceRegistry.js'
 export { ScopedServiceRegistry } from './ScopedServiceRegistry.js'
 export { createServiceFilter, type ServiceFilter } from './serviceFilter.js'
 
+// Typed service ids — the contract and its name as one thing
+export { serviceId, type ServiceId, type ServiceOf } from './serviceId.js'
+
 // Decorators
 export {
   injectable,
@@ -30,13 +33,15 @@ export {
 // Import maps for shared libraries
 export {
   generateImportMap,
+  offeredByModules,
   importMapScript,
   installImportMap,
   type ImportMap,
   type ImportMapResult,
   type OfferedLibrary,
   type MissingLibrary,
-  type IncompatibleLibrary
+  type IncompatibleLibrary,
+  type ShadowedLibrary
 } from './importMap.js'
 
 // Requirements and capabilities (Core 3.3)
