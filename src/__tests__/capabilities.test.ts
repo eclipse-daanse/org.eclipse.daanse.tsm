@@ -15,7 +15,12 @@ import {
   wiringOf,
   DS_VERSION
 } from '../capabilities'
-import { COMPONENT_EXTENDER, EXTENDER_NAMESPACE } from '../componentRuntime'
+import {
+  COMPONENT_EXTENDER,
+  EXTENDER_NAMESPACE,
+  IMPLEMENTATION_NAMESPACE
+} from '../componentRuntime'
+import { FEATURE_IMPLEMENTATION, FEATURE_VERSION } from '../features'
 import type { Capability, ModuleManifest, Requirement } from '../types'
 
 /**
@@ -505,11 +510,22 @@ describe('the loader', () => {
   })
 })
 
-/** What the runtime offers of its own accord, in every system bundle */
+/**
+ * What the runtime offers of its own accord, in every system bundle: the
+ * component layer and the feature service, neither of which needs anything from
+ * the application.
+ */
 const extenderCapability = {
   namespace: EXTENDER_NAMESPACE,
   attributes: { [EXTENDER_NAMESPACE]: COMPONENT_EXTENDER, version: DS_VERSION }
 }
+
+const featureCapability = {
+  namespace: IMPLEMENTATION_NAMESPACE,
+  attributes: { [IMPLEMENTATION_NAMESPACE]: FEATURE_IMPLEMENTATION, version: FEATURE_VERSION }
+}
+
+const alwaysOffered = [extenderCapability, featureCapability]
 
 describe('the system bundle', () => {
   it('should stand for the runtime, with the location OSGi gives it', () => {
@@ -521,7 +537,7 @@ describe('the system bundle', () => {
 
     // Never empty: the component layer is always there, and in OSGi the SCR
     // bundle offers exactly this so a module can require it
-    expect(manifest.capabilities).toEqual([extenderCapability])
+    expect(manifest.capabilities).toEqual(alwaysOffered)
   })
 
   it('should offer the component extender, as the SCR bundle does', () => {
@@ -553,7 +569,7 @@ describe('the system bundle', () => {
     const manifest = systemBundle({ libraries: { vue: '3.5.13' } })
 
     expect(manifest.capabilities).toEqual([
-      extenderCapability,
+      ...alwaysOffered,
       { namespace: LIBRARY_NAMESPACE, attributes: { library: 'vue', version: '3.5.13' } }
     ])
   })
@@ -567,7 +583,7 @@ describe('the system bundle', () => {
 
     const manifest = systemBundle({ capabilities: [screen] })
 
-    expect(manifest.capabilities).toEqual([extenderCapability, screen])
+    expect(manifest.capabilities).toEqual([...alwaysOffered, screen])
   })
 
   it('should satisfy a requirement like any other module', () => {
@@ -605,7 +621,7 @@ describe('the loader and the system bundle', () => {
 
     expect(manifest.id).toBe(SYSTEM_BUNDLE_ID)
     expect(manifest.capabilities).toEqual([
-      extenderCapability,
+      ...alwaysOffered,
       { namespace: 'acme.screen', attributes: { width: 640 } }
     ])
   })

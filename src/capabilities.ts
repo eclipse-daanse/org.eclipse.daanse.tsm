@@ -22,6 +22,7 @@ import {
   IMPLEMENTATION_NAMESPACE,
   METATYPE_EXTENDER
 } from './componentRuntime.js'
+import { FEATURE_IMPLEMENTATION, FEATURE_VERSION } from './features.js'
 import type {
   Capability,
   ModuleManifest,
@@ -286,6 +287,14 @@ export function systemBundle(options: {
         namespace: EXTENDER_NAMESPACE,
         attributes: { [EXTENDER_NAMESPACE]: METATYPE_EXTENDER, version: METATYPE_VERSION }
       }] : []),
+      // Always there, as the feature service needs nothing from the application
+      {
+        namespace: IMPLEMENTATION_NAMESPACE,
+        attributes: {
+          [IMPLEMENTATION_NAMESPACE]: FEATURE_IMPLEMENTATION,
+          version: FEATURE_VERSION
+        }
+      },
       ...(options.configurationAdmin === true ? [{
         namespace: IMPLEMENTATION_NAMESPACE,
         attributes: {

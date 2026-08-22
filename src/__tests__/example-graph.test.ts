@@ -154,10 +154,10 @@ describe('examples/graph', () => {
 
       expect(host.querySelectorAll('.bundle-box')).toHaveLength(4)
       expect(host.querySelectorAll('.component-box')).toHaveLength(4)
-      // Five from the modules, plus the two the runtime registers itself — the
-      // baseline condition and the component runtime. The graph shows what is
-      // really in the registry, system services included
-      expect(host.querySelectorAll('.service-box')).toHaveLength(7)
+      // Five from the modules, plus the three the runtime registers itself — the
+      // baseline condition, the component runtime and the feature service. The
+      // graph shows what is really in the registry, system services included
+      expect(host.querySelectorAll('.service-box')).toHaveLength(8)
       expect(host.querySelectorAll('.edge-provides').length).toBeGreaterThan(0)
       expect(host.querySelectorAll('.edge-requires').length).toBeGreaterThan(0)
     })

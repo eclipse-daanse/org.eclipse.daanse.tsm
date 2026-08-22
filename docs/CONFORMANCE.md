@@ -8,8 +8,7 @@ theirs.
 Scope: **Core 3.3** (Requirements and Capabilities), **Core 4** (Life Cycle
 Layer), **Core 5** (Service Layer, incl. 5.8 Filters), **Compendium 104**
 (Configuration Admin), **105** (Metatype) and **112** (Declarative Services). The
-rest of Core 3 rests on a class loader and 159 (Feature Service) is still an open
-question; both are listed at the end as such.
+rest of Core 3 rests on a class loader and is listed at the end as such.
 
 | | |
 |---|---|
@@ -190,37 +189,68 @@ The **Art** column says what kind of difference it is:
 |---|---|---|
 | **Core 3.5, 3.7, 3.9** — class loading, constraint solving, package wiring | ✗ | Plattform — ES modules resolve their own imports, so `Import-Package`, `uses` constraints, class space consistency, fragments and refresh have nothing to attach to |
 | **Core 3.6** — Multiple versions | ✗ | One version per module ID at runtime. Plattform — ES modules give no isolation to hang a second version on |
-| **Compendium 159** — Feature Service | ✗ | Nothing yet; this is the open question of what a feature would mean here |
 | **Compendium 701** — Log Service, Event Admin, Http Whiteboard, … | ✗ | Out of scope: tsm is the module and service layer, not a service catalogue |
+
+
+---
+
+## Compendium 159 — Feature Service
+
+A set of modules and their configuration as one deployable, versioned document.
+The specification defines the document and the API to read it, and says
+explicitly that installing one is a *launcher's* business — so the launcher below
+is an addition, not a claim of conformance.
+
+| § | Concept | tsm | | Art |
+|---|---|---|---|---|
+| 159.2 | Feature | `readFeature()`, immutable and frozen | ✅ | |
+| 159.2.1 | Identifiers | `name@version`, `@scope/name@version` | ◐ | Modell — Maven coordinates have no counterpart; tsm modules are npm packages, and a group id would be a field nobody could fill in truthfully |
+| 159.2.2.1 | Identifier type `osgifeature` | none | ✗ | Modell — follows from 159.2.1: there is no type segment to put it in |
+| 159.2.3 | Attributes | `name`, `categories`, `complete`, `description`, `docURL`, `license`, `scm`, `vendor` | ✅ | |
+| 159.2.4 | Feature API, builders | object literals, checked by the compiler | ◐ | Sprache — builders exist there because a `Feature` is an immutable Java object with a dozen fields; here the literal *is* the builder |
+| 159.3 | Comments | `stripComments()`, JSMin style, string contents left alone | ✅ | |
+| 159.4 | Bundles | `bundles[]` with ids resolved by the launcher | ✅ | |
+| 159.4.1 | Bundle metadata | arbitrary keys, string/number/boolean, refused otherwise | ✅ | |
+| 159.5 | Configurations | `configurations` by PID, factory PIDs as `factoryPid~name` | ◐ | Modell — Configuration Admin directly rather than through the Configurator (150), which tsm does not have; the typed key syntax is supported because variables need it |
+| 159.6 | Variables | defaults, `null` for "must be supplied", `${...}` kept when unknown | ✅ | |
+| 159.7 | Extensions | text, JSON and artifacts; mandatory/optional/transient | ✅ | a mandatory extension nobody handles refuses the install |
+| 159.8 | Framework launching properties | none | ✗ | Plattform — there is no framework to launch with properties; a browser page is already running |
+| 159.9 | Resource versioning | `feature-resource-version`, refused when unknown | ✅ | |
+| 159.10 | Capabilities | `osgi.implementation=osgi.feature` on the system bundle | ✅ | |
+| 159.11 | `org.osgi.service.feature` | `FeatureService` under `tsm.feature.service` | ◐ | Sprache — the same operations without the builder factory, see 159.2.4 |
+| 159.12 | `org.osgi.service.feature.annotation` | none | ✗ | Sprache — the annotations name a Java package for a build-time processor |
+| — | Installing a feature | `installFeature()`: validate, configure, register, load | ✅ | the specification leaves this to a launcher; configuration is written *before* loading, so a component requiring a PID sees it on its first activation |
+| — | Completeness | `isComplete()`, `unsatisfiedRequirements()` against the live wiring | ✅ | `complete: true` is a claim by the author; this checks it, and counts what the runtime itself offers |
 
 ---
 
 ## What this adds up to
 
-Counted over the 124 numbered rows above — the four closing rows summarise whole
-chapters and are left out: **61 conform**, **46 present but different**,
-**17 absent**. Every one of the 63 departures carries a reason, and the large
+Counted over the 142 numbered rows above — the four closing rows summarise whole
+chapters and are left out: **72 conform**, **50 present but different**,
+**20 absent**. Every one of the 70 departures carries a reason, and the large
 majority are **not choices**:
 
-- **Sprache** (22 rows) — Java's `Dictionary`, checked exceptions, class names as
+- **Sprache** (25 rows) — Java's `Dictionary`, checked exceptions, class names as
   service identity, overload resolution, reference counting, eight numeric types,
   and everything that follows from GC: no handle to release a service, no way to
   revoke a stale reference.
   Copying these would make tsm worse, not more conform. Two of them come out
   *better* in TypeScript: the schema that is also the type (105.9, 112.8.2), and
   decorator metadata that needs no descriptor generation (112.4).
-- **Plattform** (17 rows) — everything that rests on a class loader, a file system,
+- **Plattform** (18 rows) — everything that rests on a class loader, a file system,
   or a security boundary between bundles: lazy activation, persistent storage,
   permissions, location binding, multiple versions, and the `location` segment of
   a targeted PID.
 - **Laufzeit** (2 rows) — `import()` is asynchronous, so reactions to events run in
   a queue rather than inside the event. This is why `settle()` exists and OSGi
   needs no equivalent.
-- **Modell** (6 rows) — the loader is framework and SCR in one object, so SCR
-  cannot be stopped or swapped. What does *not* follow from that any more:
-  introspection is a service (112.9), the component layer is a capability a module
-  can require (105.12, 135.4), and satisfaction, configuration and the service
-  scope all work per component (112.5.2, 112.7.1, 5.3).
+- **Modell** (9 rows) — the loader is framework and SCR in one object, so SCR
+  cannot be stopped or swapped; and identifiers are npm's rather than Maven's,
+  which is most of what a feature departs in. What does *not* follow from the
+  first any more: introspection is a service (112.9), the component layer is a
+  capability a module can require (105.12, 135.4), and satisfaction, configuration
+  and the service scope all work per component (112.5.2, 112.7.1, 5.3).
 - **Absicht** (16 rows) — named and argued in `SPEC.md`: no whiteboard for
   ManagedService or MetaTypeProvider, no XML, no ConfigurationPlugin, validation at
   the source instead of in the UI, `[]` instead of `null`.
@@ -244,6 +274,14 @@ fill a hole:
   qualifying, so whatever it collected goes stale in silence. That is the whole
   content of `MODIFIED_ENDMATCH`.
 
-What remains conceptually open is **Compendium 159**, the Feature Service: not a
-gap but a question — what a feature would mean here, now that the system bundle
-and Core 3.3 have made the parts of an answer available.
+**Compendium 159** is no longer open. A feature turned out to be the document that
+answers "which modules, in which versions, with which configuration" — the
+question that otherwise lives in host code, where it cannot be versioned or
+reviewed. The specification stops at reading and writing; `installFeature()` is
+the launcher it leaves to the implementation, and its one real decision is that
+configuration is written *before* loading, so a component that requires a PID sees
+it on its first activation instead of being reconfigured a moment later.
+
+What is left absent across the whole table is what rests on a class loader, a file
+system, a JVM profile, or a security boundary between bundles — and the Java
+package names of annotations meant for a build-time processor.

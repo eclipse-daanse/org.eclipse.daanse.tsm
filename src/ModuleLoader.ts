@@ -61,6 +61,7 @@ import {
   COMPONENT_FACTORY,
   COMPONENT_NAME
 } from './componentFactory.js'
+import { FEATURE_SERVICE_ID, featureService } from './features.js'
 import {
   COMPONENT_RUNTIME_SERVICE_ID,
   type ServiceComponentRuntime
@@ -368,6 +369,7 @@ export class ModuleLoader {
     this.logger = options.logger ?? new ConsoleLogger()
     this.publishTrueCondition()
     this.publishComponentRuntime()
+    this.publishFeatureService()
     this.observeServiceRegistry()
     this.observeConfigurations(options.configurationAdmin)
     this.publishMetatype(options.metatype)
@@ -414,6 +416,18 @@ export class ModuleLoader {
     }
 
     this.services.register(COMPONENT_RUNTIME_SERVICE_ID, runtime, { providedBy: 'tsm' })
+  }
+
+  /**
+   * Publish the feature service, as OSGi has it in the registry (159.11).
+   *
+   * Always: reading and writing features needs nothing from the application, and
+   * a tool that builds them should not have to import the host's package. What
+   * *installing* one needs — a resolver, a Configuration Admin — belongs to the
+   * launcher and not here, which is the line the specification draws too.
+   */
+  private publishFeatureService(): void {
+    this.services.register(FEATURE_SERVICE_ID, featureService, { providedBy: 'tsm' })
   }
 
   /**

@@ -20,6 +20,7 @@ import {
   METATYPE_EXTENDER,
   type ServiceComponentRuntime
 } from '../componentRuntime.js'
+import { FEATURE_IMPLEMENTATION } from '../features.js'
 import type { ModuleContext, ModuleManifest } from '../types.js'
 
 const manifest = (id: string, extra: Partial<ModuleManifest> = {}): ModuleManifest =>
@@ -274,8 +275,10 @@ describe('what else the runtime offers as a capability', () => {
         .filter(entry => entry.namespace === IMPLEMENTATION_NAMESPACE)
         .map(entry => String(entry.attributes[IMPLEMENTATION_NAMESPACE]))
 
-    expect(implementations(new ModuleLoader())).toEqual([])
-    expect(implementations(withAdmin)).toEqual([CONFIGURATION_IMPLEMENTATION])
+    // The feature service is always there; the admin only when it was given
+    expect(implementations(new ModuleLoader())).toEqual([FEATURE_IMPLEMENTATION])
+    expect(implementations(withAdmin))
+      .toEqual([FEATURE_IMPLEMENTATION, CONFIGURATION_IMPLEMENTATION])
   })
 
   it('leaves a module needing metatype unresolved without one', () => {

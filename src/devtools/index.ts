@@ -36,6 +36,7 @@ import {
   COMPONENT_RUNTIME_SERVICE_ID,
   type ServiceComponentRuntime
 } from '../componentRuntime.js'
+import { FEATURE_SERVICE_ID, type Feature, type FeatureService } from '../features.js'
 import { METATYPE_SERVICE_ID, type MetatypeRegistry } from '../Metatype.js'
 import { capabilitiesOf } from '../capabilities.js'
 
@@ -124,6 +125,14 @@ export interface TsmDevtools {
    * nothing at all.
    */
   conditions(): { held: string[]; awaited: string[] }
+
+  /**
+   * Read a feature document and report what installing it would need.
+   *
+   * Not an install: that needs a resolver, and where modules come from is not a
+   * decision for a console one-liner.
+   */
+  feature(document: string | object): Feature | undefined
 
   /** Switch one component off, leaving its module and siblings running */
   disableComponent(moduleId: string, className: string): Promise<void>
@@ -518,6 +527,69 @@ export function installDevtools(options: DevtoolsOptions): TsmDevtools {
         out.log('%cNothing but the baseline', css('muted'))
       }
       return { held, awaited: [...awaited.keys()] }
+    },
+
+    /**
+     * Read a feature and say what installing it would need.
+     *
+     * Deliberately not an install: a launcher needs a resolver, and the console
+     * is not the place to decide where modules come from. What it *can* answer is
+     * whether the document is sound and what is still missing — which is the
+     * question one has before installing.
+     */
+    feature(document: string | object) {
+      const service = services.get<FeatureService>(FEATURE_SERVICE_ID)
+      if (!service) {
+        out.error('No feature service in the registry')
+        return undefined
+      }
+
+      let read: Feature
+      try {
+        read = service.readFeature(document)
+      } catch (error) {
+        out.error(`Not a feature: ${String(error)}`)
+        return undefined
+      }
+
+      out.log(
+        `%c${service.formatId(read.id)}%c ${read.name ?? ''}`,
+        css('heading'),
+        css('muted')
+      )
+      if (read.description) out.log(`  ${read.description}`, css('muted'))
+      out.log(
+        `  ${read.bundles.length} module(s) · ` +
+        `${Object.keys(read.configurations).length} configuration(s) · ` +
+        `${Object.keys(read.extensions).length} extension(s) · ` +
+        (read.complete ? 'claims to be complete' : 'not complete'),
+        css('muted')
+      )
+
+      for (const bundle of read.bundles) {
+        const id = service.formatId(bundle.id)
+        // Whether it is already here matters more than what the document says
+        const known = loader.getModule(bundle.id.name)
+        out.log(
+          `    %c${id}%c ${known ? known.state : 'not loaded'}`,
+          css('name'),
+          css(known?.state === 'active' ? 'ok' : 'muted')
+        )
+      }
+
+      for (const [pid, properties] of Object.entries(read.configurations)) {
+        out.log(`    %c${pid}%c ${Object.keys(properties).join(', ')}`, css('name'), css('muted'))
+      }
+
+      const problems = service.validateFeature(read)
+      for (const problem of problems) {
+        out.log(`    %c${problem.at}%c ${problem.problem}`, css('warn'), css('muted'))
+      }
+      if (problems.length === 0) {
+        out.log('    nothing missing that the document can tell', css('muted'))
+      }
+
+      return read
     },
 
     services() {
@@ -1047,6 +1119,7 @@ export function installDevtools(options: DevtoolsOptions): TsmDevtools {
           'components(id?)      declared components and their state',
           'factories()          component factories and what they built',
           'conditions()         which conditions hold, and who waits in vain',
+          'feature(json)        read a feature and say what installing it needs',
           'disableComponent(id, class) / enableComponent(id, class)',
           'config(pid?)         configurations, or the values of one',
           'describe(pid, loc?)  what a PID accepts, and what is wrong now',

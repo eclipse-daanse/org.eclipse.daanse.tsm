@@ -1805,6 +1805,86 @@ lassen" gibt es nur einzeln über `disableComponent()`. Das ist die
 Modell-Abweichung, die in `docs/CONFORMANCE.md` bei 112.9 steht — und alles, was
 davon übrig ist.
 
+### 11.4h Features: Module, Konfiguration und Version als ein Dokument
+
+Ab einer bestimmten Zahl von Modulen passt die Liste „was laden, in welcher
+Version, mit welcher Konfiguration" nicht mehr in einen Kopf und lebt im
+Host-Code — wo sie nicht versioniert, nicht reviewt und nicht ausgeliefert werden
+kann. Ein **Feature** (OSGi Compendium 159) ist genau dieses Dokument:
+
+```json
+{
+  "feature-resource-version": "1.0",
+  "id": "@acme/workbench@1.4.0",
+  "name": "Die Werkbank",
+  "complete": true,
+  "bundles": [
+    { "id": "tiles@1.0.0" },
+    { "id": "map@2.1.0", "org.acme.docs": "https://docs/map" }
+  ],
+  "variables": { "tileUrl": "https://tiles/{z}/{x}/{y}", "apiKey": null },
+  "configurations": {
+    "demo.tiles": { "url": "${tileUrl}", "zoom:Integer": "3" },
+    "demo.api": { "key": "${apiKey}" }
+  }
+}
+```
+
+Kommentare sind erlaubt (`//` und `/* */`, JSMin-Stil), und `stripComments()`
+lässt Zeichenketteninhalte in Ruhe — eine URL mit `//` würde sonst stumm
+abgeschnitten.
+
+**Variablen** sind späte Bindung. Ein Default kann `null` sein: dann *muss* der
+Launcher einen Wert liefern, was der Weg ist, ein Passwort zu deklarieren, ohne es
+zu hinterlegen. Ein `${name}`, das niemand kennt, bleibt stehen — die Spezifikation
+verlangt das, denn ein späterer Launcher könnte es kennen, und Leeren würde einen
+fehlenden Wert in einen falschen verwandeln. Die Typsyntax `"zoom:Integer"` gibt es,
+weil ein Platzhalter immer eine Zeichenkette liefert.
+
+**Extensions** tragen fremden Inhalt mit: Text, JSON oder Artefakt-Listen, jeweils
+`mandatory`, `optional` (Standard) oder `transient`. Eine verpflichtende Extension,
+die der Installierende nicht kennt, lässt die Installation scheitern — sonst wäre
+sie nicht verpflichtend.
+
+**Installieren** lässt die Spezifikation offen; das ist Sache eines „Launchers".
+`installFeature()` ist einer:
+
+```typescript
+await installFeature(readFeature(document), {
+  loader,
+  configurationAdmin,
+  resolve: id => repository.manifestFor(id.name, id.version),
+  variables: { apiKey: process.env.API_KEY }
+})
+```
+
+Zwei Entscheidungen darin sind erwähnenswert:
+
+**Konfiguration vor dem Laden.** Eine Component mit
+`configurationPolicy: 'require'` läuft ohne ihre Konfiguration nicht, und eine mit
+`@modified` würde direkt nach dem Start neu konfiguriert. Erst schreiben heißt:
+jede Component sieht ihre Werte bei der ersten Aktivierung.
+
+**Alles oder nichts.** Fehlt eine Variable, ein Modul oder ein Handler für eine
+verpflichtende Extension, bricht die Installation ab, *bevor* etwas passiert. Ein
+halb installiertes Feature ist schlimmer als keins, weil die Hälfte, die läuft,
+nicht von einem System zu unterscheiden ist, das so gemeint war.
+
+**Vollständigkeit** ist eine Behauptung des Autors (`complete: true`), keine
+Tatsache. `isComplete(feature, { loader, manifests })` prüft sie gegen die echte
+Auflösung — und rechnet mit, was die Laufzeit selbst anbietet. Dasselbe Feature ist
+in einer Umgebung mit der nötigen Capability vollständig und in einer anderen
+nicht, und genau diese Unterscheidung ist die berichtenswerte.
+
+Was tsm anders macht: die Kennung ist `name@version` bzw. `@scope/name@version`
+statt Maven-Koordinaten. tsm-Module sind npm-Pakete; eine `groupId` wäre ein Feld,
+das niemand wahrheitsgemäß füllen könnte. Und `configurations` folgt direkt dem
+Configuration Admin statt dem Configurator (Compendium 150), den tsm nicht hat.
+
+In der Konsole: `tsm.feature(json)` liest ein Dokument und sagt, was eine
+Installation noch bräuchte — ohne zu installieren, denn wo Module herkommen, ist
+keine Entscheidung für eine Konsolenzeile.
+
 ### 11.5 Konformität
 
 [`docs/CONFORMANCE.md`](docs/CONFORMANCE.md) stellt Abschnitt für Abschnitt
@@ -1813,16 +1893,14 @@ Abweichung: **Sprache** (folgt aus TypeScript statt Java), **Plattform** (Browse
 statt JVM), **Laufzeit** (asynchrones Modul-Laden), **Modell** (der Loader ist Framework
 und SCR in einem), **Absicht** oder **Lücke**.
 
-Von 124 verglichenen Punkten sind 61 konform, 46 anders und 17 nicht vorhanden.
-Jede der 63 Abweichungen trägt einen Grund, und die meisten sind keine Wahl: 22
-folgen aus der Sprache, 17 aus der Plattform, 2 aus dem Laufzeitmodell, 6 aus dem
+Von 142 verglichenen Punkten sind 72 konform, 50 anders und 20 nicht vorhanden.
+Jede der 70 Abweichungen trägt einen Grund, und die meisten sind keine Wahl: 25
+folgen aus der Sprache, 18 aus der Plattform, 2 aus dem Laufzeitmodell, 9 aus dem
 Modulschnitt, 16 sind begründete Entscheidungen — und **keine ist mehr eine
 Lücke**.
 
 Was fehlt, fehlt aus einem Grund. Das ist eine andere Aussage als „noch nicht
-gemacht", und die, für die diese Tabelle existiert. Offen bleibt begrifflich nur
-Compendium 159 (Feature Service): keine Lücke, sondern die Frage, was ein Feature
-hier bedeuten soll.
+gemacht", und die, für die diese Tabelle existiert.
 
 ### 11.6 Die Spezifikationen zum Nachlesen
 
@@ -1830,7 +1908,7 @@ Die Kapitel, auf die sich tsm bezieht, liegen unter
 [`docs/osgi/`](docs/osgi/) — OSGi Release 8, mit einer Zuordnung, welches Kapitel
 welchen Teil trägt: Core 5 (Service Layer), Core 3 (Filter-Syntax), Core 4
 (Lebenszyklus), Compendium 104 (Configuration Admin), 105 (Metatype), 112
-(Declarative Services) und 159 (Feature Service, noch ohne Gegenstück). Core 3.3
+(Declarative Services) und 159 (Feature Service). Core 3.3
 (Requirements und Capabilities) ist umgesetzt, siehe §11.4a.
 
 Damit ist eine Frage nach dem gemeinten Verhalten nachlesbar statt zu raten.
