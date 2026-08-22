@@ -62,6 +62,10 @@ import {
   COMPONENT_NAME
 } from './componentFactory.js'
 import {
+  COMPONENT_RUNTIME_SERVICE_ID,
+  type ServiceComponentRuntime
+} from './componentRuntime.js'
+import {
   CONDITION_SERVICE_ID,
   CONDITION_ID,
   TRUE_CONDITION_ID,
@@ -363,6 +367,7 @@ export class ModuleLoader {
     this.services = options.serviceRegistry ?? new DefaultServiceRegistry()
     this.logger = options.logger ?? new ConsoleLogger()
     this.publishTrueCondition()
+    this.publishComponentRuntime()
     this.observeServiceRegistry()
     this.observeConfigurations(options.configurationAdmin)
     this.publishMetatype(options.metatype)
@@ -382,6 +387,33 @@ export class ModuleLoader {
       providedBy: 'tsm',
       properties: { [CONDITION_ID]: TRUE_CONDITION_ID }
     })
+  }
+
+  /**
+   * Publish the component layer as a service, as SCR does.
+   *
+   * In OSGi, introspecting components goes through `ServiceComponentRuntime`
+   * rather than through the framework, because SCR is a bundle like any other.
+   * Keeping that here is what lets a component view or a diagnostics panel ship
+   * as a module: without it the loader is the only way in, and every such tool
+   * would have to live in the host.
+   *
+   * A facade over methods this object already has — deliberately, so there is one
+   * implementation and not two that can disagree.
+   */
+  private publishComponentRuntime(): void {
+    const runtime: ServiceComponentRuntime = {
+      getComponentDescriptions: moduleId => this.getComponents(moduleId),
+      getComponentDescription: (moduleId, className) =>
+        this.getComponents(moduleId).find(entry => entry.className === className),
+      isComponentEnabled: (moduleId, className) =>
+        !this.isComponentDisabled(moduleId, className),
+      disableComponent: (moduleId, className) => this.disableComponent(moduleId, className),
+      enableComponent: (moduleId, className) => this.enableComponent(moduleId, className),
+      getDisabledComponents: () => this.getDisabledComponents()
+    }
+
+    this.services.register(COMPONENT_RUNTIME_SERVICE_ID, runtime, { providedBy: 'tsm' })
   }
 
   /**
@@ -2877,7 +2909,11 @@ export class ModuleLoader {
 
     return systemBundle({
       libraries,
-      capabilities: this.options.systemCapabilities
+      capabilities: this.options.systemCapabilities,
+      // What this loader was actually given, so a module requiring it resolves
+      // against the truth rather than against the package's feature list
+      metatype: this.metatype !== undefined,
+      configurationAdmin: this.configurations !== undefined
     })
   }
 

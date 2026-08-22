@@ -120,7 +120,7 @@ The **Art** column says what kind of difference it is:
 | 105.7 | Meta Type Resources | no `METATYPE.XML` | ✗ | Absicht — the schema is a value in code |
 | 105.8 | XML Schema | none | ✗ | Absicht — JSON Schema and Ecore are the interchange formats instead (`toJsonSchema`, `@emfts/tsm-metatype`) |
 | 105.9 | Meta Type Annotations | `objectClass()` instead of `@ObjectClassDefinition` on an interface | ◐ | Sprache — and it comes out better: `ConfigurationOf<typeof schema>` derives the type from the schema, where Java needs an interface *and* annotations that can drift apart |
-| 105.12 | Capabilities | none | ✗ | Modell — the `osgi.extender` capability exists so a bundle can require a Metatype *implementation*; here the loader is that implementation and cannot be swapped, so the need is `requiresService: ['tsm.metatype']` |
+| 105.12 | Capabilities | `osgi.extender=osgi.metatype` on the system bundle, offered only when the application supplied a registry | ✅ | a module with a `configurationSchema` can require it and stays unresolved where nothing would read it |
 | — | Validation | `validate`, `coerce`; the admin refuses a bad `update()` | ◐ | Absicht — in OSGi neither CM nor Metatype validates; here it is opt-in and refuses at the source |
 | — | Localization | `%key` per locale, an untranslated key keeps its `%key` form | ✅ | mechanism as in the spec, table instead of properties files |
 
@@ -142,7 +142,7 @@ The **Art** column says what kind of difference it is:
 | 3.7.10 | Provider Selection | highest `version` attribute wins, declaration order breaks a tie | ◐ | Absicht — a full constraint solver addresses problems that only package wiring creates |
 | — | Resolution timing | static, over manifests, before loading; `getUnresolvedModules()` reports what waits *in vain* | ✅ | the line the specification draws at Compendium 135.4: a service capability is a promise |
 | 3.6.4 | `Import-Package` — a library needed from elsewhere | `sharedDependencies`, expressed as a `tsm.library` requirement | ◐ | Plattform — the intent is the same, the mechanism is not: OSGi wires the import to an exporter and the class loader *enforces* one instance, while tsm checks that the host registered one and relies on there being a single registry. Hence no second version at a time, and hence the build check: where OSGi has a verifier, a bundled copy here would just behave subtly wrong |
-| 135.2-135.6 | Registered namespaces (`osgi.extender`, `osgi.contract`, `osgi.implementation`, …) | only `osgi.identity` and `osgi.service` are used; a shared library uses `tsm.library` | ◐ | Absicht — none of the registered namespaces means "the host supplies this library instance": `osgi.contract` is for specification contracts with discrete versioning. Core 3.3 provides for own namespaces, which makes this the conform way to say something the specification has no name for |
+| 135.2-135.6 | Registered namespaces (`osgi.extender`, `osgi.contract`, `osgi.implementation`, …) | `osgi.identity`, `osgi.service`, `osgi.extender` (component, metatype) and `osgi.implementation` (`osgi.cm`); a shared library uses `tsm.library` | ◐ | Absicht — only `osgi.contract` is left out: it is for specification contracts with discrete versioning, and no registered namespace means "the host supplies this library instance", which is what `tsm.library` says |
 
 ## Compendium 112 — Declarative Services
 
@@ -158,7 +158,7 @@ The **Art** column says what kind of difference it is:
 | 112.3.4 | Constructor Injection | `@inject` on a parameter | ✅ | |
 | 112.3.5 | Reference Cardinality | `0..1`, `1..1`, `0..n`, `1..n` | ✅ | |
 | 112.3.6 | Reference Scope | none | ✗ | Absicht — the provider decides whether its service is shareable, not the consumer; see `SPEC.md` §11.4b |
-| 112.3.7 | Reference Policy | `static` / `dynamic` | ◐ | Modell — declared per requirement of a *module*, not per reference of a component |
+| 112.3.7 | Reference Policy | `static` / `dynamic`, per component reference through `@bind`/`@unbind` and per module requirement through `policy` | ◐ | Sprache — a reference is dynamic because the methods are there, not because an attribute says so; no `policy=` to contradict the code |
 | 112.3.8 | Reference Policy Option | `greedy` / `reluctant` | ✅ | |
 | 112.3.9 | Reference Field Option | `@injectAll(id, { fieldOption })` | ✅ | `update` keeps the array's identity, which is what a reactive view bound to it needs |
 | 112.3.10 | Selecting Target Services | `target` filter, LDAP syntax | ✅ | overriding it by configuration is missing — Modell, see `SPEC.md` §11.3 |
@@ -180,7 +180,7 @@ The **Art** column says what kind of difference it is:
 | 112.6.1 | `service.ranking` from configuration | overrides the declared ranking | ✅ | |
 | 112.7.1 | Configuration Changes | `configurationPolicy: require / optional / ignore` | ✅ | |
 | 112.8.2 | Component Property Types | `ConfigurationOf<typeof schema>` | ◐ | Sprache — one artefact instead of two |
-| 112.9 | Service Component Runtime | the loader is framework and SCR in one object | ◐ | Modell — which is why 112.5.2 reads as it does |
+| 112.9 | Service Component Runtime | `ServiceComponentRuntime` under `tsm.component.runtime`: descriptions, state, enable/disable | ◐ | Modell — the loader is framework and SCR in one object, so it cannot be stopped or swapped; introspection is a service all the same, so a component view can be a module |
 | 112.9.4 | Locating Component Methods | decorators name them; no reflective search | ◐ | Sprache |
 | 112.9.5 | Bundle Activator Interaction | a module's `activate` export and its components coexist, `activate` first | ✅ | |
 
@@ -198,11 +198,11 @@ The **Art** column says what kind of difference it is:
 ## What this adds up to
 
 Counted over the 124 numbered rows above — the four closing rows summarise whole
-chapters and are left out: **60 conform**, **46 present but different**,
-**18 absent**. Every one of the 64 departures carries a reason, and the large
+chapters and are left out: **61 conform**, **46 present but different**,
+**17 absent**. Every one of the 63 departures carries a reason, and the large
 majority are **not choices**:
 
-- **Sprache** (21 rows) — Java's `Dictionary`, checked exceptions, class names as
+- **Sprache** (22 rows) — Java's `Dictionary`, checked exceptions, class names as
   service identity, overload resolution, reference counting, eight numeric types,
   and everything that follows from GC: no handle to release a service, no way to
   revoke a stale reference.
@@ -216,10 +216,11 @@ majority are **not choices**:
 - **Laufzeit** (2 rows) — `import()` is asynchronous, so reactions to events run in
   a queue rather than inside the event. This is why `settle()` exists and OSGi
   needs no equivalent.
-- **Modell** (8 rows) — the loader is framework and SCR in one, so there is no
-  extender to require and no second implementation to swap. Satisfaction,
-  configuration and the service scope all work per component now (112.5.2,
-  112.7.1, 5.3).
+- **Modell** (6 rows) — the loader is framework and SCR in one object, so SCR
+  cannot be stopped or swapped. What does *not* follow from that any more:
+  introspection is a service (112.9), the component layer is a capability a module
+  can require (105.12, 135.4), and satisfaction, configuration and the service
+  scope all work per component (112.5.2, 112.7.1, 5.3).
 - **Absicht** (16 rows) — named and argued in `SPEC.md`: no whiteboard for
   ManagedService or MetaTypeProvider, no XML, no ConfigurationPlugin, validation at
   the source instead of in the UI, `[]` instead of `null`.

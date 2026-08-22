@@ -51,10 +51,24 @@ export {
   SERVICE_NAMESPACE,
   LIBRARY_NAMESPACE,
   MODULE_TYPE,
+  DS_VERSION,
+  METATYPE_VERSION,
+  CM_VERSION,
   ENVIRONMENT,
   SYSTEM_BUNDLE_ID,
   systemBundle
 } from './capabilities.js'
+
+// The component layer, as a service — as SCR is a bundle in OSGi
+export {
+  COMPONENT_RUNTIME_SERVICE_ID,
+  EXTENDER_NAMESPACE,
+  COMPONENT_EXTENDER,
+  METATYPE_EXTENDER,
+  IMPLEMENTATION_NAMESPACE,
+  CONFIGURATION_IMPLEMENTATION,
+  type ServiceComponentRuntime
+} from './componentRuntime.js'
 
 // Factory components - a component somebody instantiates by asking
 export {

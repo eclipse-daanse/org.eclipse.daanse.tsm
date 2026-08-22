@@ -32,6 +32,10 @@ import {
   type ConfigurationAdmin
 } from '../ConfigurationAdmin.js'
 import { CONDITION_SERVICE_ID, CONDITION_ID } from '../conditions.js'
+import {
+  COMPONENT_RUNTIME_SERVICE_ID,
+  type ServiceComponentRuntime
+} from '../componentRuntime.js'
 import { METATYPE_SERVICE_ID, type MetatypeRegistry } from '../Metatype.js'
 import { capabilitiesOf } from '../capabilities.js'
 
@@ -215,6 +219,26 @@ export function installDevtools(options: DevtoolsOptions): TsmDevtools {
     }
   }
 
+  /**
+   * The component layer, through the service the loader publishes it as.
+   *
+   * Deliberately not `loader.getComponents()` directly: in OSGi these commands
+   * are what `scr:list` does, and `scr:list` is a shell bundle talking to the
+   * `ServiceComponentRuntime` service. Going the same way here is the proof that
+   * a component view can be a module — these devtools take a loader only because
+   * they also show modules, wiring and repositories, which are the framework's
+   * business rather than SCR's.
+   *
+   * Falls back to the loader for a registry that does not carry the service,
+   * which is what a custom `serviceRegistry` could produce.
+   */
+  function components(moduleId?: string): ComponentInfo[] {
+    const scr = services.get<ServiceComponentRuntime>(COMPONENT_RUNTIME_SERVICE_ID)
+    return scr
+      ? scr.getComponentDescriptions(moduleId)
+      : loader.getComponents(moduleId)
+  }
+
   function requireRegistry(command: string): PluginRegistry | undefined {
     if (!registry) {
       out.error(`${command}() needs a PluginRegistry — pass one to installDevtools()`)
@@ -242,7 +266,7 @@ export function installDevtools(options: DevtoolsOptions): TsmDevtools {
 
   /** Which components read a configuration, so a listing says who cares */
   function componentsUsing(configuration: Configuration): string[] {
-    return loader.getComponents()
+    return components()
       .filter(declaration =>
         declaration.configurationPolicy !== 'ignore' &&
         (declaration.configurationPid.includes(configuration.pid) ||
@@ -420,7 +444,7 @@ export function installDevtools(options: DevtoolsOptions): TsmDevtools {
      * a mandatory reference is missing, so no instance can be had.
      */
     factories() {
-      const declarations = loader.getComponents()
+      const declarations = components()
         .filter(declaration => declaration.factory !== undefined)
 
       if (declarations.length === 0) {
@@ -473,7 +497,7 @@ export function installDevtools(options: DevtoolsOptions): TsmDevtools {
 
       // Every filter some component named, and whether anything matches it
       const awaited = new Map<string, string[]>()
-      for (const declaration of loader.getComponents()) {
+      for (const declaration of components()) {
         const filter = declaration.satisfyingCondition
         if (filter === undefined) continue
         const waiting = awaited.get(filter) ?? []
@@ -569,7 +593,7 @@ export function installDevtools(options: DevtoolsOptions): TsmDevtools {
     },
 
     components(moduleId) {
-      const declarations = loader.getComponents(moduleId)
+      const declarations = components(moduleId)
       if (declarations.length === 0) {
         out.log(`%cNo components${moduleId ? ` in ${moduleId}` : ''}`, css('muted'))
         return declarations
