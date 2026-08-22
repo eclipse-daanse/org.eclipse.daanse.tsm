@@ -21,7 +21,11 @@ export default defineConfig({
       manifest: resolve(__dirname, 'manifest.json'),
       components: 'derive',
       // The bundle imports nothing through the tsm: scheme
-      strict: false
+      strict: false,
+      // The contract sits outside every bundle on purpose; the tsm sources come
+      // in through an alias here, where a deployed build would resolve them from
+      // node_modules
+      boundary: { allow: ['../contracts.ts', '../../../../src'] }
     })
   ],
   build: {
