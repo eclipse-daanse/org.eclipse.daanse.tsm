@@ -5,6 +5,7 @@ import { containers, resetContainers, testLoader } from './helpers/moduleContain
 import { activate, component, deactivate, inject } from '../decorators'
 import { CONDITION_SERVICE_ID } from '../conditions'
 import { COMPONENT_RUNTIME_SERVICE_ID } from '../componentRuntime'
+import { FEATURE_SERVICE_ID } from '../features'
 import type { ModuleContext, ModuleManifest } from '../types'
 
 /**
@@ -113,11 +114,10 @@ describe('declarative components', () => {
       const loaded = await loader.loadModule(manifest('mixed'))
 
       expect(loaded.state).toBe('active')
-      // Everything but what the runtime registers itself — the baseline condition
-      // and the component runtime are always there, and this test is about the
+      // Everything but what the runtime registers itself — this test is about the
       // module's exports
       expect(loader.getServiceRegistry().getServiceIds())
-        .toEqual([CONDITION_SERVICE_ID, COMPONENT_RUNTIME_SERVICE_ID])
+        .toEqual([CONDITION_SERVICE_ID, COMPONENT_RUNTIME_SERVICE_ID, FEATURE_SERVICE_ID])
     })
   })
 

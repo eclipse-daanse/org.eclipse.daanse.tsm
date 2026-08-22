@@ -59,6 +59,38 @@ export {
   systemBundle
 } from './capabilities.js'
 
+// Features - a set of modules and their configuration as one deployable thing
+export {
+  FEATURE_SERVICE_ID,
+  FEATURE_IMPLEMENTATION,
+  FEATURE_VERSION,
+  FEATURE_RESOURCE_VERSION,
+  featureService,
+  readFeature,
+  writeFeature,
+  validateFeature,
+  resolveConfigurations,
+  missingVariables,
+  parseFeatureId,
+  formatFeatureId,
+  stripComments,
+  type Feature,
+  type FeatureId,
+  type FeatureBundle,
+  type FeatureExtension,
+  type FeatureProblem,
+  type FeatureService,
+  type ExtensionKind
+} from './features.js'
+export {
+  installFeature,
+  isComplete,
+  unsatisfiedRequirements,
+  type InstallOptions,
+  type InstallResult,
+  type ManifestResolver
+} from './featureLauncher.js'
+
 // The component layer, as a service — as SCR is a bundle in OSGi
 export {
   COMPONENT_RUNTIME_SERVICE_ID,
