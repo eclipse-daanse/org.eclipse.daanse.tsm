@@ -41,6 +41,7 @@ import {
   getActivateMethod,
   getBindMethods,
   getComponentMetadata,
+  isComponent,
   getDeactivateMethod,
   getInjectMetadata,
   getModifiedMethod,
@@ -308,6 +309,23 @@ function sameProperties(left: ServiceProperties, right: ServiceProperties): bool
 const importOutsideBundler = new Function('specifier', 'return import(specifier)') as (
   specifier: string
 ) => Promise<Record<string, unknown>>
+
+/**
+ * Whether a namespace is itself the module's contribution.
+ *
+ * An imperative lifecycle, or a `@component()` class — either makes the namespace
+ * the container. Without this a genuine default export would be taken instead,
+ * and everything beside it would go unseen: the module counts as active while
+ * contributing nothing.
+ */
+function contributes(namespace: Record<string, unknown>): boolean {
+  if (typeof namespace.activate === 'function') return true
+  if (typeof namespace.deactivate === 'function') return true
+
+  return Object.entries(namespace).some(([name, exported]) =>
+    name !== 'default' && typeof exported === 'function' && isComponent(exported)
+  )
+}
 
 async function nativeImport(specifier: string): Promise<Record<string, unknown>> {
   try {
@@ -1446,11 +1464,16 @@ export class ModuleLoader {
     try {
       const module = await nativeImport(manifest.entry)
       const namespace = module as { default?: unknown; activate?: unknown; deactivate?: unknown }
-      // A module exporting its lifecycle at the top level IS the container.
-      // `default` stands in only for default-export-style modules - a library
+      // A module that contributes anything at the top level IS the container.
+      // `default` stands in only for default-export-style modules — a library
       // bundle may carry a genuine default export for its consumers, and that
-      // must not shadow the lifecycle next to it.
-      if (typeof namespace.activate === 'function' || typeof namespace.deactivate === 'function') {
+      // must not shadow what is exported next to it.
+      //
+      // Components count for this as much as a lifecycle does: they are how a
+      // module contributes without an imperative entry point, so looking only for
+      // activate/deactivate would hand back the default and leave every
+      // `@component()` in the namespace unseen.
+      if (contributes(namespace)) {
         return namespace
       }
       return namespace.default ?? namespace
