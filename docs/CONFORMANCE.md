@@ -38,7 +38,7 @@ The **Art** column says what kind of difference it is:
 | 5.2.3 | Registering Services | `register`, `bind`, `bindClass` | ✅ | |
 | 5.2.4 | Early need for ServiceRegistration | the handle is returned before anything resolves it | ✅ | |
 | 5.2.5 | Service Properties | `string \| number \| boolean` and arrays of those | ◐ | Sprache — Java takes any object in a `Dictionary`; tsm restricts to what a filter can match and a store can write |
-| 5.2.6 | Service Ranking Order | `ranking`; on a tie the **later** registration wins, where OSGi prefers the **earlier** one ("ties give a preference to the earlier registrant") | ◐ | Absicht — before ranking existed, a repeated registration replaced its predecessor, and that was kept. Consequence: with two unranked providers of one ID, OSGi shows the first, tsm the second |
+| 5.2.6 | Service Ranking Order | `ranking`, and on a tie the earlier registration — as the specification has it | ✅ | the reason it is worth matching: with the later one winning, merely loading another module displaces a running provider, so which service answers depends on load order |
 | 5.2.7 | Persistent Identifier | `service.pid`, set by Configuration Admin | ✅ | |
 | 5.2.8 | Locating Services | `get`, `getRequired`, `getServiceReferences`, `getMatching` | ✅ | |
 | 5.2.9 | Getting Service Properties | on the reference, plus `service.ranking` / `service.providedBy` | ✅ | |
@@ -227,8 +227,8 @@ is an addition, not a claim of conformance.
 ## What this adds up to
 
 Counted over the 142 numbered rows above — the four closing rows summarise whole
-chapters and are left out: **72 conform**, **50 present but different**,
-**20 absent**. Every one of the 70 departures carries a reason, and the large
+chapters and are left out: **73 conform**, **49 present but different**,
+**20 absent**. Every one of the 69 departures carries a reason, and the large
 majority are **not choices**:
 
 - **Sprache** (25 rows) — Java's `Dictionary`, checked exceptions, class names as
@@ -251,7 +251,7 @@ majority are **not choices**:
   first any more: introspection is a service (112.9), the component layer is a
   capability a module can require (105.12, 135.4), and satisfaction, configuration
   and the service scope all work per component (112.5.2, 112.7.1, 5.3).
-- **Absicht** (16 rows) — named and argued in `SPEC.md`: no whiteboard for
+- **Absicht** (15 rows) — named and argued in `SPEC.md`: no whiteboard for
   ManagedService or MetaTypeProvider, no XML, no ConfigurationPlugin, validation at
   the source instead of in the UI, `[]` instead of `null`.
 

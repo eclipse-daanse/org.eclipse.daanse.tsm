@@ -363,9 +363,9 @@ describe('DefaultServiceRegistry - registration ownership and alias cleanup', ()
       registry.register('geo.impl', { locate: () => 'elsewhere' })
 
       expect(registry.countProviders('geo.impl')).toBe(2)
-      // The ID answers with the later registration...
-      expect(registry.get<{ locate(): string }>('geo.impl')?.locate()).toBe('elsewhere')
-      // ...while the alias still stands for the class that claimed the interface
+      // The ID keeps answering with the earlier registration — the class, here
+      expect(registry.get('geo.impl')).toBeInstanceOf(GeoService)
+      // ...and so does the alias, which stands for that class either way
       expect(registry.get('geo.api')).toBeInstanceOf(GeoService)
     })
 
@@ -575,13 +575,17 @@ describe('DefaultServiceRegistry - registration ownership and alias cleanup', ()
 
 describe('DefaultServiceRegistry - ranking and several providers per ID', () => {
   describe('visible service', () => {
-    it('should keep last-wins for equal ranking', () => {
+    it('should give equal ranking to the earlier registration', () => {
       const registry = new DefaultServiceRegistry()
 
       registry.register('geo.service', { tag: 'first' }, { providedBy: 'a' })
       registry.register('geo.service', { tag: 'second' }, { providedBy: 'b' })
 
-      expect(registry.get('geo.service')).toEqual({ tag: 'second' })
+      // As OSGi has it (Core 5.2.5): ties prefer the earlier registrant. The
+      // practical reason is stability — with the later one winning, merely
+      // loading another module displaces a running provider, so which service
+      // answers depends on load order. Whoever means to win says so with a ranking
+      expect(registry.get('geo.service')).toEqual({ tag: 'first' })
     })
 
     it('should let the higher ranking win regardless of order', () => {
@@ -652,10 +656,13 @@ describe('DefaultServiceRegistry - ranking and several providers per ID', () => 
       const events: string[] = []
       registry.addListener({ onServiceEvent: event => { events.push(event.type) } })
 
+      // `first` is the visible one now, so withdrawing `second` takes a stand-in
+      // off the bench: reported, because a collection consumes it, but the ID
+      // itself does not change hands
       second.unregister()
       first.unregister()
 
-      expect(events).toEqual(['updated', 'unregistered'])
+      expect(events).toEqual(['unregistered', 'unregistered'])
       expect(registry.has('geo.service')).toBe(false)
     })
 
@@ -849,7 +856,8 @@ describe('DefaultServiceRegistry - target filters', () => {
       .getServiceReferences('widget', '(kind=chart)')
       .map(reference => reference.providedBy)
 
-    expect(kinds).toEqual(['labs', 'charts'])
+    // Best first, and on a tie the earlier registration: charts before labs
+    expect(kinds).toEqual(['charts', 'labs'])
   })
 
   it('should count only matching registrations', () => {
@@ -866,7 +874,8 @@ describe('DefaultServiceRegistry - target filters', () => {
 
     // get() answers with the highest ranked one regardless of properties
     expect(registry.get('widget')).toEqual({ name: 'table' })
-    expect(registry.getMatching('widget', '(kind=chart)')).toEqual({ name: 'sketch' })
+    // Equal ranking among the chart providers, so the earlier one answers
+    expect(registry.getMatching('widget', '(kind=chart)')).toEqual({ name: 'chart' })
     expect(registry.getMatching('widget', '(&(kind=chart)(!(experimental=true)))'))
       .toEqual({ name: 'chart' })
     expect(registry.getMatching('widget', '(kind=map)')).toBeUndefined()
@@ -1111,5 +1120,58 @@ describe('DefaultServiceRegistry - changing a live registration', () => {
 
       expect(osm.resolve()).not.toBe(sat.resolve())
     })
+  })
+})
+
+describe('DefaultServiceRegistry - ties prefer the earlier registrant', () => {
+  it('does not let a later module displace a running provider', () => {
+    // The reason this ordering matters: which service answers must not depend on
+    // load order. A module arriving later has said nothing about being better
+    const registry = new DefaultServiceRegistry()
+    registry.register('geo.service', { tag: 'running' }, { providedBy: 'first' })
+
+    registry.register('geo.service', { tag: 'newcomer' }, { providedBy: 'second' })
+
+    expect(registry.get('geo.service')).toEqual({ tag: 'running' })
+  })
+
+  it('still lets a ranking win, in either direction', () => {
+    const registry = new DefaultServiceRegistry()
+    registry.register('geo.service', { tag: 'plain' }, { providedBy: 'first' })
+    registry.register('geo.service', { tag: 'ranked' }, { providedBy: 'second', ranking: 10 })
+
+    // Saying so is how a later provider wins
+    expect(registry.get('geo.service')).toEqual({ tag: 'ranked' })
+  })
+
+  it('hands the earlier one back when the ranked provider goes', () => {
+    const registry = new DefaultServiceRegistry()
+    registry.register('geo.service', { tag: 'plain' }, { providedBy: 'first' })
+    const ranked = registry.register('geo.service', { tag: 'ranked' },
+      { providedBy: 'second', ranking: 10 })
+
+    ranked.unregister()
+
+    expect(registry.get('geo.service')).toEqual({ tag: 'plain' })
+  })
+
+  it('orders references best first, ties by registration order', () => {
+    const registry = new DefaultServiceRegistry()
+    registry.register('widget', {}, { providedBy: 'a' })
+    registry.register('widget', {}, { providedBy: 'b' })
+    registry.register('widget', {}, { providedBy: 'top', ranking: 5 })
+    registry.register('widget', {}, { providedBy: 'c' })
+
+    expect(registry.getServiceReferences('widget').map(reference => reference.providedBy))
+      .toEqual(['top', 'a', 'b', 'c'])
+  })
+
+  it('gives a collection the same order', () => {
+    const registry = new DefaultServiceRegistry()
+    registry.register('widget', { n: 1 }, { providedBy: 'a' })
+    registry.register('widget', { n: 2 }, { providedBy: 'b' })
+
+    expect(registry.getServices<{ n: number }>('widget').map(service => service.n))
+      .toEqual([1, 2])
   })
 })

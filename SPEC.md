@@ -2060,10 +2060,10 @@ Abweichung: **Sprache** (folgt aus TypeScript statt Java), **Plattform** (Browse
 statt JVM), **Laufzeit** (asynchrones Modul-Laden), **Modell** (der Loader ist Framework
 und SCR in einem), **Absicht** oder **Lücke**.
 
-Von 142 verglichenen Punkten sind 72 konform, 50 anders und 20 nicht vorhanden.
-Jede der 70 Abweichungen trägt einen Grund, und die meisten sind keine Wahl: 25
+Von 142 verglichenen Punkten sind 73 konform, 49 anders und 20 nicht vorhanden.
+Jede der 69 Abweichungen trägt einen Grund, und die meisten sind keine Wahl: 25
 folgen aus der Sprache, 18 aus der Plattform, 2 aus dem Laufzeitmodell, 9 aus dem
-Modulschnitt, 16 sind begründete Entscheidungen — und **keine ist mehr eine
+Modulschnitt, 15 sind begründete Entscheidungen — und **keine ist mehr eine
 Lücke**.
 
 Was fehlt, fehlt aus einem Grund. Das ist eine andere Aussage als „noch nicht
