@@ -853,3 +853,88 @@ describe('tsmPlugin - the bundle boundary', () => {
       .toBe(true)
   })
 })
+
+describe('tsmPlugin - side-effect imports of shared modules', () => {
+  const shared = ['my.shared.module', 'vue']
+
+  it('drops the bare form', () => {
+    // The form that breaks the whole bundle rather than one feature: external, so
+    // the statement survives into the chunk as a specifier the browser cannot
+    // resolve
+    const out = transformTsmImports(`import 'my.shared.module'\nconst a = 1`, shared)
+
+    expect(out).not.toContain('my.shared.module')
+    expect(out).toContain('const a = 1')
+  })
+
+  it('drops it with a semicolon and with a subpath', () => {
+    const out = transformTsmImports(
+      `import 'my.shared.module';\nimport 'my.shared.module/styles.css';`, shared
+    )
+    expect(out?.trim()).toBe('')
+  })
+
+  it('drops the tsm: form too', () => {
+    expect(transformTsmImports(`import 'tsm:some-module'`, [])).not.toContain('some-module')
+  })
+
+  it('leaves a binding import to the rewrites', () => {
+    const out = transformTsmImports(`import { ref } from 'vue'`, shared)
+
+    // Not swallowed by the side-effect pattern: there is a binding between
+    // `import` and the specifier
+    expect(out).toContain("__tsm__.require('vue')")
+    expect(out).toContain('ref')
+  })
+
+  it('leaves a default import alone', () => {
+    const out = transformTsmImports(`import Vue from 'vue'`, shared)
+    expect(out).toContain("__tsm__.require('vue').default")
+  })
+
+  it('leaves an unrelated side-effect import alone', () => {
+    // Only shared modules are external; a local one resolves as it always did
+    const code = `import './styles.css'`
+    expect(transformTsmImports(code, shared)).toBe(null)
+  })
+
+  it('warns about a hand-written one', async () => {
+    const plugin = tsmPlugin({ sharedModules: shared })
+    const warnings: string[] = []
+    const ctx = {
+      error(message: string) { throw new Error(message) },
+      warn(message: string) { warnings.push(message) },
+      emitFile() {}
+    }
+    type Hook = (this: typeof ctx, ...args: unknown[]) => unknown
+
+    await (plugin.buildStart as Hook).call(ctx)
+    await (plugin.transform as Hook).call(ctx, `import 'my.shared.module'`, '/src/widget.ts')
+
+    // A stray drop would be worse than the error: the author asked for something
+    // to happen and nothing will
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain('side effects only')
+  })
+
+  it('says nothing about the ones Rollup synthesizes', async () => {
+    const plugin = tsmPlugin({ sharedModules: shared })
+    const warnings: string[] = []
+    const ctx = {
+      error(message: string) { throw new Error(message) },
+      warn(message: string) { warnings.push(message) },
+      emitFile() {}
+    }
+    type Hook = (this: typeof ctx, ...args: unknown[]) => unknown
+
+    await (plugin.buildStart as Hook).call(ctx)
+    // renderChunk is where those arrive — nobody wrote them, so there is nobody
+    // to tell
+    const result = (plugin.renderChunk as Hook).call(
+      ctx, `import "my.shared.module";\nconsole.log(1)`
+    ) as { code: string } | null
+
+    expect(result?.code).not.toContain('my.shared.module')
+    expect(warnings).toEqual([])
+  })
+})

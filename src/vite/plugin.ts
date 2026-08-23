@@ -38,6 +38,19 @@ import {
 
 const TSM_PREFIX = 'tsm:'
 
+/** `import 'tsm:module'` — the form with nothing bound */
+const SIDE_EFFECT_TSM = /import\s*['"]tsm:[^'"]+['"]\s*;?/g
+
+/**
+ * `import 'module'` for a shared module, with nothing bound.
+ *
+ * Matches only where the specifier follows `import` directly: anything else has
+ * a binding between them and is handled by the rewrites above.
+ */
+function sideEffectImport(escaped: string): RegExp {
+  return new RegExp(`import\\s*['"]${escaped}(/[^'"]*)?['"]\\s*;?`, 'g')
+}
+
 export interface TsmPluginOptions {
   /**
    * Whether to use renderChunk (for production builds) or transform (for dev)
@@ -179,9 +192,12 @@ function convertImports(importList: string, moduleId: string): string {
  */
 export function transformTsmImports(code: string, sharedModules: string[] = []): string | null {
   const hasTsmImports = code.includes(TSM_PREFIX)
+  // `from '<module>'` alone misses the side-effect form, which has no `from` at
+  // all — and that is the form that breaks a whole bundle rather than one
+  // feature. Looking for the specifier itself covers both
   const hasSharedImports = sharedModules.some(m =>
-    code.includes(`from '${m}'`) || code.includes(`from "${m}"`) ||
-    code.includes(`from '${m}/`) || code.includes(`from "${m}/`)
+    code.includes(`'${m}'`) || code.includes(`"${m}"`) ||
+    code.includes(`'${m}/`) || code.includes(`"${m}/`)
   )
 
   if (!hasTsmImports && !hasSharedImports) return null
@@ -197,6 +213,9 @@ export function transformTsmImports(code: string, sharedModules: string[] = []):
     /import\s+type\s*\{[^}]*\}\s*from\s*['"]tsm:[^'"]+['"]\s*;?/g,
     ''
   )
+
+  // Drop: import 'tsm:module' — see the note on the shared form below
+  transformed = transformed.replace(SIDE_EFFECT_TSM, '')
 
   // Transform: import { x, y as z } from 'tsm:module' or 'tsm:module/subpath'
   transformed = transformed.replace(
@@ -231,6 +250,24 @@ export function transformTsmImports(code: string, sharedModules: string[] = []):
       new RegExp(`import\\s+type\\s*\\{[^}]*\\}\\s*from\\s*['"]${escaped}(/[^'"]*)?['"]\\s*;?`, 'g'),
       ''
     )
+
+    /*
+     * Drop: import 'module'
+     *
+     * The side-effect form is the one that breaks a bundle rather than merely
+     * missing a rewrite: a shared module is external, so the statement survives
+     * into the chunk as a bare specifier the browser cannot resolve, and the whole
+     * bundle fails to load — not the part that uses it.
+     *
+     * Dropped rather than rewritten, because the effect has already happened. A
+     * shared module is loaded by whoever provides it, and its top-level code ran
+     * then; `__tsm__.require()` fetches what is already registered. Rewriting
+     * would emit a call whose result is discarded, once per statement — and most
+     * of these statements were never written by anyone: Rollup synthesizes them
+     * for externals while chunking, which is why the source-level pass alone
+     * cannot be enough and `renderChunk` runs this too.
+     */
+    transformed = transformed.replace(sideEffectImport(escaped), '')
 
     // Transform: import { x, y as z } from 'module' or 'module/sub'
     transformed = transformed.replace(
@@ -343,6 +380,26 @@ export function tsmPlugin(options: TsmPluginOptions = {}): Plugin {
     transform(code: string, id: string) {
       if (!id.match(/\.(ts|js|tsx|jsx|vue)$/)) return null
       if (id.includes('node_modules')) return null
+
+      // A side-effect import of a shared module is dropped, and a hand-written
+      // one deserves to be told: the author is asking for something to happen,
+      // and nothing will. Only the source-level ones — the chunk pass sees the
+      // statements Rollup synthesizes, which nobody wrote and nobody expects
+      for (const moduleId of [...sharedModules, TSM_PREFIX]) {
+        const escaped = moduleId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        const pattern = moduleId === TSM_PREFIX
+          ? new RegExp(`import\\s*['"]${escaped}[^'"]+['"]`)
+          : new RegExp(`import\\s*['"]${escaped}(/[^'"]*)?['"]`)
+
+        if (!pattern.test(code)) continue
+
+        this.warn(
+          `tsm: '${id}' imports '${moduleId}' for its side effects only, and that ` +
+          `does nothing: a shared module is loaded by whoever provides it, and its ` +
+          `top-level code has already run. The statement is dropped — left in, it ` +
+          `would reach the browser as a bare specifier and fail the whole bundle.`
+        )
+      }
 
       if (components !== false) {
         try {
