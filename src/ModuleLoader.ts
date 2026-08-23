@@ -2199,12 +2199,16 @@ export class ModuleLoader {
 
     const activateMethod = getActivateMethod(runtime.ctor)
     const binds = getBindMethods(runtime.ctor)
-    // A component with bind methods wants to hear about services, which it cannot
-    // do without existing — so it counts as immediate like one with @activate.
+    const collections = getInjectAllMetadata(runtime.ctor)
+    // A component with bind methods or collections wants to hear about
+    // services, which it cannot do without existing — so it counts as
+    // immediate like one with @activate. A delayed collector would keep an
+    // instance record without an object, and applyCollections() has nothing
+    // to write into.
     // `force` is for a factory instance: the caller asked for the object, so
     // handing back a delayed one that does not exist yet would be no answer
     const immediate = options.force === true || (runtime.options.immediate
-      ?? (activateMethod !== undefined || binds.length > 0))
+      ?? (activateMethod !== undefined || binds.length > 0 || collections.length > 0))
     if (!immediate) return
 
     // Resolve this registration rather than the ID: with several providers under
