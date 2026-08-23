@@ -3,6 +3,10 @@ import { describe, it, expect, vi } from 'vitest'
 import { ModuleLoader } from '../ModuleLoader'
 import { activate, component } from '../decorators'
 import type { ModuleContext, ModuleManifest } from '../types'
+import { mkdtemp, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 /**
  * Handing a module to the loader.
@@ -211,5 +215,76 @@ describe('the URL path, in Node', () => {
     // What a module fetched over HTTP needs, and what a handed-over one must not
     // get — there the manifest would then claim a URL nobody uses
     expect(manifestWithUrl.entry).toContain('?t=')
+  })
+})
+
+describe('what the entry namespace contributes', () => {
+  /** A module written to a real file, so the entry is actually imported */
+  async function moduleFile(source: string): Promise<string> {
+    const directory = await mkdtemp(join(tmpdir(), 'tsm-entry-'))
+    const file = join(directory, 'entry.mjs')
+    await writeFile(file, source)
+    return pathToFileURL(file).href
+  }
+
+  const manifestFor = (entry: string): ModuleManifest =>
+    ({ id: 'entry', name: 'entry', version: '1.0.0', entry, exports: {} })
+
+  it('should take the namespace when it exports a lifecycle', async () => {
+    const entry = await moduleFile(`
+      export default { helper: () => 'x' }
+      export const activate = () => { globalThis.__entryProbe = 'lifecycle' }
+    `)
+
+    const loader = new ModuleLoader()
+    await loader.loadModule(manifestFor(entry))
+
+    // A genuine default export must not shadow the lifecycle next to it
+    expect((globalThis as { __entryProbe?: string }).__entryProbe).toBe('lifecycle')
+    delete (globalThis as { __entryProbe?: string }).__entryProbe
+  })
+
+  it('should take the namespace when it exports a component', async () => {
+    // Components are how a module contributes without an imperative entry point,
+    // so looking only for activate/deactivate handed back the default and left
+    // every @component() in the namespace unseen
+    const entry = await moduleFile(`
+      import 'reflect-metadata'
+      export class Widget {}
+      Reflect.defineMetadata(Symbol.for('tsm:component'), { service: ['demo.widget'] }, Widget)
+      Reflect.defineMetadata(Symbol.for('tsm:injectable'), true, Widget)
+      export default { helper: () => 'x' }
+    `)
+
+    const loader = new ModuleLoader()
+    await loader.loadModule(manifestFor(entry))
+
+    expect(loader.getComponents('entry').map(entry => entry.className)).toEqual(['Widget'])
+    expect(loader.getServiceRegistry().has('demo.widget')).toBe(true)
+  })
+
+  it('should take the default for a default-export-style module', async () => {
+    const entry = await moduleFile(`
+      export default { activate: () => { globalThis.__entryProbe = 'default' } }
+    `)
+
+    const loader = new ModuleLoader()
+    await loader.loadModule(manifestFor(entry))
+
+    expect((globalThis as { __entryProbe?: string }).__entryProbe).toBe('default')
+    delete (globalThis as { __entryProbe?: string }).__entryProbe
+  })
+
+  it('should leave a default that is only data alone', async () => {
+    // Nothing contributes, so the default stands in — and a module with neither
+    // a lifecycle nor a component is active without doing anything, which is
+    // what a library bundle is
+    const entry = await moduleFile(`export default { helper: () => 'x' }`)
+
+    const loader = new ModuleLoader()
+    const loaded = await loader.loadModule(manifestFor(entry))
+
+    expect(loaded.state).toBe('active')
+    expect(loader.getComponents('entry')).toEqual([])
   })
 })
