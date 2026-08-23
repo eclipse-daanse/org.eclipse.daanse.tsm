@@ -195,8 +195,14 @@ export class DefaultServiceRegistry implements IModuleScopedServiceRegistry {
     if (candidate.ranking !== incumbent.ranking) {
       return candidate.ranking > incumbent.ranking
     }
-    // Equal ranking: the later registration wins, as it did before ranking existed
-    return candidate.seq > incumbent.seq
+    // Equal ranking: the *earlier* registration wins, as OSGi has it — ties give
+    // preference to the earlier registrant (Core 5.2.5), because service ids are
+    // handed out in registration order and the lowest one ranks highest.
+    //
+    // The practical reason is stability: with the later one winning, merely
+    // loading another module displaces a running provider, so which service
+    // answers depends on load order. Whoever means to win says so with a ranking.
+    return candidate.seq < incumbent.seq
   }
 
   private setVisible(id: string, binding: ServiceBinding): void {
@@ -236,8 +242,11 @@ export class DefaultServiceRegistry implements IModuleScopedServiceRegistry {
   /** All registrations for an ID, best first */
   private registrationsOf(id: string): ServiceBinding[] {
     const visible = this.bindings.get(id)
+    // Best first: ranking descending, and on a tie the earlier registration —
+    // the same order `outranks` decides visibility by, so a collection sees them
+    // in the order OSGi's getServiceReferences() returns
     const bench = [...(this.shadowed.get(id) ?? [])].sort((a, b) =>
-      a.ranking !== b.ranking ? b.ranking - a.ranking : b.seq - a.seq
+      a.ranking !== b.ranking ? b.ranking - a.ranking : a.seq - b.seq
     )
     return visible ? [visible, ...bench] : bench
   }
