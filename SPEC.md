@@ -1974,6 +1974,19 @@ statt Maven-Koordinaten. tsm-Module sind npm-Pakete; eine `groupId` wäre ein Fe
 das niemand wahrheitsgemäß füllen könnte. Und `configurations` folgt direkt dem
 Configuration Admin statt dem Configurator (Compendium 150), den tsm nicht hat.
 
+Der Build-Scan liest eine Service-ID auch dann, wenn sie in einem **anderen
+Paket** deklariert ist — dem API-Bundle, wo ein Vertrag hingehört — und auch dann,
+wenn sie als `serviceId<T>('…')` statt als nacktes Literal geschrieben ist. Beides
+zusammen ist nötig, damit `@component({ service: [WIDGET_SERVICE] })` das Manifest
+füllt; jedes allein reicht nicht.
+
+`node_modules` wird dabei von Hand durchlaufen statt über einen Resolver: der Scan
+ist synchron, der Resolver des Bundlers ist es nicht, und `import.meta.resolve`
+existiert unter Vite nicht. Die `types`-Bedingung wird zuerst probiert, weil ein
+API-Paket im Workspace meist direkt auf die TypeScript-Quelle zeigt — und weil
+gebaute Ausgabe nichts hilft, solange sie nicht gebaut ist. Landet die Auflösung
+in einem Build-Verzeichnis, wird die passende Quelle mitprobiert.
+
 In der Konsole: `tsm.feature(json)` liest ein Dokument und sagt, was eine
 Installation noch bräuchte — ohne zu installieren, denn wo Module herkommen, ist
 keine Entscheidung für eine Konsolenzeile.

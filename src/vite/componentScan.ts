@@ -195,15 +195,57 @@ function collectStringConstants(source: ts.SourceFile): Map<string, string> {
 
     for (const declaration of statement.declarationList.declarations) {
       if (!ts.isIdentifier(declaration.name)) continue
-      const initializer = declaration.initializer
-      if (initializer && ts.isStringLiteral(initializer)) {
-        constants.set(declaration.name.text, initializer.text)
+
+      const value = constantString(declaration.initializer)
+      if (value !== undefined) {
+        constants.set(declaration.name.text, value)
       }
     }
   }
 
   return constants
 }
+
+/**
+ * The string a constant declaration amounts to.
+ *
+ * A plain literal, or a literal wrapped in an identity call. The wrapped form is
+ * how a typed service id is declared — `serviceId<TileService>('demo.tiles')` —
+ * and it is the *usual* form now, not an edge case: reading only bare literals
+ * meant that adopting a typed id silently cost the build-time declaration, and a
+ * component's `provides` entry with it.
+ *
+ * Only the argument is read; what the function does is not this scan's business.
+ * That is sound for an identity function and wrong for anything else, so the call
+ * has to be one the scan knows by name.
+ */
+function constantString(initializer: ts.Expression | undefined): string | undefined {
+  if (initializer === undefined) return undefined
+  if (ts.isStringLiteral(initializer)) return initializer.text
+
+  // `as const`, `satisfies`, or a cast around the literal
+  if (ts.isAsExpression(initializer) || ts.isSatisfiesExpression(initializer)) {
+    return constantString(initializer.expression)
+  }
+
+  if (!ts.isCallExpression(initializer)) return undefined
+
+  const callee = initializer.expression
+  const name = ts.isIdentifier(callee)
+    ? callee.text
+    : ts.isPropertyAccessExpression(callee) ? callee.name.text : undefined
+
+  if (name === undefined || !IDENTITY_CALLS.has(name)) return undefined
+  return constantString(initializer.arguments[0])
+}
+
+/**
+ * Calls that stand for their first argument.
+ *
+ * `serviceId` is tsm's own; `Symbol.for` appears where a project used the global
+ * symbol registry for ids before typed ones existed, and its key is the id.
+ */
+const IDENTITY_CALLS = new Set(['serviceId', 'for'])
 
 /** Which import a name came from, so its value can be looked up there */
 function importSourceOf(source: ts.SourceFile, name: string): string | undefined {

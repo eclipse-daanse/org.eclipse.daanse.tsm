@@ -19,7 +19,7 @@
  *   import { Button } from 'tsm:my-app/ui'
  */
 
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { dirname, isAbsolute, relative, resolve as resolvePath } from 'node:path'
 import type { Plugin } from 'vite'
@@ -549,14 +549,25 @@ export function tsmPlugin(options: TsmPluginOptions = {}): Plugin {
  * @returns JavaScript code that injects the CSS
  */
 /**
- * Read a module referenced by a relative import, so a service id held in a
- * constant there can be resolved. Synchronous because the scan is.
+ * Read a module an import points at, so a service id held in a constant there
+ * can be resolved.
+ *
+ * Both kinds of specifier, because a service contract belongs in a package of
+ * its own — the API bundle — and `@component({ service: [WIDGET_SERVICE] })` is
+ * exactly where that constant is needed. Reading only relative imports left every
+ * such declaration falling back to a repeated literal.
+ *
+ * Synchronous because the scan is, which rules out the bundler's own resolver.
+ * `import.meta.resolve` is the synchronous one that still honours `exports` and
+ * its conditions — and the `import` condition is what points at the sources in a
+ * workspace, where a package's `main` is often the TypeScript file itself.
  */
 function readImportedSource(specifier: string, importerId: string): string | undefined {
-  if (!specifier.startsWith('.')) return undefined
+  const candidates = specifier.startsWith('.')
+    ? relativeCandidates(specifier, importerId)
+    : packageCandidates(specifier, importerId)
 
-  const base = resolvePath(dirname(importerId), specifier)
-  for (const candidate of [base, base.replace(/\.js$/, '.ts'), `${base}.ts`]) {
+  for (const candidate of candidates) {
     try {
       return readFileSync(candidate, 'utf-8')
     } catch {
@@ -564,6 +575,105 @@ function readImportedSource(specifier: string, importerId: string): string | und
     }
   }
   return undefined
+}
+
+function relativeCandidates(specifier: string, importerId: string): string[] {
+  const base = resolvePath(dirname(importerId), specifier)
+  return [base, base.replace(/\.js$/, '.ts'), `${base}.ts`]
+}
+
+/**
+ * Where a package specifier lands, and the spellings worth trying next to it.
+ *
+ * `node_modules` is walked by hand rather than through a resolver, because the
+ * scan is synchronous: the bundler's own resolver is async, and
+ * `import.meta.resolve` — the synchronous one — is not there under Vite, which is
+ * where this runs.
+ *
+ * The `types` condition is tried first on purpose. In a workspace an API package
+ * usually points every condition at its TypeScript source, and where it does not,
+ * `types` is still the entry that exists before anything is built. What the scan
+ * needs is the *value* of a constant, so built output is only useful if it is
+ * actually there, and a `.d.ts` never carries it at all.
+ */
+function packageCandidates(specifier: string, importerId: string): string[] {
+  const parts = specifier.split('/')
+  // A scoped package takes two segments; a deep import keeps the rest as a path
+  const name = specifier.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0]
+  const subpath = specifier.slice(name.length).replace(/^\//, '')
+
+  const directory = packageDirectory(name, importerId)
+  if (directory === undefined) return []
+
+  if (subpath !== '') {
+    const target = resolvePath(directory, subpath)
+    return [target, target.replace(/\.js$/, '.ts'), `${target}.ts`]
+  }
+
+  let manifest: { main?: string; module?: string; types?: string; exports?: unknown }
+  try {
+    manifest = JSON.parse(readFileSync(resolvePath(directory, 'package.json'), 'utf-8'))
+  } catch {
+    return []
+  }
+
+  const entries = [
+    ...exportedEntries(manifest.exports),
+    manifest.types,
+    manifest.module,
+    manifest.main,
+    'index.ts',
+    'index.js'
+  ].filter((entry): entry is string => typeof entry === 'string')
+
+  const candidates: string[] = []
+  for (const entry of entries) {
+    const target = resolvePath(directory, entry)
+    candidates.push(target)
+    // Built output is no use when it is not built yet, and a .d.ts has no value
+    // in it — the matching source is what the scan is after
+    const source = target
+      .replace(/([/\\])(dist|lib|build|out)([/\\])/, '$1src$3')
+      .replace(/\.d\.ts$/, '.ts')
+      .replace(/\.js$/, '.ts')
+    if (source !== target) candidates.push(source)
+  }
+
+  return candidates
+}
+
+/** The `.` entry of an `exports` map, by the conditions worth trying */
+function exportedEntries(exported: unknown): string[] {
+  if (typeof exported === 'string') return [exported]
+  if (typeof exported !== 'object' || exported === null) return []
+
+  const map = exported as Record<string, unknown>
+  const root = '.' in map ? map['.'] : map
+
+  if (typeof root === 'string') return [root]
+  if (typeof root !== 'object' || root === null) return []
+
+  const conditions = root as Record<string, unknown>
+  return ['types', 'import', 'module', 'default', 'require']
+    .map(condition => conditions[condition])
+    .filter((entry): entry is string => typeof entry === 'string')
+}
+
+/**
+ * The directory a package name resolves to, walking up from the importer as
+ * Node does.
+ */
+function packageDirectory(name: string, importerId: string): string | undefined {
+  let at = dirname(importerId)
+
+  for (;;) {
+    const candidate = resolvePath(at, 'node_modules', name)
+    if (existsSync(resolvePath(candidate, 'package.json'))) return candidate
+
+    const up = dirname(at)
+    if (up === at) return undefined
+    at = up
+  }
 }
 
 export function generateCssLoader(cssUrl: string): string {
