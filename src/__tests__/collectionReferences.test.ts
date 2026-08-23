@@ -135,6 +135,29 @@ describe('collection references', () => {
   })
 
   describe('staying current', () => {
+    it('activates a component that only collects, so the collection stays current', async () => {
+      /*
+       * No @activate and no @bind - just the collection. Without counting a
+       * collector as immediate it would stay a delayed instance record with
+       * no object, and applyCollections() would have nothing to write into:
+       * the collection stayed empty forever, however many providers came.
+       */
+      @component({ service: ['palette'] })
+      class Palette {
+        @injectAll('tile.source') sources: Tile[] = []
+      }
+
+      loader.getServiceRegistry().register('tile.source', { name: 'a' }, { providedBy: 'raster-mod' })
+      await loader.loadModule(manifest('map'), { container: { Palette } })
+
+      const palette = loader.getServiceRegistry().getRequired<Palette>('palette')
+      expect(palette.sources.map(tile => tile.name)).toEqual(['a'])
+
+      loader.getServiceRegistry().register('tile.source', { name: 'b' }, { providedBy: 'vector-mod' })
+      await loader.settle()
+      expect(palette.sources.map(tile => tile.name).sort()).toEqual(['a', 'b'])
+    })
+
     it('grows when a provider arrives', async () => {
       const held: { current?: Map2D } = {}
 
