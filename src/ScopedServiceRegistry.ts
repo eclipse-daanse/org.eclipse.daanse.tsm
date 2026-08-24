@@ -90,7 +90,7 @@ export class ScopedServiceRegistry implements IObservableServiceRegistry {
 
   bind<T>(
     id: ServiceId<T>,
-    factory: () => NoInfer<T>,
+    factory: (consumer?: string) => NoInfer<T>,
     options: {
       scope?: ServiceScope
       providedBy?: string

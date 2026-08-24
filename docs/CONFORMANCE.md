@@ -169,7 +169,7 @@ The **Art** column says what kind of difference it is:
 | 112.5.1 | Enabled | `disableComponent` / `enableComponent`, beside the module's switch | ✅ | a dimension of its own at both levels: off is not waiting |
 | 112.5.2 | Satisfied | per component for both: a missing `@inject()` service leaves it `unsatisfied-reference`, a missing PID `unsatisfied-configuration`; the module keeps running either way | ✅ | the module-level `requiresService` stays as the coarser tool — it parks a whole module on purpose |
 | 112.5.6 | Activation | `@activate`, two phases (register all, then activate) | ✅ | |
-| 112.5.8 | Component Context | `ComponentContext` with `configuration`, `properties`, `configurationPid` | ✅ | |
+| 112.5.8 | Component Context | `ComponentContext` with `configuration`, `properties`, `configurationPid`, handed to `@activate`; the module's own context also injectable as `tsm.module.context` for a constructional dependency on the registry | ✅ | DS reaches the bundle context through `ComponentContext.getBundleContext()`; here the module context is a `module`-scoped service, which is what lets one id answer differently per module |
 | 112.5.9 | Activation Objects | the context object; no `Map` / property-type parameter forms | ◐ | Sprache — no overload resolution to pick a parameter shape by type |
 | 112.5.12 | Bound Service Replacement | `policyOption: greedy` rebuilds or rebinds | ✅ | |
 | 112.5.13-15 | Updated, Modification, Modified Method | `@modified()`; without it, rebuild | ✅ | |

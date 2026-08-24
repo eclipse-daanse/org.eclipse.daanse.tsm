@@ -11,6 +11,9 @@ export { DefaultServiceRegistry } from './ServiceRegistry.js'
 export { ScopedServiceRegistry } from './ScopedServiceRegistry.js'
 export { createServiceFilter, type ServiceFilter } from './serviceFilter.js'
 
+// A module's own context, as a service — for a constructional dependency on it
+export { MODULE_CONTEXT_SERVICE_ID } from './moduleContext.js'
+
 // Typed service ids — the contract and its name as one thing
 export { serviceId, type ServiceId, type ServiceOf } from './serviceId.js'
 
