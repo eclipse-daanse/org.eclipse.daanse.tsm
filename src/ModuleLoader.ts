@@ -63,6 +63,7 @@ import {
   COMPONENT_NAME
 } from './componentFactory.js'
 import { FEATURE_SERVICE_ID, featureService } from './features.js'
+import { MODULE_CONTEXT_SERVICE_ID } from './moduleContext.js'
 import {
   COMPONENT_RUNTIME_SERVICE_ID,
   type ServiceComponentRuntime
@@ -415,6 +416,7 @@ export class ModuleLoader {
     this.logger = options.logger ?? new ConsoleLogger()
     this.publishTrueCondition()
     this.publishComponentRuntime()
+    this.publishModuleContext()
     this.publishFeatureService()
     this.observeServiceRegistry()
     this.observeConfigurations(options.configurationAdmin)
@@ -462,6 +464,47 @@ export class ModuleLoader {
     }
 
     this.services.register(COMPONENT_RUNTIME_SERVICE_ID, runtime, { providedBy: 'tsm' })
+  }
+
+  /**
+   * Publish each module's own context as a service, so a component can take it
+   * as a constructor dependency.
+   *
+   * `@activate(context)` already hands a component its context, and that is the
+   * closer analogue of DS 112.5.8. What it cannot do is serve a class whose
+   * dependency on the registry is *constructional* — an identifier resolver, a
+   * repository that looks services up at call time. Such a class had to be built
+   * and registered by hand in the module's `activate`, which is exactly the
+   * declarative form it should have been able to take.
+   *
+   * `module` scope is what makes one service id answer with a different context
+   * per module: the factory is told who it is building for. Without that this
+   * would need one registration per module under one id, and every consumer
+   * filtering for its own.
+   *
+   * The *component* half of the context — configuration, properties — is not here
+   * on purpose. It differs per instance, and at construction time the instance
+   * does not exist yet; `@activate` is where it belongs, and where it is.
+   */
+  private publishModuleContext(): void {
+    // A per-module answer needs a factory, and a registry that only holds
+    // instances cannot give one. That is a legitimate minimal implementation, so
+    // the context is simply absent there rather than taking the loader down with
+    // it — `@activate(context)` still reaches every component either way
+    if (typeof this.services.bind !== 'function') return
+
+    this.services.bind<ModuleContext>(MODULE_CONTEXT_SERVICE_ID, consumer => {
+      const loadedModule = consumer === undefined ? undefined : this.modules.get(consumer)
+      if (!loadedModule) {
+        // Asked for outside any module, or before the module exists. Answering
+        // with another module's context would be worse than answering with none
+        throw new Error(
+          `${MODULE_CONTEXT_SERVICE_ID} is a per-module service; ` +
+          `${consumer === undefined ? 'nobody' : `'${consumer}'`} has no context here`
+        )
+      }
+      return this.createContext(loadedModule)
+    }, { scope: 'module', providedBy: 'tsm' })
   }
 
   /**

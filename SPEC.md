@@ -2052,6 +2052,45 @@ ist eine Lüge, die kein Compiler fängt, während ein Java-Klassenname nicht l�
 kann. Der Vertrag ist eine Datei, die einmal geschrieben und danach nur importiert
 wird — dort muss die Ehrlichkeit herkommen.
 
+### 11.4j Der Modul-Kontext als Service
+
+`@activate(context)` gibt einer Component ihren Kontext — das ist das nähere
+Gegenstück zu DS 112.5.8 und unverändert der Normalfall. Was es nicht erreicht:
+eine Klasse, deren Abhängigkeit von der Registry **konstruktioneller** Art ist.
+
+```typescript
+@component({ service: [DatasourceRepository] })
+export class Datasources implements DatasourceRepository {
+  constructor(@inject(MODULE_CONTEXT_SERVICE_ID) private readonly context: ModuleContext) {}
+
+  // zur Aufrufzeit, nicht zur Startzeit — darum braucht es der Konstruktor
+  resolve<T>(id: ServiceId<T>): T { return this.context.services.getRequired(id) }
+}
+```
+
+Ein Repository, das Bezeichner erst beim Aufruf auflöst, muss die Registry
+*halten*. Ohne diesen Service musste so eine Klasse im `activate` des Moduls von
+Hand gebaut und registriert werden — die imperative Form genau dessen, was
+`@component` deklarieren soll.
+
+Dass eine Service-ID pro Modul verschieden antwortet, leistet der
+`module`-Scope: die Factory erfährt, für wen sie baut.
+
+```typescript
+services.bind(id, consumer => buildFor(consumer), { scope: 'module' })
+```
+
+Das ist auch die Grenze dessen, was hier möglich ist: der Kontext des **Moduls**,
+nicht der der Component. Konfiguration und Service-Properties unterscheiden sich
+pro Instanz, und zur Konstruktionszeit existiert die Instanz noch nicht — die
+gehören in `@activate`, und dort sind sie.
+
+Von außerhalb eines Moduls aufgelöst, wirft der Service statt zu antworten:
+den Kontext eines fremden Moduls herauszugeben würde einen Teardown die falschen
+Registrierungen freigeben lassen. Und eine Registry, die keine Factories kennt,
+lässt ihn einfach fehlen — eine zulässige Minimalimplementierung soll den Loader
+nicht mitnehmen.
+
 ### 11.5 Konformität
 
 [`docs/CONFORMANCE.md`](docs/CONFORMANCE.md) stellt Abschnitt für Abschnitt

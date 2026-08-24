@@ -419,7 +419,7 @@ export class DefaultServiceRegistry implements IModuleScopedServiceRegistry {
    */
   bind<T>(
     id: ServiceId<T>,
-    factory: () => NoInfer<T>,
+    factory: (consumer?: string) => NoInfer<T>,
     options: {
       scope?: ServiceScope
       providedBy?: string
@@ -429,7 +429,7 @@ export class DefaultServiceRegistry implements IModuleScopedServiceRegistry {
     } = {}
   ): ServiceRegistration {
     return this.addRegistration(id, {
-      factory,
+      factory: factory as (...args: unknown[]) => unknown,
       scope: options.scope ?? 'singleton',
       providedBy: options.providedBy,
       ranking: options.ranking ?? 0,
@@ -719,7 +719,14 @@ export class DefaultServiceRegistry implements IModuleScopedServiceRegistry {
       return resolved
     })
 
-    const instance = binding.factory(...args) as T
+    // A `bind()` factory is told which module it is building for, which is the
+    // only way a `module`-scoped service can be *about* its consumer rather than
+    // merely one-per-consumer. A `bindClass()` binding takes its constructor
+    // arguments instead — `deps` is what tells the two apart, since only
+    // bindClass sets it.
+    const instance = (binding.deps === undefined
+      ? binding.factory(perConsumer)
+      : binding.factory(...args)) as T
 
     // Resolve property injections
     if (binding.propertyDeps) {

@@ -955,7 +955,12 @@ export interface ServiceRegistry {
    */
   bind<T>(
     id: ServiceId<T>,
-    factory: () => NoInfer<T>,
+    /**
+     * Builds the service. Receives the id of the module it is building for when
+     * the scope is `module` — the way a per-consumer service can be *about* its
+     * consumer instead of merely one per consumer.
+     */
+    factory: (consumer?: string) => NoInfer<T>,
     options?: {
       scope?: ServiceScope
       providedBy?: string
