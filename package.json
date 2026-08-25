@@ -1,6 +1,6 @@
 {
   "name": "@eclipse-daanse/tsm",
-  "version": "0.1.0",
+  "version": "0.1.0-next.1",
   "description": "TypeScript Module System - Runtime module loading with dependency management, lifecycle hooks, and hot reload",
   "type": "module",
   "main": "dist/index.js",
