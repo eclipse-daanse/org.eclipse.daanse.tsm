@@ -158,7 +158,7 @@ function readServices(
   }
 
   const ranking = numberValue(options.get('ranking'))
-  const shared = objectValue(options.get('properties'))
+  const shared = objectValue(options.get('properties'), source, constants, resolveImport)
   const perId = options.get('propertiesById')
   const byId = perId !== undefined && ts.isObjectLiteralExpression(perId)
     ? perId.properties
@@ -179,7 +179,7 @@ function readServices(
       && resolveKey(property.name, source, constants, resolveImport) === id
     )
     const properties = own !== undefined && ts.isPropertyAssignment(own)
-      ? objectValue(own.initializer)
+      ? objectValue(own.initializer, source, constants, resolveImport)
       : shared
 
     return { id, ...(ranking === undefined ? {} : { ranking }), ...(properties ? { properties } : {}) }
@@ -315,14 +315,20 @@ function numberValue(expression: ts.Expression | undefined): number | undefined 
 }
 
 function objectValue(
-  expression: ts.Expression | undefined
+  expression: ts.Expression | undefined,
+  source: ts.SourceFile,
+  constants: Map<string, string>,
+  resolveImport: ImportResolver
 ): Record<string, string | number | boolean> | undefined {
   if (expression === undefined || !ts.isObjectLiteralExpression(expression)) return undefined
 
   const value: Record<string, string | number | boolean> = {}
   for (const property of expression.properties) {
     if (!ts.isPropertyAssignment(property)) continue
-    const name = propertyName(property.name)
+    // Through a constant as well: a property name held in the contract module is
+    // the same practice as the service id being there, and `propertiesById`
+    // already resolved its keys that way
+    const name = resolveKey(property.name, source, constants, resolveImport)
     if (name === undefined) continue
 
     const initializer = property.initializer

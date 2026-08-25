@@ -228,3 +228,59 @@ describe('extractComponents', () => {
     expect(extractComponents(code)[0].line).toBe(3)
   })
 })
+
+describe('numbers a declaration can carry', () => {
+  it('reads a negative ranking', () => {
+    // A provider that means to lose against the default — ranking 0 — and a
+    // perfectly ordinary thing to declare
+    const [found] = extractComponents(`
+      @component({ service: ['demo.fallback'], ranking: -10 })
+      export class Fallback {}
+    `)
+
+    expect(found.services).toEqual([{ id: 'demo.fallback', ranking: -10 }])
+  })
+
+  it('reads a negative number in properties', () => {
+    const [found] = extractComponents(`
+      @component({ service: ['demo.tiles'], properties: { offset: -1, zoom: 3 } })
+      export class Tiles {}
+    `)
+
+    expect(found.services[0].properties).toEqual({ offset: -1, zoom: 3 })
+  })
+
+  it('leaves an expression it cannot evaluate out of the properties', () => {
+    // A computed value has no build-time answer, and guessing would put
+    // something in the manifest the component never declared
+    const [found] = extractComponents(`
+      @component({ service: ['demo.tiles'], properties: { computed: 1 + 1, kept: 'yes' } })
+      export class Tiles {}
+    `)
+
+    expect(found.services[0].properties).toEqual({ kept: 'yes' })
+  })
+})
+
+describe('a property key that is computed', () => {
+  it('resolves it through a constant', () => {
+    // `properties: { [KEY]: 'x' }` — the key itself comes from a constant, which
+    // is how a contract keeps its property names in one place
+    const [found] = extractComponents(`
+      const REGION = 'widget.region'
+      @component({ service: ['ui.component'], properties: { [REGION]: 'sidebar' } })
+      export class Panel {}
+    `)
+
+    expect(found.services[0].properties).toEqual({ 'widget.region': 'sidebar' })
+  })
+
+  it('leaves out a computed key it cannot read', () => {
+    const [found] = extractComponents(`
+      @component({ service: ['ui.component'], properties: { [Symbol.iterator]: 'x', kept: 1 } })
+      export class Panel {}
+    `)
+
+    expect(found.services[0].properties).toEqual({ kept: 1 })
+  })
+})
