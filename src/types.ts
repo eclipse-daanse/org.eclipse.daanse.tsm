@@ -163,8 +163,14 @@ export interface ModuleManifest {
   /** Unique module identifier */
   id: string
 
-  /** Human-readable name */
-  name: string
+  /**
+   * Human-readable name, for a listing.
+   *
+   * Optional: the loader identifies a module by its `id`. A repository index does
+   * ask for one, because a catalogue entry nobody can read is not much of an
+   * entry — `PluginRegistry` checks it for that reason, and the loader does not.
+   */
+  name?: string
 
   /** Semantic version */
   version: string
@@ -175,8 +181,15 @@ export interface ModuleManifest {
   /** URL to the module entry point (remoteEntry.js for MF) */
   entry: string
 
-  /** Exported paths and their types */
-  exports: Record<string, ModuleExport>
+  /**
+   * Exported paths and their types.
+   *
+   * The Module Federation remnant: a module contributes through `@component()`
+   * declarations and services, and needs none of this. Kept for a module that
+   * really does publish named entry points, and optional so the smallest useful
+   * manifest is an id, a version and an entry.
+   */
+  exports?: Record<string, ModuleExport>
 
   /**
    * Services this module provides to other modules
