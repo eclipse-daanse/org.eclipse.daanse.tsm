@@ -264,3 +264,39 @@ describe('ScopedServiceRegistry', () => {
     })
   })
 })
+
+describe('reads that pass straight through', () => {
+  it('reports the binding info of the shared registry', () => {
+    const shared = new DefaultServiceRegistry()
+    shared.bind('cache', () => ({}), { scope: 'module', providedBy: 'owner' })
+
+    const scope = new ScopedServiceRegistry('consumer', shared)
+
+    // Not the facade's own view: a scope does not change what a binding *is*
+    expect(scope.getBindingInfo('cache')).toEqual({ scope: 'module', providedBy: 'owner' })
+  })
+
+  it('lists every service id, not only its own', () => {
+    const shared = new DefaultServiceRegistry()
+    shared.register('somebody.elses', {})
+
+    const scope = new ScopedServiceRegistry('mine', shared)
+    scope.register('mine', {})
+
+    // Reads are shared, writes are owned — which is the whole shape of the facade
+    expect(scope.getServiceIds().sort()).toEqual(['mine', 'somebody.elses'])
+    expect(scope.getOwnServiceIds()).toEqual(['mine'])
+  })
+
+  it('refuses to wait on a registry that cannot', async () => {
+    // A custom ServiceRegistry without the observable half: the module is told
+    // rather than left hanging on a promise nothing will settle
+    const minimal = {
+      register: () => { throw new Error('unused') }
+    } as unknown as ConstructorParameters<typeof ScopedServiceRegistry>[1]
+
+    const scope = new ScopedServiceRegistry('mine', minimal)
+
+    await expect(scope.whenAvailable('never')).rejects.toThrow('does not support waiting')
+  })
+})

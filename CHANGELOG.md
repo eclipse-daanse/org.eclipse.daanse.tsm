@@ -5,12 +5,26 @@ All notable changes to the `@eclipse-daanse/tsm` package will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+While the major version is 0, a minor bump is what carries breaking changes.
 
-Implements [#18](https://github.com/eclipse-daanse/org.eclipse.daanse.tms/issues/18) for the `static` case:
-a module with an unmet `requiresService` waits instead of failing, and is torn down and rebuilt when a service
-it requires disappears and returns. Load order follows from the manifests, so a hand-ordered startup list is
-no longer needed. `policy: 'dynamic'` (staying active and being notified) is not implemented.
+## [0.1.0] — 2026-08-24
+
+The release that turns tsm from a module loader into the module and service layer it was aiming at. Measured
+against OSGi Release 8 section by section in [`docs/CONFORMANCE.md`](docs/CONFORMANCE.md): of 142 compared
+points, 73 conform, 49 differ and 20 are absent — and **every departure now carries a reason** (language,
+platform, runtime model, module cut, or a named decision). None is left standing as "not done yet".
+
+What arrived, in the order it builds on itself: **Configuration Admin** and **Metatype** (Compendium 104, 105),
+so configuration belongs to the component rather than the bundle. **Requirements and capabilities** (Core 3.3)
+with a **system bundle**, so what can run is answerable before anything loads. The **component level** — per
+component satisfaction, `@bind`/`@unbind`, factory components, collection references, conditions, and
+enable/disable — which is Declarative Services 112 covered but for what rests on a class loader. **Features**
+(Compendium 159), the document that answers "which modules, in which versions, with which configuration".
+And the two seams that make separately built bundles hold together: **typed service ids** and a **bundle
+boundary** the build enforces.
+
+Every issue filed against the package is closed:
+[#17](https://github.com/eclipse-daanse/org.eclipse.daanse.tms/issues/17)–[#24](https://github.com/eclipse-daanse/org.eclipse.daanse.tms/issues/24).
 
 ### Fixed
 
@@ -258,18 +272,115 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
   runtime. `ServiceRegistryEvent` and `ServiceRegistryListener` moved to `types.ts` (re-exported from
   `ServiceRegistry.ts`) and are exported from the package root.
 
+#### Factory components ([DS 112.2.4](docs/CONFORMANCE.md))
+
+`@component({ factory: 'editor' })` registers a `ComponentFactory` instead of the component's own services;
+every `newInstance(properties)` builds one instance with those values. Not to be confused with a factory
+*configuration*, which tsm already had — the difference is who decides there should be another one. A factory
+configuration is data, so a UI or a stored file creates instances; a factory component is a call, so code does.
+"One editor per open tab" is something only the code that opens tabs can know.
+
+The factory follows satisfaction: with a mandatory reference missing it is withdrawn, because nobody should be
+able to ask for an instance of something that cannot run. When the reference returns the factory does, but the
+instances do not — those belonged to whoever asked for them.
+
+#### Collection references and the field option ([DS 112.3.9](docs/CONFORMANCE.md))
+
+`@injectAll(id, { target, fieldOption })` puts cardinality 0..n on a field and keeps it current while the
+component runs — a provider arriving or leaving changes the collection without a rebuild. An empty collection
+satisfies 0..n, so it never blocks.
+
+`fieldOption: 'update'` mutates the array the component holds instead of assigning a new one. Its identity
+survives, which is what a reactive view bound to it needs: with `replace`, a template holding the old array
+never sees the change. `update` asks for the field to be initialised (`= []`); without an array to mutate the
+loader says so and assigns. Nothing is assigned when nothing changed, or an unrelated registry event would
+make a view re-render.
+
+#### Conditions ([DS 112.3.13](docs/CONFORMANCE.md))
+
+A condition is a service with no behaviour — only the statement that something is the case.
+`@component({ satisfyingCondition: conditionFilter('data.loaded') })` waits for one, and
+`context.services.register(CONDITION_SERVICE_ID, TRUE_CONDITION, { properties: conditionProperties('data.loaded') })`
+makes it hold. Neither side knows about the other, which is the point over depending on a service by name.
+
+Treated as one more mandatory reference, as DS models it, so everything that already waits for a reference
+waits for this too. `condition.id=true` is always registered, so a filter has a baseline to be written against.
+
+#### Targeted PIDs ([CM 104.3.2](docs/CONFORMANCE.md))
+
+`pid|moduleId|version` configures a PID for one module, or for one version of it. The lookup runs from the most
+specific to the least, and the first configuration **with values** wins — an empty entry does not end the
+search, because `getConfiguration()` creates those and one of them must not shadow a configuration that has
+values. What it buys is a rollout: the new version gets its own configuration while the old one keeps running
+on the untargeted one. OSGi's `location` segment has no counterpart; a module has no install location.
+
+#### Filtering listeners and `modified-endmatch` ([Core 5.6.1](docs/CONFORMANCE.md))
+
+`addListener(listener, { filter })` narrows what a listener hears — and, uniquely, tells it when a service
+*stops* matching. That is the whole reason to filter there rather than in the callback: a listener testing
+properties itself never learns that a service it had accepted no longer qualifies, so whatever it collected
+goes stale in silence.
+
 ### Changed — BREAKING
+
+Seven of these change *behaviour* rather than types, so a build that still compiles can still behave
+differently. They are listed first.
+
+- **A tie in ranking now goes to the earlier registration.** OSGi is explicit — "ties give a preference to the
+  earlier registrant" (Core 5.2.5) — and tsm did the opposite. The reason it is worth matching: with the later
+  one winning, merely loading another module displaces a running provider, so which service answers depends on
+  load order. A provider that means to win says so with a ranking. **What to check:** anywhere two providers of
+  one id share a ranking, the selection reverses. `getServiceReferences()` and `getServices()` order the same
+  way, so a collection sees the reversal too.
+- **An outranked registration now raises events.** Registering or withdrawing a provider that is not the
+  visible one used to be silent, because `get(id)` answered with the same object either way. But
+  `countProviders` had changed, and a collection reference consumes every provider — cardinality 0..n went
+  stale in silence. Both directions notify now, as OSGi raises REGISTERED and UNREGISTERING per registration.
+  **What to check:** a listener counting `registered`/`unregistered` events per id will see more of them.
+- **A `default` export no longer wins over a contributing namespace.** Entry resolution preferred
+  `module.default ?? module`. A library bundle may carry a genuine default export for its consumers, and taking
+  it as the container hid the `activate`/`deactivate` — or the `@component()` classes — exported next to it: the
+  module counted as active while contributing nothing. The namespace wins whenever it exports a lifecycle or a
+  component; `default` stands in only for default-export-style modules.
+- **The entry import no longer passes through a bundler transform.** A dev server rewriting the call gives the
+  entry its own URL (vite appends `?import`), and a different URL is a different module instance — the loader
+  activated one while every bare import through an import map read another. The fetch goes through a
+  Function-wrapped native import instead, so module identity stays URL identity.
+- **`tsmPlugin({ boundary })` fails builds that used to pass.** A file pulled in from outside the bundle is now
+  an error, and always an error rather than a warning under `strict: false`: an undeclared dependency costs a
+  needless module load, a file copied across a boundary is structurally wrong. Enabled when the manifest is
+  given as a path; `boundary.allow` is where an exception is written down, and the contract module is what
+  belongs there. **What to check:** in a monorepo this typically surfaces framework or contract code that was
+  being copied into every bundle.
 
 - **An unmet service requirement no longer throws.** The module is parked in `unsatisfied` and activated when
   the service appears. Code that relied on the rejection needs `strictRequirements: true`.
 - **`context.services` is a module-scoped facade, not the shared registry.** It implements `ServiceRegistry`,
   so module code compiles unchanged, but registrations made through it are withdrawn when the module is
   deactivated. A module that deliberately outlived its own services no longer can.
+
+Type-level changes:
+
+- **`register`, `bind` and `bindClass` bind the value's type to the id.** With a `ServiceId<T>` the id decides
+  the contract and the value has to conform (`NoInfer<T>`); registering something else is now a compile error
+  where it used to infer a union. A plain string id is unaffected — the brand is optional, so every existing
+  call still typechecks.
+- **`ServiceScope` gained `'module'`.** `'singleton' | 'transient'` is now a named type with a third member,
+  which affects code matching on the union exhaustively.
+- **`ServiceRegistryEvent.type` gained `'modified-endmatch'`**, and the event carries an optional `properties`.
+  A `switch` over the union that was exhaustive no longer is.
+- **`ComponentInfo` gained `collections`** (required) plus `satisfyingCondition` and `factory` (optional).
+  Reading it is unaffected; code *constructing* one — a test double, say — needs the new field.
+- **`ComponentOptions.service` is `readonly`** and accepts `ServiceId<unknown>`. Assigning the array elsewhere
+  as `string[]` needs a copy.
 - **`ModuleContext.services` is typed `ObservableServiceRegistry`**, not `ServiceRegistry`. Module code that
   only consumes the context is unaffected; a hand-written `ModuleContext` (in tests, say) needs the two
   listener methods.
 - `ModuleState` and `ModuleEvent.type` each gained values (`'unsatisfied'`, plus `'service-withdrawn'`), which
   affects consumers handling those unions exhaustively in a `switch`.
+- **`verbatimModuleSyntax` is on for the package's own build.** Not part of the published API, but a consumer
+  copying the tsconfig gets stricter import syntax with it.
+
 
 ### Changed
 
@@ -370,6 +481,20 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
 - `getAll(pattern)` is **deprecated**. It matches ID *names* with a wildcard and sees only services already
   instantiated, so a lazily bound provider is invisible until someone resolves it. Collect providers with
   `getServiceReferences(id, target?)` and select on properties instead of naming conventions.
+
+#### A component's declaration read through constants
+
+The build-time scan resolves a service id held in a constant from **another package** — the API bundle, where a
+contract belongs — and reads it through an identity call it knows by name (`serviceId`, `Symbol.for`) as well as
+through `as const` / `satisfies`. Both halves are needed: a typed id is a call, not a literal, so without the
+second the declaration silently lost its `provides` entry.
+
+`node_modules` is walked by hand rather than through a resolver, because the scan is synchronous and
+`import.meta.resolve` does not exist under Vite. The `types` condition is tried first — a workspace API package
+usually points at its TypeScript source, and built output is no use before it is built.
+
+Property keys resolve through constants too, in `properties` as well as `propertiesById`, so a property name
+can live in the contract module alongside the service id.
 
 ### Documentation
 
@@ -576,3 +701,12 @@ no longer needed. `policy: 'dynamic'` (staying active and being notified) is not
 - **Invalidation reaches `bindClass()` only.** What a hand-written `bind()` factory pulls from the registry is
   invisible to it, so such an instance keeps the old service; the same is true for a reference captured in
   module code. `policy: 'dynamic'` reports the change, dropping the reference stays the module's job.
+- **A service id can lie about its type.** `serviceId<Widget>('demo.tiles')` is a mismatch no compiler can
+  catch, where a Java class name cannot lie. The contract is one file, written once and imported thereafter,
+  which is where the honesty has to come from.
+- **SCR cannot be stopped or swapped.** The loader is framework and service component runtime in one object, so
+  "stop all components, leave the bundles running" exists only per component, through `disableComponent()`.
+  Introspection *is* a service (`tsm.component.runtime`), so a component view can still be a module.
+- **What rests on a class loader has no counterpart**, and will not: package wiring, `uses` constraints, class
+  space consistency, fragments, refresh, multiple versions of one module at runtime. ES modules resolve their
+  own imports. `docs/CONFORMANCE.md` names each one.
