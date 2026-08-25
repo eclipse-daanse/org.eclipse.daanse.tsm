@@ -505,7 +505,23 @@ usually points at its TypeScript source, and built output is no use before it is
 Property keys resolve through constants too, in `properties` as well as `propertiesById`, so a property name
 can live in the contract module alongside the service id.
 
+#### Manifest: `name` and `exports` are optional
+
+The smallest useful manifest is an id, a version and an entry. `exports` is the Module Federation remnant — a
+module contributes through `@component()` declarations and services and needs none of it, and the loader already
+read it as optional. `name` is for a listing; a repository index still asks for one, because a catalogue entry
+nobody can read is not much of an entry, but the loader identifies a module by its id.
+
+Found by testing the README's quick start instead of eyeballing it: the shortest manifest anyone would write
+did not typecheck.
+
 ### Documentation
+
+- **The README was rewritten.** Its quick start did not compile — `new ServiceRegistry()` on a type that has no
+  constructor, and a loader option named `services` that never existed — and its feature list predated
+  configuration, capabilities, components and features. The new one leads with the shortest thing that works and
+  is **executed by a test** (`readmeQuickStart.test.ts`), so it cannot rot the same way. Every command, script,
+  subpath and devtools name in it was checked against the code.
 
 - **New subpath export `@eclipse-daanse/tsm/decorators`** — just the decorators and their metadata. A
   separately built module needs them at runtime, and importing the package root would pull the whole loader

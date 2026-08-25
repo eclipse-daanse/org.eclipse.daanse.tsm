@@ -1,230 +1,160 @@
-# TSM - TypeScript Module System
+# TSM — TypeScript Module System
 
-Runtime module loading system for TypeScript/JavaScript applications. Enables dynamic plugin architectures with dependency management, service injection, lifecycle hooks, and hot reload capabilities.
+A module and service layer for TypeScript applications: separately built bundles that find each other at
+runtime through services rather than imports, with a lifecycle, configuration, and a resolution that can say
+what will run before anything loads.
 
-## Features
-
-- **Dynamic Module Loading** - Load modules at runtime via HTTP or dynamic imports
-- **Dependency Injection** - Built-in service registry with singleton and transient scopes
-- **Lifecycle Management** - `activate()` and `deactivate()` hooks for modules
-- **Dependency Resolution** - Automatic resolution with SemVer support and cycle detection
-- **Plugin Discovery** - Discover and install plugins from remote repositories
-- **Shared Libraries** - Global `__tsm__` runtime for shared dependencies (e.g. Vue, PrimeVue)
-- **Hot Reload** - Live module reloading during development
-- **Vite Plugin** - First-class Vite integration for building plugins
-
-## Installation
+The model is OSGi's, translated rather than copied — `docs/CONFORMANCE.md` compares it section by section
+against Release 8 and gives a reason for every departure.
 
 ```bash
 npm install @eclipse-daanse/tsm
 ```
 
-## Quick Start
+## The shortest thing that works
 
-### Host Application
+A host that loads one module, and a module that provides one service. Neither imports the other.
 
 ```typescript
-import { ModuleLoader, ServiceRegistry, initTsmRuntime } from '@eclipse-daanse/tsm'
+// contracts.ts — the string appears once, here, next to the type it stands for
+import { serviceId } from '@eclipse-daanse/tsm'
 
-// Set up shared libraries
-const tsm = initTsmRuntime()
-tsm.register('vue', Vue, '3.4.21')
+export interface Greeter { greet(name: string): string }
+export const Greeter = serviceId<Greeter>('demo.greeter')
+```
 
-// Create module loader
-const services = new ServiceRegistry()
-const loader = new ModuleLoader({ services })
+```typescript
+// modules/polite.ts — a module. `@component` is the whole declaration
+import { component } from '@eclipse-daanse/tsm/decorators'
+import { Greeter } from '../contracts.js'
 
-// Load a plugin
-await loader.register({
-  id: 'my-plugin',
-  name: 'My Plugin',
+@component({ service: [Greeter] })
+export class Polite implements Greeter {
+  greet(name: string): string { return `Good day, ${name}.` }
+}
+```
+
+```typescript
+// host.ts
+import 'reflect-metadata'
+import { ModuleLoader } from '@eclipse-daanse/tsm'
+import { Greeter } from './contracts.js'
+
+const loader = new ModuleLoader()
+
+loader.register([{
+  id: 'polite',
   version: '1.0.0',
-  entry: '/plugins/my-plugin/index.js'
-})
+  entry: '/modules/polite.js',
+  provides: [{ id: 'demo.greeter' }]
+}])
 
 await loader.loadAll()
+
+// The type follows from the id — no type argument, no cast
+console.log(loader.getServiceRegistry().getRequired(Greeter).greet('world'))
 ```
 
-### Plugin
+`reflect-metadata` is imported once by the host; decorators need it. The `provides` entry lets the resolution
+answer questions before the module is fetched — write it by hand, or let the Vite plugin derive it from the
+`@component()` declarations.
 
-```typescript
-// manifest.json
-{
-  "id": "my-plugin",
-  "name": "My Plugin",
-  "version": "1.0.0",
-  "entry": "index.js",
-  "provides": [
-    { "id": "my-plugin.service", "scope": "singleton" }
-  ],
-  "sharedDependencies": [
-    { "id": "vue", "versionRange": "^3.4.0" }
-  ]
-}
-```
+## The pieces
 
-```typescript
-// index.ts
-import { ref } from 'tsm:vue'
+**Modules** are described by a manifest: an id, a version, an entry, and what it needs and offers. They are
+loaded in dependency order, and a module whose requirements are unmet waits in `unsatisfied` instead of
+failing — it starts when they arrive.
 
-export function activate(context) {
-  // Plugin initialization
-}
+**Services** are how modules reach each other. A service id is a string, so it can live in a manifest, in a
+target filter, and in a capability; `serviceId<T>()` ties that string to the contract it stands for, so a
+consumer imports one name and a mismatch is a compile error.
 
-export function deactivate() {
-  // Cleanup
-}
-```
+**Components** are classes the loader manages. `@component({ service: [...] })` registers one and runs its
+lifecycle; it waits for its own references without stopping its module, takes configuration by PID, and can be
+switched off on its own. `@activate`, `@deactivate`, `@modified`, `@bind`/`@unbind`, `@injectAll`.
 
-### Vite Plugin (for building plugins)
+**Configuration** belongs to the component, not the bundle. A PID decides whether a component runs, how many
+instances exist, and what their services publish.
 
-```typescript
-// vite.config.ts
-import { tsmPlugin, createTsmExternals } from '@eclipse-daanse/tsm/vite'
-import manifest from './manifest.json'
+**Requirements and capabilities** make the resolution answerable before anything loads: which modules could
+run, which wait, and which wait in vain.
 
-export default defineConfig({
-  plugins: [
-    // The manifest decides what is shared, and the build is failed if a shared
-    // package is bundled anyway — which would give the module its own copy
-    tsmPlugin({ manifest, sharedModules: ['vue', 'primevue'] })
-  ],
-  build: {
-    rollupOptions: {
-      external: createTsmExternals(manifest)
-    }
-  }
-})
-```
+**Features** bundle modules and their configuration into one versioned document — the answer to "which
+modules, in which versions, with which configuration".
 
-## Module Lifecycle
+## Where to read on
 
-```
-registered → resolving → loading → activating → active → deactivating → stopped
-```
-
-## Components
-
-A class can declare what it offers, instead of a module registering it by hand:
-
-```typescript
-import { component, activate, deactivate, inject } from '@eclipse-daanse/tsm'
-
-@component({ service: ['ui.component'], properties: { region: 'main' } })
-export class ClockView {
-  constructor(@inject('metrics', { optional: true }) private metrics?: Metrics) {}
-
-  @activate() start(): void { /* runs when the module activates */ }
-  @deactivate() stop(): void { /* runs when it stops */ }
-}
-```
-
-The class must be `export`ed — the loader looks for components in the module's
-namespace, so one that is not exported is never registered and nothing at runtime
-can report why; `tsmPlugin({ components: 'validate' })` catches it at build time.
-
-The loader registers the class under the declared service ids and runs its
-lifecycle — the module needs no `activate` export for it, and `provides` in the
-manifest becomes optional because the declaration is the registration.
-
-A component with an `@activate` method is created when its module activates (an
-*immediate* component in DS terms); without one it is created on first
-resolution (*delayed*). An `async` activate method is awaited.
-
-An imperative `activate` export still works and runs first, so it can prepare
-what a component gets injected.
-
-## Decorators
-
-```typescript
-import { injectable, inject, singleton } from '@eclipse-daanse/tsm'
-
-@injectable()
-@singleton()
-class MyService {
-  @inject('logger.service')
-  private logger!: Logger
-}
-```
-
-## API
-
-| Class | Description |
-|-------|-------------|
-| `ModuleLoader` | Core loader - register, load, unload, reload modules |
-| `PluginRegistry` | Discover plugins from repositories, check for updates |
-| `DependencyResolver` | Resolve dependencies, detect cycles, validate versions |
-| `ServiceRegistry` | Dependency injection container |
-| `TsmRuntime` | Global shared library management (`__tsm__`) |
-
-### Subpath exports
-
-| Import | Description |
-|--------|-------------|
-| `@eclipse-daanse/tsm/vite` | Vite plugin: `tsm:` import transform, manifest validation |
-| `@eclipse-daanse/tsm/devtools` | Console commands for inspecting a running application |
-
-## DevTools
-
-```typescript
-import { installDevtools } from '@eclipse-daanse/tsm/devtools'
-
-installDevtools({ loader, registry, resolver, runtime })
-// in the browser console:
-//   tsm.help()
-//   tsm.modules()        every known module with its state
-//   tsm.unsatisfied()    what is waiting, and for what
-//   tsm.providers('ui.layout')   every registration, best first
-//   tsm.consumers('ui.layout')   which modules asked for it
-//   tsm.disable('heavy-module')  stop it and keep it stopped
-```
-
-`loader` is required, the rest is optional — a command whose collaborator is
-missing says so instead of failing. By default the commands are installed on
-`globalThis.tsm`; `target` and `name` change that, `target: null` installs
-nowhere and only returns the object.
-
-Output goes through a sink, so the commands are usable outside a browser:
-
-```typescript
-import { installDevtools, collectingOutput } from '@eclipse-daanse/tsm/devtools'
-
-const out = collectingOutput()
-installDevtools({ loader, target: null, output: out }).unsatisfied()
-console.log(out.text())
-```
-
-To ship them as a module instead of wiring them in the host, a three-line
-`activate` is enough:
-
-```typescript
-export function activate(context: ModuleContext) {
-  installDevtools({ loader: context.services.getRequired('tsm.loader') })
-}
-```
+| | |
+|---|---|
+| [`SPEC.md`](SPEC.md) | The specification: every concept, with the reasoning. German. |
+| [`docs/CONFORMANCE.md`](docs/CONFORMANCE.md) | Against OSGi Release 8, section by section, with a reason for each departure |
+| [`CHANGELOG.md`](CHANGELOG.md) | What changed, and which changes break something |
+| [`examples/`](examples) | Six runnable examples, each about one thing |
 
 ## Examples
 
-| Path | Shows |
-|------|-------|
-| [`examples/whiteboard`](examples/whiteboard) | Satisfaction, `0..n` collection, ranking, dynamic requirements, devtools — no framework, no build step (`npm run example:whiteboard`) |
-| [`examples/wiring`](examples/wiring) | Requirements and capabilities (Core 3.3): the resolution computed from manifests alone, showing what could run before anything is loaded — and telling a module that waits from one that waits in vain (`npm run example:wiring`) |
-| [`examples/config`](examples/config) | Configuration bound to components: a PID decides whether a component runs, how many instances exist, and what its services publish — with `@modified()` shown against a rebuild side by side (`npm run example:config`) |
-| [`examples/editors`](examples/editors) | Beyond one instance per bundle: a condition decides when anything starts, a factory component gives one editor per file, a collection shows what the field option changes, and every bundle gets its own undo stack (`npm run example:editors`) |
-| [`examples/graph`](examples/graph) | The three layers drawn live from the loader: bundles, their components, the services between them, changing as bundles load and unload (`npm run example:graph`) |
-| [`examples/workbench`](examples/workbench) | Seven separately built bundles, discovered at runtime: `@component` declarations, a generated `provides`, regions that collect, slots that compete, views coming and going (`npm run example:workbench:build && npm run example:workbench`) |
-| [`examples/shared-libraries`](examples/shared-libraries) | Host-provided Vue and PrimeVue via `__tsm__`, with separate plugin builds |
+Each one is a small application, not a snippet. `npm run example:<name>`.
+
+| | |
+|---|---|
+| `whiteboard` | Satisfaction, `0..n` collections, ranking, dynamic requirements — no framework, no build step |
+| `config` | Configuration bound to components: a PID deciding whether one runs and how many exist |
+| `editors` | Beyond one instance per bundle: conditions, factory components, the field option, per-module services |
+| `wiring` | The resolution computed from manifests alone, before anything is loaded |
+| `graph` | Bundles, components and the services between them, drawn live from the loader |
+| `workbench` | Seven separately built bundles, discovered at runtime |
+
+## DevTools
+
+`installDevtools({ loader })` puts a `tsm` object on the console: `modules()`, `services()`, `components()`,
+`factories()`, `conditions()`, `wiring(id)`, `unresolved()`, `config(pid)`, `feature(json)`, and more —
+`tsm.help()` lists them. They go through the registry rather than the loader, so a component view can be a
+module rather than living in the host.
+
+## Building modules
+
+The Vite plugin derives what the manifest would otherwise repeat, and checks what it cannot derive:
+
+```typescript
+import { tsmPlugin, createTsmExternals } from '@eclipse-daanse/tsm/vite'
+
+export default defineConfig({
+  plugins: [tsmPlugin({
+    manifest: resolve(__dirname, 'manifest.json'),
+    components: 'derive',      // `provides` from the @component() declarations
+    dependencies: 'derive',    // `dependencies` from the imports actually present
+    boundary: { allow: ['../contracts.ts'] }
+  })],
+  build: { rollupOptions: { external: createTsmExternals(manifest) } }
+})
+```
+
+`boundary` is the one that will fail a build that used to pass: ES modules have no class loader, so a relative
+path into another bundle's sources compiles and copies that bundle's code in, with nothing in the manifest to
+show it. What may cross the boundary has to be named.
+
+## Subpath exports
+
+| | |
+|---|---|
+| `@eclipse-daanse/tsm` | Loader, registry, services, features, capabilities |
+| `@eclipse-daanse/tsm/decorators` | `@component`, `@activate`, `@inject`, `@injectAll`, … |
+| `@eclipse-daanse/tsm/vite` | `tsmPlugin`, `createTsmExternals` |
+| `@eclipse-daanse/tsm/devtools` | `installDevtools` |
+
+Modules import the decorators subpath rather than the root where they can: it carries no loader.
 
 ## Development
 
 ```bash
-npm install        # Install dependencies
-npm run build      # Build the library
-npm run test:run   # Run tests
-npm run dev        # Watch mode
-npm run demo       # Start demo app on port 3000
+npm run build              # tsc
+npm run test:run           # 1282 tests
+npm run lint
+npm run typecheck:examples # the examples are typechecked too
+npm run typecheck:types    # type-level assertions in *.test-d.ts
+npm run docs:osgi          # fetch the OSGi specifications to read along
 ```
 
 ## License
 
-MIT
+EPL-2.0
