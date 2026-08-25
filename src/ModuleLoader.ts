@@ -204,6 +204,14 @@ interface ComponentInstance {
    * not what this instance already has.
    */
   bound: Set<string>
+  /**
+   * Set when its `@activate` threw.
+   *
+   * The instance was discarded and its services withdrawn, so it is neither
+   * active nor waiting for anything: it failed, and saying which of the three it
+   * is matters to whoever has to find out why.
+   */
+  failed?: unknown
 }
 
 /** What a component's configuration amounts to for one instance of it */
@@ -1127,9 +1135,11 @@ export class ModuleLoader {
     const configurations: ComponentConfigurationInfo[] = [...runtime.instances.values()]
       .map(instance => ({
         pid: instance.pid,
-        state: instance.instance !== undefined || this.isInstantiated(instance)
-          ? 'active' as const
-          : 'satisfied' as const,
+        state: instance.failed !== undefined
+          ? 'failed-activation' as const
+          : instance.instance !== undefined || this.isInstantiated(instance)
+            ? 'active' as const
+            : 'satisfied' as const,
         properties: instance.properties
       }))
 
@@ -2294,7 +2304,25 @@ export class ModuleLoader {
     await this.bindAvailable(loadedModule, runtime, instance)
 
     if (activateMethod !== undefined) {
-      await this.callComponentMethod(loadedModule, runtime, instance, activateMethod)
+      try {
+        await this.callComponentMethod(loadedModule, runtime, instance, activateMethod)
+      } catch (error) {
+        // DS 112.5.8: the component configuration is not activated and is
+        // discarded — this one, and nothing else. The module keeps running and so
+        // do its other components, which is what stops one broken plugin from
+        // taking an application with it.
+        // Its services go with it: a registration whose object never finished
+        // starting would hand consumers a half-initialised thing
+        this.logger.error(
+          `@activate of ${runtime.className} in ${loadedModule.manifest.id} threw, ` +
+          `so the component is discarded:`,
+          error
+        )
+        instance.failed = error
+        instance.instance = undefined
+        instance.registration?.unregister()
+        instance.registration = undefined
+      }
     }
   }
 

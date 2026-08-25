@@ -558,3 +558,102 @@ describe('declarative components', () => {
     })
   })
 })
+
+describe('a component whose activation fails', () => {
+  it('should be discarded without taking the module with it', async () => {
+    // DS 112.5.8: the component configuration is not activated and is discarded —
+    // this one, and nothing else. What keeps one broken plugin from taking an
+    // application with it
+    const started = vi.fn()
+
+    @component({ service: ['broken.service'] })
+    class Broken {
+      @activate() start(): void { throw new Error('boom') }
+    }
+
+    @component({ service: ['fine.service'] })
+    class Fine {
+      @activate() start(): void { started() }
+    }
+
+    const loader = testLoader()
+    containers.mixed3 = { Broken, Fine }
+
+    const loaded = await loader.loadModule(manifest('mixed3'))
+
+    expect(loaded.state).toBe('active')
+    expect(started).toHaveBeenCalledOnce()
+  })
+
+  it('should withdraw the services of the component that failed', async () => {
+    @component({ service: ['broken.service'] })
+    class Broken {
+      @activate() start(): void { throw new Error('boom') }
+    }
+
+    const loader = testLoader()
+    containers.broken = { Broken }
+    await loader.loadModule(manifest('broken'))
+
+    // A registration whose object never finished starting would hand consumers a
+    // half-initialised thing
+    expect(loader.getServiceRegistry().has('broken.service')).toBe(false)
+  })
+
+  it('should report it as failed rather than as waiting', async () => {
+    @component({ service: ['broken.service'] })
+    class Broken {
+      @activate() start(): void { throw new Error('boom') }
+    }
+
+    const loader = testLoader()
+    containers.broken2 = { Broken }
+    await loader.loadModule(manifest('broken2'))
+
+    // Neither active nor unsatisfied: it failed, and which of the three it is
+    // matters to whoever has to find out why
+    expect(loader.getComponents('broken2')[0].configurations[0].state)
+      .toBe('failed-activation')
+  })
+
+  it('should log the error it was given', async () => {
+    const error = vi.fn()
+    const loader = testLoader({
+      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error }
+    })
+
+    @component()
+    class Broken {
+      @activate() start(): void { throw new Error('boom') }
+    }
+
+    containers.broken3 = { Broken }
+    await loader.loadModule(manifest('broken3'))
+
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining('@activate of Broken'),
+      expect.any(Error)
+    )
+  })
+
+  it('should leave a later component of the same module running', async () => {
+    // Registration happens for every component before any is activated, so the
+    // failure has to come after the others are already registered
+    const loader = testLoader()
+
+    @component({ service: ['a.service'] })
+    class Broken {
+      @activate() start(): void { throw new Error('boom') }
+    }
+    @component({ service: ['b.service'] })
+    class Later {
+      @activate() start(): void {}
+    }
+
+    containers.order = { Broken, Later }
+    await loader.loadModule(manifest('order'))
+
+    expect(loader.getServiceRegistry().has('a.service')).toBe(false)
+    expect(loader.getServiceRegistry().has('b.service')).toBe(true)
+  })
+})

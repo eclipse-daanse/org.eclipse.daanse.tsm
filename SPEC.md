@@ -979,25 +979,58 @@ context.services.register('editor.extensions', {
 
 ## 9. Fehlende Features / Roadmap
 
-### 9.1 Kritisch (v0.2.0)
+### 9.1 Erledigt, teils unter anderem Namen
 
-- [ ] **Permissions-System**: Module sollen deklarieren welche APIs sie nutzen
-- [ ] **Sandbox-Isolation**: Optional isolierte Ausführung für untrusted Plugins
-- [ ] **Error Boundaries**: Fehler in Plugins sollten Host nicht crashen
+- [x] **Config-System**: Konfiguration pro Component über PIDs — Configuration Admin
+      und Metatype (§11.3, §11.4)
+- [x] **Extension Points**: das Whiteboard-Muster ist das formale System. Eine
+      Extension ist ein Service mit Properties, ein Extension Point eine
+      Collection-Referenz darauf (§11.4c) — mit Ranking, Target-Filtern und
+      Auflösung vor dem Laden. Ein zweites Konstrukt daneben wäre eines zu viel.
+- [x] **Error Boundaries**: eine Component, deren `@activate` wirft, wird
+      verworfen; ihr Modul und ihre Geschwister laufen weiter (DS 112.5.8). Ein
+      fehlerhaftes `@deactivate` hält die Abmeldung nicht auf, und ein werfender
+      Listener nimmt die anderen nicht mit.
+- [x] **DevTools**: als Konsolen-Kommandos statt als Browser-Extension —
+      `tsm.help()`. Sie gehen über `tsm.component.runtime`, könnten also selbst
+      ein Modul sein (§11.4g).
+- [x] **Lazy Loading** *auf Component-Ebene*: eine delayed Component entsteht bei
+      der ersten Auflösung, nicht beim Start ihres Moduls. Module lazy zu laden
+      gibt es nicht — siehe unten.
 
-### 9.2 Wichtig (v0.3.0)
+### 9.2 Offen, mit Begründung
 
-- [ ] **Extension Points**: Formales System für Plugin-Erweiterungen
-- [x] **Config-System**: Konfiguration pro Component über PIDs (§11.3)
-- [ ] **Lazy Loading**: Module erst laden wenn benötigt
-- [ ] **Preloading**: Wichtige Module im Hintergrund vorladen
+- [ ] **Permissions-System**: Module sollen deklarieren, welche APIs sie nutzen.
+      Die Deklaration wäre heute leicht (`requirements` mit eigenem Namespace, wie
+      Core 3.3 es vorsieht) — was fehlt, ist die Durchsetzung: im Browser gibt es
+      keine Grenze zwischen Modulen, hinter der man etwas verweigern könnte.
+      Deklaration ohne Durchsetzung ist Dokumentation, und die gibt es schon.
+- [ ] **Sandbox-Isolation**: dieselbe Grenze, härter. Mit dem Wegfall von
+      `window` und dem Übergang auf Import Maps hat sich die Frage verschoben:
+      ein Modul in einem Worker oder Realm könnte isoliert laufen, aber die
+      Service-Registry lebt von geteilten Objektreferenzen. Was über eine
+      Realm-Grenze geht, ist serialisierbar — das wäre ein anderes Service-Modell,
+      nicht eine Option an diesem.
+- [ ] **Lazy Loading von Modulen**: `resolveWiring()` sagt schon vor dem Laden, was
+      laufen könnte, also wäre „erst laden, wenn ein Service gebraucht wird"
+      ausdrückbar. Offen ist, was den Bedarf auslöst: ein `get()` auf eine ID, die
+      niemand registriert hat, kann nicht warten, ohne asynchron zu werden.
+- [ ] **Preloading**: braucht Lazy Loading, um überhaupt einen Unterschied zu
+      machen.
+- [ ] **Metrics**: Zeit in `@activate`, Zahl der Auflösungen pro Service. Klein,
+      und bisher hat es niemand gebraucht.
 
-### 9.3 Nice-to-Have (v1.0.0)
+### 9.3 Bewusst nicht
 
-- [ ] **DevTools**: Browser-Extension für Debugging
-- [ ] **Metrics**: Performance-Monitoring für Module
-- [ ] **A/B Testing**: Verschiedene Versionen parallel testen
-- [ ] **Rollback**: Automatisches Rollback bei Fehlern
+- **A/B Testing über parallele Versionen**: zwei Versionen eines Moduls
+  gleichzeitig setzen zwei Klassenräume voraus (Core 3.6). ES-Module geben keine
+  Isolation, an der eine zweite Version hängen könnte. Zwei *Anbieter* eines
+  Service mit unterschiedlichem Ranking und Target-Filtern lösen den praktischen
+  Fall.
+- **Automatisches Rollback bei Fehlern**: was ein fehlgeschlagener Start
+  hinterlassen soll, weiß nur die Anwendung. Ein Feature (§11.4h) ist entweder
+  installiert oder nicht — das ist die Stelle für Alles-oder-nichts, und dort ist
+  es implementiert.
 
 ### 9.4 Bekannte Limitierungen
 

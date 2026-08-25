@@ -23,7 +23,7 @@ The **Art** column says what kind of difference it is:
 | **Sprache** | follows from TypeScript instead of Java, and would be wrong to copy |
 | **Plattform** | follows from the browser instead of a JVM |
 | **Laufzeit** | follows from asynchronous module loading |
-| **Modell** | follows from the loader being framework and SCR in one |
+| **Modell** | follows from how tsm is cut: the loader is framework and SCR in one, and identifiers are npm's rather than Maven's |
 | **Absicht** | deliberately left out or done differently; the reason is in `SPEC.md` |
 | **Lücke** | missing without a reason of principle — buildable. No row carries this any more |
 
@@ -48,11 +48,11 @@ The **Art** column says what kind of difference it is:
 | 5.3 | Service Scope | `singleton`, `module`, `transient` | ✅ | `module` is OSGi's `bundle` scope under the name tsm uses for a bundle; a service's own references resolve for the module that provides it |
 | 5.4.1 | Getting a Single Service Object | `get(id)` | ✅ | |
 | 5.4.2 | Getting Multiple Service Objects | `transient` hands out a new instance per resolution | ◐ | Sprache — as 5.5: several objects are had by resolving several times, but there is no handle to release one, because GC needs none |
-| 5.5 | Releasing Service Objects | nothing to release | ◐ | Sprache — reference counting exists because Java has no GC boundary here; the cost is that a transient service is never told it is done with |
+| 5.5 | Releasing Service Objects | a `module`-scoped instance is released with its module, and told through `dispose()` | ◐ | Sprache — no reference counting: it exists because Java has no GC boundary here. A `module`-scoped service *is* told it is done with, since its module going is the moment; a `transient` one never is, because nothing knows when the last holder let go |
 | 5.6.1 | Service Event Types | `registered`, `updated`, `unregistered`, `modified-endmatch` | ✅ | a listener may be added with a filter, which is what makes the end of a match observable |
 | 5.7 | Stale References | `invalidateInjectors` discards singletons built with a service that changed | ◐ | Sprache — mitigated, not guaranteed: a module holding a reference keeps the object alive, and nothing can revoke it the way an unregistered Java service can be made to throw |
 | 5.8 | Filters | `serviceFilter.ts`, checked against Felix `FilterImpl` and its TCK | ✅ | |
-| 5.9 | Service Factory | `module` scope: one instance per consuming module, built on its first resolution | ◐ | Sprache — the semantics are 5.3's `module` scope; what is absent is the `getService(bundle, registration)` callback shape, since the factory needs no argument to be given a consumer |
+| 5.9 | Service Factory | `bind(id, consumer => …, { scope: 'module' })`: the factory is told which module it builds for, so it can hand out a customized object | ◐ | Sprache — `getService(bundle)` is the factory taking the consumer; `ungetService` is `dispose()` on the *instance* rather than a callback on the factory, so a factory keeping central account of its consumers is not told when one goes. The `registration` argument has no counterpart: there is one factory per registration |
 | 5.10 | Prototype Service Factory | `transient` gives a new instance per resolution | ◐ | Sprache — close in effect, not in contract: no `ServiceObjects` handle, because releasing is GC's business |
 | 5.11 | Unregistering Services | `registration.unregister()`; the best remaining registration takes over | ✅ | |
 | 5.13.1 | Service Permission | none | ✗ | Plattform — no boundary between modules in a browser to enforce |
@@ -66,7 +66,7 @@ The **Art** column says what kind of difference it is:
 | 4.4.1 | Bundle Identifiers | the manifest `id`, no numeric identity | ◐ | Sprache/Absicht |
 | 4.4.2 | Bundle State | `registered`, `resolving`, `loading`, `activating`, `active`, `unsatisfied`, `deactivating`, `stopped`, `error` | ◐ | Modell — no `RESOLVED` (there is no wiring step), and `unsatisfied` is an extra tsm needs because it parks modules DS would leave to components |
 | 4.4.3 | Installing Bundles | `register(manifests)` | ✅ | |
-| 4.4.4 | Resolving Bundles | `DependencyResolver` — order, cycles, missing | ◐ | Modell — no wiring, see Core 3 below |
+| 4.4.4 | Resolving Bundles | `DependencyResolver` for load order, cycles and what is missing; `resolveWiring()` for requirements and capabilities (Core 3.3) | ◐ | Modell — two passes rather than one, and no state to reach: a module is `registered` until it loads, where OSGi resolves a bundle into RESOLVED before starting it. What is resolved *is* wired, and reported as such |
 | 4.4.5 | Starting Bundles, persistent start | `loadModule`; the started state does not survive a reload | ✗ | Plattform — persistence is the application's, as `ConfigurationStore` shows |
 | 4.4.6 | Activation, lazy activation | components are immediate or delayed; bundles are always eager | ◐ | Plattform — lazy bundle activation needs a class-loading hook, which ES modules do not offer |
 | 4.4.7 | Stopping Bundles | `unloadModule`, `disableModule` | ✅ | |
@@ -169,7 +169,7 @@ The **Art** column says what kind of difference it is:
 | 112.5.1 | Enabled | `disableComponent` / `enableComponent`, beside the module's switch | ✅ | a dimension of its own at both levels: off is not waiting |
 | 112.5.2 | Satisfied | per component for both: a missing `@inject()` service leaves it `unsatisfied-reference`, a missing PID `unsatisfied-configuration`; the module keeps running either way | ✅ | the module-level `requiresService` stays as the coarser tool — it parks a whole module on purpose |
 | 112.5.6 | Activation | `@activate`, two phases (register all, then activate) | ✅ | |
-| 112.5.8 | Component Context | `ComponentContext` with `configuration`, `properties`, `configurationPid`, handed to `@activate`; the module's own context also injectable as `tsm.module.context` for a constructional dependency on the registry | ✅ | DS reaches the bundle context through `ComponentContext.getBundleContext()`; here the module context is a `module`-scoped service, which is what lets one id answer differently per module |
+| 112.5.8 | Activation, Component Context | `ComponentContext` with `configuration`, `properties`, `configurationPid`, handed to `@activate`; the module's own context injectable as `tsm.module.context` for a constructional dependency; an `@activate` that throws discards that component and nothing else | ✅ | DS reaches the bundle context through `ComponentContext.getBundleContext()`; here the module context is a `module`-scoped service, which is what lets one id answer differently per module |
 | 112.5.9 | Activation Objects | the context object; no `Map` / property-type parameter forms | ◐ | Sprache — no overload resolution to pick a parameter shape by type |
 | 112.5.12 | Bound Service Replacement | `policyOption: greedy` rebuilds or rebinds | ✅ | |
 | 112.5.13-15 | Updated, Modification, Modified Method | `@modified()`; without it, rebuild | ✅ | |

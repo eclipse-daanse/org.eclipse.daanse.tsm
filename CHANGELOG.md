@@ -482,6 +482,15 @@ Type-level changes:
   instantiated, so a lazily bound provider is invisible until someone resolves it. Collect providers with
   `getServiceReferences(id, target?)` and select on properties instead of naming conventions.
 
+#### A failed activation discards one component, not the module
+
+An `@activate` that throws used to propagate: the module went to `error` and its other components were never
+activated at all. DS is explicit — "the component configuration is not activated and will be discarded"
+(112.5.8) — and it is what keeps one broken plugin from taking an application with it. The component's services
+are withdrawn with it, because a registration whose object never finished starting would hand consumers a
+half-initialised thing, and `ComponentConfigurationInfo.state` gained `'failed-activation'`: neither active nor
+waiting, which is what whoever has to find out why needs to see.
+
 #### A component's declaration read through constants
 
 The build-time scan resolves a service id held in a constant from **another package** — the API bundle, where a
