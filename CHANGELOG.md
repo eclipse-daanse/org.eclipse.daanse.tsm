@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 While the major version is 0, a minor bump is what carries breaking changes.
 
-## [0.1.0] — 2026-08-24
+## [0.1.0-next.1] — 2026-08-24
+
+A prerelease of 0.1.0: published under the `next` tag, so `npm install @eclipse-daanse/tsm` keeps resolving to
+whatever `latest` points at. The content is what 0.1.0 will be — the fourteen breaking changes below are the
+reason to try it under a tag first.
 
 The release that turns tsm from a module loader into the module and service layer it was aiming at. Measured
 against OSGi Release 8 section by section in [`docs/CONFORMANCE.md`](docs/CONFORMANCE.md): of 142 compared
