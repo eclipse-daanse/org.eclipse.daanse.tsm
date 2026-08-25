@@ -744,11 +744,16 @@ export interface ComponentConfigurationInfo {
    * - unsatisfied-reference: a service it injects is missing
    * - satisfied: registered, not instantiated yet (a delayed component)
    * - active: an instance exists
+   * - failed-activation: its `@activate` threw, so it was discarded
    *
    * The two unsatisfied states are DS' own distinction (112.5.2), and neither
-   * touches the module: it keeps running while the component waits.
+   * touches the module: it keeps running while the component waits. Nor does a
+   * failed activation — DS discards that one component configuration (112.5.8)
+   * and leaves everything else alone, which is what keeps one broken plugin from
+   * taking an application with it.
    */
   state: 'unsatisfied-configuration' | 'unsatisfied-reference' | 'satisfied' | 'active'
+    | 'failed-activation'
   /** Service IDs it is waiting for, when the state is `unsatisfied-reference` */
   waitingFor?: string[]
   /** The merged properties its registrations carry */
